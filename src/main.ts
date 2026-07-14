@@ -6,7 +6,7 @@ import {
   Snapshot,
   SNAPSHOT_SECONDS
 } from "../lib/protocol.js";
-import { DedupeState, reconnectDelayMs, shouldAcceptLiveBatch } from "./live-client.js";
+import { DedupeState, reconnectDelayMs, shouldAcceptLiveBatch, shouldLoadPublicLiveSession } from "./live-client.js";
 import {
   BackgroundChoice,
   EcgPointBuffer,
@@ -74,15 +74,16 @@ const defaultSettings: UiSettings = {
 };
 
 const params = new URLSearchParams(window.location.search);
-const sessionId = params.get("session_id") ?? "";
-const viewerToken = params.get("viewer_token") ?? "";
+let sessionId = params.get("session_id") ?? "";
+let viewerToken = params.get("viewer_token") ?? "";
+const publicLiveMode = shouldLoadPublicLiveSession(window.location.pathname, sessionId, viewerToken);
 const dedupe: DedupeState = { lastSeq: -1, lastTimestampMs: 0 };
 
 let settings = loadSettings();
 let three: ThreeRuntime | null = null;
 let waveform: EcgPointBuffer = { samples: [], rPeaks: [] };
 let status: PublicStatus | null = null;
-let connection: ConnectionState = sessionId && viewerToken ? "connecting" : "missing_config";
+let connection: ConnectionState = sessionId && viewerToken ? "connecting" : publicLiveMode ? "connecting" : "missing_config";
 let lastSeq: number | null = null;
 let lastBeatAtMs = -Infinity;
 let socket: WebSocket | null = null;
@@ -240,6 +241,8 @@ function applyBranding(): void {
 }
 
 function updateStatusUi(): void {
+  const sessionMeta = byId("sessionMeta");
+  if (sessionMeta) sessionMeta.textContent = `Session ${sessionId || "--"}`;
   const bpmDisplay = byId("bpm-display");
   if (bpmDisplay) bpmDisplay.textContent = currentBpmText();
   const statusText = byId("statusText");
@@ -251,6 +254,7 @@ function updateStatusUi(): void {
   }
   const connectBtn = byId<HTMLButtonElement>("connectBtn");
   if (connectBtn) {
+    connectBtn.textContent = sessionId && viewerToken ? "重新连接 Live" : publicLiveMode ? "重新连接 Live" : "缺少 viewer_url";
     connectBtn.classList.toggle("connected", connection === "live");
     connectBtn.disabled = false;
   }
@@ -705,6 +709,46 @@ function wsUrl(): string {
   return url.toString();
 }
 
+type LiveSessionResponse = {
+  type: "live_session";
+  session_id: string;
+  viewer_token: string;
+  viewer_url: string;
+};
+
+function isLiveSessionResponse(value: unknown): value is LiveSessionResponse {
+  return (
+    isRecord(value) &&
+    value.type === "live_session" &&
+    typeof value.session_id === "string" &&
+    typeof value.viewer_token === "string" &&
+    typeof value.viewer_url === "string"
+  );
+}
+
+async function loadPublicLiveSession(): Promise<boolean> {
+  try {
+    const response = await fetch("/api/live-session", { cache: "no-store" });
+    const body: unknown = await response.json();
+    if (!response.ok || !isLiveSessionResponse(body)) {
+      updateError(isRecord(body) && typeof body.error === "string" ? body.error : "live session unavailable");
+      connection = "missing_config";
+      updateStatusUi();
+      return false;
+    }
+    sessionId = body.session_id;
+    viewerToken = body.viewer_token;
+    connection = "connecting";
+    updateStatusUi();
+    return true;
+  } catch (error) {
+    updateError(error instanceof Error ? error.message : "failed to load live session");
+    connection = "missing_config";
+    updateStatusUi();
+    return false;
+  }
+}
+
 function reconnectNow(): void {
   if (reconnectTimer !== null) {
     window.clearTimeout(reconnectTimer);
@@ -784,6 +828,15 @@ function connect(): void {
   });
 }
 
+async function connectInitial(): Promise<void> {
+  if (publicLiveMode && (!sessionId || !viewerToken)) {
+    if (!(await loadPublicLiveSession())) {
+      return;
+    }
+  }
+  connect();
+}
+
 function animate(time: number): void {
   const connected = connection === "live" && status?.state === "live";
   const pulse = settings.bindEffectsToHeartRate ? pulseFromBeatAge(performance.now() - lastBeatAtMs, connected) : 0;
@@ -828,7 +881,7 @@ function init(): void {
   syncControlsFromSettings();
   updateStatusUi();
   void initThreeRuntime();
-  connect();
+  void connectInitial();
   window.requestAnimationFrame(animate);
 }
 

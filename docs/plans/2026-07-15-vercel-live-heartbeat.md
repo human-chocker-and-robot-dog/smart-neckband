@@ -41,6 +41,7 @@ Excluded:
 - Use a Redis-backed producer lock so only one ingest connection can be active per session across Function instances.
 - Use per-viewer bounded latest-first queues so slow viewer sockets cannot block ingest.
 - Treat 3 seconds without ingest data as `stale`, 10 seconds as `offline`, and `lead_off=true` as immediate `signal_lost`.
+- Add a fixed `/live` public room backed by `LIVE_SESSION_ID`, `LIVE_VIEWER_TOKEN`, and `LIVE_INGEST_TOKEN`; keep `/api/session` for temporary/debug sessions.
 
 ## Work breakdown
 
@@ -52,6 +53,7 @@ Excluded:
 6. Add Vitest unit/integration coverage.
 7. Run `npm test`, `npm run lint`, `npm run typecheck`, `npm run build`, and `git diff --check`.
 8. Document deployment, Redis Marketplace configuration, environment variables, Windows uploader example, viewer URL/QR flow, and Vercel Beta risks.
+9. Add `/live` fixed public viewer discovery and a PC live uploader command path.
 
 ## Validation
 
@@ -84,6 +86,8 @@ git diff --check
 - [x] Add tests and docs.
 - [x] Run validation and summarize results.
 - [x] Adapt the viewer into the Live Beta front end with solid background defaults, Canvas particles, real ECG display, and simplified settings.
+- [x] Add fixed `/live` public viewer discovery and static live session credential support.
+- [x] Add PC `smart_neckband.live_uploader` command for uploading PC-cleaned ECG to the live room.
 
 ## Discoveries
 
@@ -136,3 +140,6 @@ Follow-up Live Beta front-end adaptation:
 - Follow-up validation passed: `npm test`, `npm run lint`, `npm run typecheck`, `npm run build`, and `git diff --check`.
 - Local Vite preview was started and probed at `/viewer` with HTTP 200 after excluding the ignored reference crawl from dev scanning.
 - Follow-up correction restored the reference visual effect instead of a custom React redesign. Verified in the browser that the original starfield canvas renders, settings opens, pure color is selected by default, background image is `none`, and the ECG grid/borders are off by default.
+- Production deployment required removing invalid `functions.runtime = "nodejs"` from `vercel.json`; Vercel auto-detects TypeScript files in `api/` as Node.js Functions.
+- Production Node ESM required `.js` extensions on relative TypeScript imports after Vercel compilation.
+- The fixed public page uses `/api/live-session` so the configured custom-domain `/live` URL stays stable without query tokens. WebSocket function recycling still happens, but the browser reconnects with the same live room credentials.

@@ -27,7 +27,7 @@ export function getRedis(): RedisLike {
   if (redisClient !== null) {
     return redisClient;
   }
-  const url = process.env.REDIS_URL ?? process.env.KV_URL ?? process.env.UPSTASH_REDIS_URL;
+  const url = process.env.REDIS_URL ?? process.env.live_heartbeat_REDIS_URL ?? process.env.KV_URL ?? process.env.UPSTASH_REDIS_URL;
   if (!url) {
     throw new Error("REDIS_URL is required for Redis Pub/Sub and session state");
   }

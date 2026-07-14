@@ -24,6 +24,12 @@ gui = [
 serial = [
     "pyserial>=3.5",
 ]
+upload = [
+    "neurokit2>=0.2",
+    "numpy>=1.26",
+    "pyserial>=3.5",
+    "websocket-client>=1.8",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

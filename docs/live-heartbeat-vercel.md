@@ -53,6 +53,10 @@ Required Redis features:
 | --- | --- | --- |
 | `ADMIN_TOKEN` | yes | Long random admin token for session creation and stop. |
 | `REDIS_URL` | yes | Redis Marketplace TCP URL for `ioredis` and Pub/Sub. |
+| `live_heartbeat_REDIS_URL` | no | Supported custom-prefix alias for `REDIS_URL`. |
+| `LIVE_SESSION_ID` | recommended | Fixed public `/live` room id, for example `sess_live_main_...`. |
+| `LIVE_INGEST_TOKEN` | recommended | Private token used by the Windows uploader for `/live`. |
+| `LIVE_VIEWER_TOKEN` | recommended | Viewer token used by `/api/live-session`; public viewers do not see it in the URL. |
 | `PUBLIC_BASE_URL` | no | Optional override for `viewer_url`; when omitted, the API derives the origin from forwarded Vercel request headers. |
 | `SESSION_TTL_SECONDS` | no | Defaults to `43200` seconds / 12 hours. |
 | `SESSION_CREATE_LIMIT_PER_MINUTE` | no | Defaults to `10` per IP. |
@@ -60,6 +64,24 @@ Required Redis features:
 | `WS_MAX_DURATION_SECONDS` | no | Defaults to `280`; choose a value below the configured Vercel maxDuration. |
 
 Never commit real tokens, Redis URLs, or production domains.
+
+## Fixed Public Live Page
+
+The permanent public viewer is the configured custom-domain `/live` page:
+
+```text
+https://<public-host>/live
+```
+
+`/live` does not require query parameters. It calls `GET /api/live-session`, receives the configured `LIVE_SESSION_ID` and `LIVE_VIEWER_TOKEN` in memory, then connects to `/api/ws`. The viewer token is not written to `localStorage` and the address bar stays stable.
+
+The matching uploader connects with:
+
+```text
+LIVE_SESSION_ID + LIVE_INGEST_TOKEN -> wss://<public-host>/api/ws
+```
+
+The fixed live room does not rely on Redis session metadata expiring. Redis still stores the current snapshot, status, producer lock, sequence, and Pub/Sub live channel. If upload stops, the public page becomes stale/offline instead of replaying old ECG.
 
 ## Admin Session API
 
@@ -103,6 +125,30 @@ Stopping a session deletes Redis status, snapshot, ingest lock, and last sequenc
 ## Windows Uploader Example
 
 The uploader connects to `/api/ws`, authenticates within 5 seconds, then sends clean ECG batches and status updates. Do not send raw firmware ECG or full local recordings to this public service.
+
+For the checked-in PC app, install upload extras once:
+
+```powershell
+cd C:\Users\XWen1024\Documents\smart-neckband\pc_app
+py -3.12 -m pip install -e .[upload]
+```
+
+Then start the fixed live uploader:
+
+```powershell
+cd C:\Users\XWen1024\Documents\smart-neckband\pc_app
+$env:LIVE_SESSION_ID = "sess_live_main_..."
+$env:LIVE_INGEST_TOKEN = "..."
+py -3.12 -m smart_neckband.live_uploader `
+  --port COM19 `
+  --ws-url "wss://<public-host>/api/ws" `
+  --session-id $env:LIVE_SESSION_ID `
+  --ingest-token $env:LIVE_INGEST_TOKEN
+```
+
+The uploader reads the Bluetooth SPP COM port, keeps raw binary logging optional, runs NeuroKit2 on the PC, uploads only incremental clean ECG samples, maps R peaks into each uploaded batch, and sends status with lead-off, packet loss, and CRC counters.
+
+The lower-level protocol example is:
 
 ```python
 import json

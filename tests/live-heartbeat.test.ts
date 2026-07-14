@@ -7,7 +7,7 @@ import { FakeRedis } from "../lib/redis.js";
 import { ECG_SAMPLE_RATE_HZ, EcgBatch, ServerEvent } from "../lib/protocol.js";
 import { deriveState, SessionManager } from "../lib/session-manager.js";
 import { createHeartbeatServer } from "../lib/ws-server.js";
-import { reconnectDelayMs, shouldAcceptLiveBatch } from "../src/live-client.js";
+import { reconnectDelayMs, shouldAcceptLiveBatch, shouldLoadPublicLiveSession } from "../src/live-client.js";
 import {
   appendEcgBatch,
   pulseFromBeatAge,
@@ -142,6 +142,25 @@ describe("session manager", () => {
     await manager.createSession("127.0.0.1");
     await expect(manager.createSession("127.0.0.1")).rejects.toThrow("rate limit");
   });
+
+  it("accepts configured fixed live session credentials without Redis meta", async () => {
+    const redis = new FakeRedis();
+    const liveSession = {
+      sessionId: "sess_live_main_0123456789abcdef",
+      ingestToken: "ingest-token-0123456789abcdef0123456789abcdef",
+      viewerToken: "viewer-token-0123456789abcdef0123456789abcdef"
+    };
+    const manager = new SessionManager({ redis, liveSession });
+
+    await expect(manager.validateIngest(liveSession.sessionId, liveSession.ingestToken)).resolves.toBe(true);
+    await expect(manager.validateViewer(liveSession.sessionId, liveSession.viewerToken)).resolves.toBe(true);
+    await expect(manager.acquireIngestLock(liveSession.sessionId, "producer")).resolves.toBe(true);
+    await manager.updateFromEcgBatch(liveSession.sessionId, testBatch(1));
+
+    const snapshot = await manager.getSnapshot(liveSession.sessionId);
+    expect(snapshot.session_id).toBe(liveSession.sessionId);
+    expect(snapshot.batches).toHaveLength(1);
+  });
 });
 
 describe("HTTP deployment helpers", () => {
@@ -239,6 +258,13 @@ describe("viewer client helpers", () => {
     expect(reconnectDelayMs(3, () => 0)).toBe(4000);
     expect(reconnectDelayMs(20, () => 0)).toBe(30000);
     expect(reconnectDelayMs(1, () => 1)).toBe(1350);
+  });
+
+  it("loads fixed public live session only for bare /live", () => {
+    expect(shouldLoadPublicLiveSession("/live", "", "")).toBe(true);
+    expect(shouldLoadPublicLiveSession("/live/", "", "")).toBe(true);
+    expect(shouldLoadPublicLiveSession("/viewer", "", "")).toBe(false);
+    expect(shouldLoadPublicLiveSession("/live", "sess_abc", "")).toBe(false);
   });
 });
 

@@ -23,6 +23,11 @@ export function reconnectDelayMs(attempt: number, random = Math.random): number 
   return Math.round(base + jitter);
 }
 
+export function shouldLoadPublicLiveSession(pathname: string, sessionId: string, viewerToken: string): boolean {
+  const normalized = pathname.replace(/\/+$/, "") || "/";
+  return normalized === "/live" && sessionId.length === 0 && viewerToken.length === 0;
+}
+
 export function trimToRecentSamples(samples: number[], maxSamples: number): number[] {
   if (samples.length <= maxSamples) {
     return samples;

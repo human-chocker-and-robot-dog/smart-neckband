@@ -13,6 +13,7 @@ import {
   StatusUpdate
 } from "./protocol.js";
 import { createSessionId, createToken, hashToken, safeEqualHash } from "./auth.js";
+import { getLiveSessionConfig, LiveSessionConfig } from "./live-session.js";
 import { RedisLike } from "./redis.js";
 
 export type SessionMeta = {
@@ -40,6 +41,7 @@ export type SessionManagerOptions = {
   ttlSeconds?: number;
   createLimitPerMinute?: number;
   wsUpgradeLimitPerMinute?: number;
+  liveSession?: LiveSessionConfig | null;
 };
 
 export class SessionManager {
@@ -49,6 +51,7 @@ export class SessionManager {
   private readonly ttlSeconds: number;
   private readonly createLimitPerMinute: number;
   private readonly wsUpgradeLimitPerMinute: number;
+  private readonly liveSession: LiveSessionConfig | null;
 
   constructor(options: SessionManagerOptions) {
     this.redis = options.redis;
@@ -57,6 +60,7 @@ export class SessionManager {
     this.ttlSeconds = options.ttlSeconds ?? Number(process.env.SESSION_TTL_SECONDS ?? DEFAULT_SESSION_TTL_SECONDS);
     this.createLimitPerMinute = options.createLimitPerMinute ?? Number(process.env.SESSION_CREATE_LIMIT_PER_MINUTE ?? 10);
     this.wsUpgradeLimitPerMinute = options.wsUpgradeLimitPerMinute ?? Number(process.env.WS_UPGRADE_LIMIT_PER_MINUTE ?? 60);
+    this.liveSession = options.liveSession === undefined ? getLiveSessionConfig() : options.liveSession;
   }
 
   metaKey(sessionId: string): string {
@@ -123,6 +127,10 @@ export class SessionManager {
     const parsedId = SessionIdSchema.safeParse(sessionId);
     if (!parsedId.success) {
       return null;
+    }
+    const liveMeta = this.getLiveMeta(sessionId);
+    if (liveMeta) {
+      return liveMeta;
     }
     const raw = await this.redis.get(this.metaKey(sessionId));
     if (!raw) {
@@ -263,6 +271,21 @@ export class SessionManager {
     await this.redis.del(this.statusKey(sessionId), this.snapshotKey(sessionId), this.ingestLockKey(sessionId), this.lastSeqKey(sessionId));
     await this.redis.publish(this.channel(sessionId), JSON.stringify({ type: "session_stopped", session_id: sessionId, timestamp_ms: this.now() }));
     return true;
+  }
+
+  private getLiveMeta(sessionId: string): SessionMeta | null {
+    if (!this.liveSession || sessionId !== this.liveSession.sessionId) {
+      return null;
+    }
+    return {
+      session_id: this.liveSession.sessionId,
+      ingest_token_hash: hashToken(this.liveSession.ingestToken),
+      viewer_token_hash: hashToken(this.liveSession.viewerToken),
+      created_at_ms: 0,
+      expires_at_ms: Number.MAX_SAFE_INTEGER,
+      ttl_seconds: this.ttlSeconds,
+      stopped: false
+    };
   }
 
   private async updateSnapshot(sessionId: string, batch: LiveEcgBatch): Promise<void> {

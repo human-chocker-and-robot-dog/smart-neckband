@@ -21,6 +21,10 @@
     {
       "source": "/viewer/:path*",
       "destination": "/index.html"
+    },
+    {
+      "source": "/live/:path*",
+      "destination": "/index.html"
     }
   ]
 }
