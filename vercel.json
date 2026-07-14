@@ -3,11 +3,7 @@
   "fluid": true,
   "functions": {
     "api/ws.ts": {
-      "runtime": "nodejs",
       "maxDuration": 300
-    },
-    "api/*.ts": {
-      "runtime": "nodejs"
     }
   },
   "headers": [

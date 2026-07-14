@@ -17,7 +17,7 @@ The uploader sends NeuroKit2-derived clean ECG, R peaks, HR, SQI, and lead-off s
 ## Vercel Deployment
 
 1. Create or select a Vercel project for this repository.
-2. Confirm the project uses the Node.js runtime for functions.
+2. Confirm Vercel auto-detects the TypeScript files under `api/` as Node.js Functions.
 3. Enable Fluid Compute in the Vercel dashboard under Functions settings. `vercel.json` also sets `"fluid": true`.
 4. Set environment variables listed below.
 5. Deploy with the Vercel Git integration or:
@@ -31,7 +31,7 @@ npm run build
 vercel deploy --prod
 ```
 
-`api/ws.ts` exports a Node `http.Server` using `ws`, matching current Vercel WebSocket Function examples. `vercel.json` sets `maxDuration` for `api/ws.ts` to 300 seconds because the current account limit rejects higher values; account limits still apply.
+`api/ws.ts` exports a Node `http.Server` using `ws`, matching current Vercel WebSocket Function examples. `vercel.json` does not set a custom `runtime` string because TypeScript files under `api/` are auto-detected as Node.js Functions; it only sets `maxDuration` for `api/ws.ts` to 300 seconds because the current account limit rejects higher values. Account limits still apply.
 
 ## Redis Marketplace Setup
 
