@@ -85,7 +85,7 @@ static esp_err_t oled_transmit(const uint8_t *data, size_t length)
     if (!v0_i2c_lock(pdMS_TO_TICKS(100))) {
         return ESP_ERR_TIMEOUT;
     }
-    const esp_err_t err = i2c_master_transmit(s_oled_handle, data, length, 50);
+    const esp_err_t err = i2c_master_transmit(s_oled_handle, data, length, BOARD_I2C_XFER_TIMEOUT_MS);
     v0_i2c_unlock();
     return err;
 }

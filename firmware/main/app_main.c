@@ -129,6 +129,11 @@ void app_main(void)
         ESP_LOGW(TAG, "SPP transport not ready: %s", esp_err_to_name(spp_err));
     }
 
+    const esp_err_t oled_err = v0_oled_status_start();
+    if (oled_err != ESP_OK) {
+        ESP_LOGW(TAG, "OLED status task failed to start: %s", esp_err_to_name(oled_err));
+    }
+
     const esp_err_t sensor_err = v0_sensors_start();
     if (sensor_err != ESP_OK) {
         ESP_LOGE(TAG, "sensor acquisition failed to start: %s", esp_err_to_name(sensor_err));
@@ -137,11 +142,6 @@ void app_main(void)
     const esp_err_t packet_err = v0_packet_task_start();
     if (packet_err != ESP_OK) {
         ESP_LOGE(TAG, "packet task failed to start: %s", esp_err_to_name(packet_err));
-    }
-
-    const esp_err_t oled_err = v0_oled_status_start();
-    if (oled_err != ESP_OK) {
-        ESP_LOGW(TAG, "OLED status task failed to start: %s", esp_err_to_name(oled_err));
     }
 
     ESP_LOGI(TAG, "V0 runtime ready; waiting for Bluetooth Classic SPP client");

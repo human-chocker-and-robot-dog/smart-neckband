@@ -125,6 +125,10 @@ This round does not flash, open monitor, or perform a body-connected test unless
 - The hardware smoke confirmed `ESP32-D0WD-V3` revision v3.0, 4 MB flash, the custom partition table, firmware version `0.1.0`, protocol V0 golden self-test PASS, and app startup completion.
 - The first startup I2C scan completed but found `0` devices.
 - A later 2026-07-15 rescan with corrected wiring found both expected I2C devices: OLED `0x3C` and MPU6050 `0x68`.
+- 2026-07-15 first SPP/OLED hardware run booted and started SPP, but IMU initialization failed once and the offline IMU task kept retrying I2C reads at 50 Hz. This starved OLED refresh and flooded logs.
+- The fix was to retry IMU initialization only once per second while offline, start OLED before sampling, lower I2C to 50 kHz for bench wiring, and use millisecond I2C transfer timeouts instead of FreeRTOS tick-converted values.
+- The IMU at address `0x68` reports `WHO_AM_I=0x72`, so firmware now treats `0x68`, `0x70`, `0x71`, and `0x72` as MPU6050-compatible IDs for the V0 raw six-axis path.
+- After the fix, hardware boot logs show OLED `0x3C` ready, SPP acceptor started as `SmartCollar-V0`, MPU-compatible `WHO_AM_I=0x72`, IMU configured for 50 Hz, packet task started, and no I2C timeout during the captured startup window.
 
 ## Result
 

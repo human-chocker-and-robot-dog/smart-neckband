@@ -186,7 +186,7 @@ static esp_err_t mpu6050_write_reg(uint8_t reg, uint8_t value)
     const esp_err_t err = i2c_master_transmit(s_mpu6050_handle,
                                               payload,
                                               sizeof(payload),
-                                              pdMS_TO_TICKS(50));
+                                              BOARD_I2C_XFER_TIMEOUT_MS);
     v0_i2c_unlock();
     if (err != ESP_OK) {
         add_i2c_error();
@@ -208,7 +208,7 @@ static esp_err_t mpu6050_read_reg(uint8_t reg, uint8_t *out, size_t out_length)
                                                       1U,
                                                       out,
                                                       out_length,
-                                                      pdMS_TO_TICKS(50));
+                                                      BOARD_I2C_XFER_TIMEOUT_MS);
     v0_i2c_unlock();
     if (err != ESP_OK) {
         add_i2c_error();
@@ -239,6 +239,14 @@ static esp_err_t prepare_mpu6050_device(void)
     return err;
 }
 
+static bool is_supported_mpu_who_am_i(uint8_t who_am_i)
+{
+    return who_am_i == 0x68U ||
+           who_am_i == 0x70U ||
+           who_am_i == 0x71U ||
+           who_am_i == 0x72U;
+}
+
 static esp_err_t configure_mpu6050(void)
 {
     esp_err_t err = prepare_mpu6050_device();
@@ -249,7 +257,7 @@ static esp_err_t configure_mpu6050(void)
 
     uint8_t who_am_i = 0U;
     err = mpu6050_read_reg(MPU6050_REG_WHO_AM_I, &who_am_i, sizeof(who_am_i));
-    if (err != ESP_OK || who_am_i != BOARD_MPU6050_EXPECTED_ADDR) {
+    if (err != ESP_OK || !is_supported_mpu_who_am_i(who_am_i)) {
         ESP_LOGW(TAG,
                  "MPU6050 WHO_AM_I failed: err=%s value=0x%02x",
                  esp_err_to_name(err),
@@ -257,6 +265,10 @@ static esp_err_t configure_mpu6050(void)
         set_mpu6050_online(false);
         return err == ESP_OK ? ESP_ERR_NOT_FOUND : err;
     }
+
+    ESP_LOGI(TAG, "MPU6050-compatible WHO_AM_I=0x%02x at address 0x%02x",
+             who_am_i,
+             BOARD_MPU6050_EXPECTED_ADDR);
 
     err = mpu6050_write_reg(MPU6050_REG_PWR_MGMT_1, 0x00U);
     if (err == ESP_OK) {
@@ -360,8 +372,11 @@ static void imu_task(void *arg)
         online = s_mpu6050_online;
         portEXIT_CRITICAL(&s_status_mux);
 
-        if (!online && (retry_divider++ % BOARD_IMU_SAMPLE_RATE_HZ) == 0U) {
-            (void)configure_mpu6050();
+        if (!online) {
+            if ((retry_divider++ % BOARD_IMU_SAMPLE_RATE_HZ) == 0U) {
+                (void)configure_mpu6050();
+            }
+            continue;
         }
 
         protocol_v0_imu_point_t point = {0};
