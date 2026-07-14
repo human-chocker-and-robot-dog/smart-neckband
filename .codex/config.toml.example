@@ -1,0 +1,9 @@
+# Optional project-scoped Codex configuration.
+# Copy to .codex/config.toml only after trusting this project and verifying EIM.
+# Codex CLI and supported Codex clients read project MCP configuration from this file.
+
+[mcp_servers.esp-idf]
+command = "eim"
+args = ["run", "idf.py -C firmware mcp-server"]
+startup_timeout_sec = 30
+tool_timeout_sec = 120

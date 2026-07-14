@@ -1,0 +1,43 @@
+# ESP-IDF build and generated configuration
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/managed_components/
+
+# Local machine configuration
+config/local.ps1
+.agents/skills/**/.powershell-skills-install.json
+.env
+.env.*
+!.env.example
+
+# Python
+pc_app/.venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Captured data and logs
+data/
+recordings/
+*.ecg.bin
+*.parquet
+*.csv
+!firmware/partitions.csv
+*.log
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+*.swp

@@ -1,0 +1,32 @@
+{
+  "source_archive": "powershell-command-runner.zip",
+  "project_path": ".agents/skills/powershell-command-runner",
+  "content_policy": "upstream files preserved; SKILL.md BOM removed only",
+  "expected_files": [
+    ".powershell-skills-install.json",
+    "SKILL.md",
+    "agents/openai.yaml",
+    "core/execution-contract.md",
+    "core/failure-corpus/cases/encoding-python-utf8.md",
+    "core/failure-corpus/cases/file-ops-destructive-preflight.md",
+    "core/failure-corpus/cases/path-space-literalpath.md",
+    "core/failure-corpus/cases/ps-parser-foreach-pipeline.md",
+    "core/failure-corpus/cases/tool-discovery-missing-rg.md",
+    "core/failure-corpus/schema.md",
+    "core/pattern-catalog/encoding.md",
+    "core/pattern-catalog/failure-retry.md",
+    "core/pattern-catalog/file-ops-safety.md",
+    "core/pattern-catalog/path-handling.md",
+    "core/pattern-catalog/powershell-parser.md",
+    "core/pattern-catalog/quoting.md",
+    "core/pattern-catalog/shell-selection.md",
+    "core/pattern-catalog/timeout-and-process.md",
+    "core/pattern-catalog/tool-discovery.md",
+    "core/scripts/Classify-AgentFailure.ps1",
+    "core/scripts/Invoke-AgentCommand.ps1",
+    "core/scripts/Invoke-AgentPowerShell.ps1",
+    "core/scripts/Resolve-AgentPath.ps1",
+    "core/scripts/Test-AgentCommand.ps1",
+    "core/tests/run-smoke.ps1"
+  ]
+}
