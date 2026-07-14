@@ -83,6 +83,7 @@ git diff --check
 - [x] Implement React viewer.
 - [x] Add tests and docs.
 - [x] Run validation and summarize results.
+- [x] Adapt the viewer into the Live Beta front end with solid background defaults, Canvas particles, real ECG display, and simplified settings.
 
 ## Discoveries
 
@@ -92,6 +93,8 @@ git diff --check
 - Vercel Redis docs say Vercel KV is no longer available for new projects; use a Redis Marketplace integration and let it inject credentials/environment variables.
 - The implementation uses a root Vite React app plus Vercel `api/` functions rather than Next.js. `/api/ws.ts` exports a Node `http.Server` with `ws`, matching Vercel's current native WebSocket Function example.
 - `npm audit --omit=dev` reports 0 production dependency vulnerabilities after installation.
+- The crawled reference site defaults to image backgrounds and mutates `document.body.style.background` directly; the production viewer now keeps background rendering behind React settings and explicitly clears `backgroundImage` in solid mode.
+- The local reference crawl lives under ignored `data/`; ESLint now ignores `data/**` so reference artifacts are not treated as production source.
 
 ## Result
 
@@ -119,3 +122,13 @@ Not verified:
 - No real Vercel deployment was performed.
 - No real Redis Marketplace instance was provisioned from this local environment.
 - WebSocket behavior on Vercel remains subject to the current Public Beta platform behavior and account maxDuration limits.
+
+Follow-up Live Beta front-end adaptation:
+
+- Replaced the initial utilitarian viewer with `AI Smart Collar V0 · Live Beta`.
+- Kept `/api/ws` viewer protocol unchanged and continued using real `snapshot`, `ecg_batch`, `status`, and `signal_lost` messages.
+- Added versioned non-sensitive visual settings in localStorage; viewer tokens still only come from the URL.
+- Defaulted to pure solid background, disabled ECG grid by default, and did not package crawled reference background images.
+- Added Canvas 2D `stars`, `pulse`, and `wave` effects with HR binding only while status is `live`.
+- Removed reference-site simulation, audio, system, adaptation, footer warning, ICP, and GitHub concepts from the production viewer.
+- Follow-up validation passed: `npm test`, `npm run lint`, `npm run typecheck`, `npm run build`, and `git diff --check`.
