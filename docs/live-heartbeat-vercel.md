@@ -31,7 +31,7 @@ npm run build
 vercel deploy --prod
 ```
 
-`api/ws.ts` exports a Node `http.Server` using `ws`, matching current Vercel WebSocket Function examples. `vercel.json` sets `maxDuration` for `api/ws.ts`; account limits still apply.
+`api/ws.ts` exports a Node `http.Server` using `ws`, matching current Vercel WebSocket Function examples. `vercel.json` sets `maxDuration` for `api/ws.ts` to 300 seconds because the current account limit rejects higher values; account limits still apply.
 
 ## Redis Marketplace Setup
 
@@ -57,7 +57,7 @@ Required Redis features:
 | `SESSION_TTL_SECONDS` | no | Defaults to `43200` seconds / 12 hours. |
 | `SESSION_CREATE_LIMIT_PER_MINUTE` | no | Defaults to `10` per IP. |
 | `WS_UPGRADE_LIMIT_PER_MINUTE` | no | Defaults to `60` per IP. |
-| `WS_MAX_DURATION_SECONDS` | no | Defaults to `780`; choose a value below the configured Vercel maxDuration. |
+| `WS_MAX_DURATION_SECONDS` | no | Defaults to `280`; choose a value below the configured Vercel maxDuration. |
 
 Never commit real tokens, Redis URLs, or production domains.
 

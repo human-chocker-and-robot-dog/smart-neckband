@@ -4,7 +4,7 @@
   "functions": {
     "api/ws.ts": {
       "runtime": "nodejs",
-      "maxDuration": 800
+      "maxDuration": 300
     },
     "api/*.ts": {
       "runtime": "nodejs"

@@ -112,7 +112,7 @@ async function handleConnection(
   socket: WebSocket,
   request: IncomingMessage,
   manager: SessionManager,
-  wsMaxDurationSeconds = Number(process.env.WS_MAX_DURATION_SECONDS ?? 780)
+  wsMaxDurationSeconds = Number(process.env.WS_MAX_DURATION_SECONDS ?? 280)
 ): Promise<void> {
   try {
     await manager.enforceWsUpgradeRate(clientIp(request));
