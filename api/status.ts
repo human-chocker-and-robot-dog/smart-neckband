@@ -8,8 +8,8 @@ export default async function handler(request: IncomingMessage, response: Server
     methodNotAllowed(response);
     return;
   }
-  const manager = new SessionManager({ redis: getRedis() });
   try {
+    const manager = new SessionManager({ redis: getRedis() });
     const url = new URL(request.url ?? "/", `https://${request.headers.host ?? "localhost"}`);
     const sessionId = url.searchParams.get("session_id") ?? "";
     const viewerToken = url.searchParams.get("viewer_token") ?? request.headers.authorization?.replace(/^Bearer\s+/i, "") ?? "";

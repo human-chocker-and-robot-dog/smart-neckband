@@ -10,10 +10,10 @@ type StopBody = {
 };
 
 export default async function handler(request: IncomingMessage, response: ServerResponse): Promise<void> {
-  const manager = new SessionManager({ redis: getRedis(), baseUrl: publicBaseUrl(request) });
   try {
     if (request.method === "POST") {
       requireAdminBearer(request.headers.authorization);
+      const manager = new SessionManager({ redis: getRedis(), baseUrl: publicBaseUrl(request) });
       const created = await manager.createSession(clientIp(request));
       sendJson(response, 201, created);
       return;
@@ -26,6 +26,7 @@ export default async function handler(request: IncomingMessage, response: Server
         sendJson(response, 400, { error: "invalid_session_id" });
         return;
       }
+      const manager = new SessionManager({ redis: getRedis(), baseUrl: publicBaseUrl(request) });
       const stopped = await manager.stopSession(parsed.data);
       sendJson(response, stopped ? 200 : 404, { stopped });
       return;
