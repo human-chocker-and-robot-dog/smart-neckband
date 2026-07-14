@@ -95,6 +95,7 @@ git diff --check
 - `npm audit --omit=dev` reports 0 production dependency vulnerabilities after installation.
 - The crawled reference site defaults to image backgrounds and mutates `document.body.style.background` directly; the production viewer now keeps background rendering behind React settings and explicitly clears `backgroundImage` in solid mode.
 - The local reference crawl lives under ignored `data/`; ESLint now ignores `data/**` so reference artifacts are not treated as production source.
+- Vite dev dependency scanning also discovered ignored `data/reference/**/*.html`; `vite.config.ts` now limits optimize-deps entries to the production `index.html` and ignores `data/**` for dev watch.
 
 ## Result
 
@@ -132,3 +133,4 @@ Follow-up Live Beta front-end adaptation:
 - Added Canvas 2D `stars`, `pulse`, and `wave` effects with HR binding only while status is `live`.
 - Removed reference-site simulation, audio, system, adaptation, footer warning, ICP, and GitHub concepts from the production viewer.
 - Follow-up validation passed: `npm test`, `npm run lint`, `npm run typecheck`, `npm run build`, and `git diff --check`.
+- Local Vite preview was started and probed at `/viewer` with HTTP 200 after excluding the ignored reference crawl from dev scanning.
