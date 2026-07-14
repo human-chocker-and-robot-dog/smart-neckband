@@ -5,7 +5,7 @@ import time
 import warnings
 
 from .buffers import EcgSample
-from .protocol import ECG_SAMPLE_RATE_HZ
+from .protocol import ECG_SAMPLE_RATE_HZ, FLAG_ADC_CLIPPING
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +33,19 @@ def analyze_recent_ecg(samples: tuple[EcgSample, ...]) -> EcgAnalysisResult:
             latest_rr_ms=None,
             signal_quality=None,
             message="waiting for ECG window",
+        )
+
+    clipped_count = sum(1 for sample in window if sample.flags & FLAG_ADC_CLIPPING)
+    if clipped_count >= int(len(window) * 0.8):
+        return EcgAnalysisResult(
+            timestamp_s=time.time(),
+            raw=raw,
+            cleaned=raw,
+            r_peak_indices=(),
+            heart_rate_bpm=None,
+            latest_rr_ms=None,
+            signal_quality=None,
+            message="ECG clipped",
         )
 
     try:

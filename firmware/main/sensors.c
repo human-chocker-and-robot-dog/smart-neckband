@@ -298,6 +298,16 @@ static int16_t read_i16_be(const uint8_t *data)
     return (int16_t)(((uint16_t)data[0] << 8U) | data[1]);
 }
 
+static bool is_all_zero_bytes(const uint8_t *data, size_t length)
+{
+    for (size_t i = 0U; i < length; ++i) {
+        if (data[i] != 0U) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static esp_err_t read_mpu6050_sample(protocol_v0_imu_point_t *out_point)
 {
     if (out_point == NULL) {
@@ -309,6 +319,12 @@ static esp_err_t read_mpu6050_sample(protocol_v0_imu_point_t *out_point)
     if (err != ESP_OK) {
         set_mpu6050_online(false);
         return err;
+    }
+    if (is_all_zero_bytes(raw, sizeof(raw))) {
+        ESP_LOGW(TAG, "MPU6050 returned all-zero sample; reinitializing");
+        add_i2c_error();
+        set_mpu6050_online(false);
+        return ESP_ERR_INVALID_RESPONSE;
     }
 
     out_point->ax = read_i16_be(&raw[0]);

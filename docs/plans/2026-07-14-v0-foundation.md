@@ -143,6 +143,7 @@ This round does not flash, open monitor, or perform a body-connected test unless
 - The first OpenGL attitude view could show the grid while the `GLBoxItem` body was hard to see. The GUI now renders a centered solid `GLMeshItem` cuboid with bright edges and moves the grid below the body. The former `Reset Orientation` control is now `Calibrate Flat`, which records the current filtered roll/pitch/yaw as the level zero point.
 - On this shell, `.\tools\project.ps1 flash` returned exit code `1` without visible stdout when the ESP-IDF profile was not already loaded. Dot-sourcing `C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1` and running `idf.py -C firmware -p COM18 -b 460800 flash` succeeded.
 - After the GUI connected and displayed an initial ECG waveform, NeuroKit2 could return no finite SQI values for the current analysis window. Calling NumPy mean helpers on that empty/all-NaN quality set printed `Mean of empty slice` and `invalid value encountered in scalar divide`; the PC analysis now leaves SQI unset until finite quality values exist.
+- A later raw-log check showed valid SPP packets with CRC `0` and packet loss `0`, but the payload values were bad: ECG samples were all `0` with `ADC_CLIPPING` flags, and IMU six-axis samples were all `0`. This points below the PC parser/transport layer. PC analysis now reports clipped ECG windows directly, and firmware treats an all-zero 14-byte MPU6050 sample as an invalid response, marks the IMU offline, and lets the existing 1 Hz reinitialization path run.
 
 ## Result
 
@@ -154,7 +155,7 @@ Verified:
 
 - `idf.py -C firmware build`: passed after SPP stale-queue cleanup.
 - `idf.py -C firmware size`: passed; total image size `657732` bytes and generated `smart_neckband.bin` length `0xa09c0`, with `0x15f640` bytes free in the 2 MB app partition.
-- `.\tools\project.ps1 pc-test`: 15 pytest tests passed, including flat-calibration and no-finite-SQI coverage.
+- `.\tools\project.ps1 pc-test`: 16 pytest tests passed, including flat-calibration, no-finite-SQI, and clipped-ECG coverage.
 - `idf.py -C firmware -p COM18 -b 460800 flash`: passed; bootloader, partition table, and app hashes verified, then the board hard-reset.
 - C golden packet arrays match `docs/protocol/v0_golden_vectors.json` for ECG, IMU, and status packets.
 - `git diff --check`: passed.
