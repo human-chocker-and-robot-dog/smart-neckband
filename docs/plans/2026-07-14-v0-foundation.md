@@ -140,6 +140,8 @@ This round does not flash, open monitor, or perform a body-connected test unless
 - A captured Windows SPP stream showed one sequence gap immediately after opening the outgoing RFCOMM port: stale packet sequence `44` was followed by live sequence `1861`, producing `LOSS 1816` while CRC stayed `0`. The firmware now drops any pending SPP TX queue on SPP connect/disconnect and records those stale queued packets as transport drops instead of sending old data as if it were real-time.
 - Board OLED `ERR` is not the GUI CRC counter. It aggregates missed ECG timer notifications, ADC/I2C errors, ring overflows, SPP queue overflow, and SPP write errors. A captured status value `status_flags=19` means `LO-`, `LO+`, and `SAMPLE_MISSED`; with CRC `0` and I2C error `0`, a small `ERR 7` points to seven accumulated sampling tick misses rather than Bluetooth corruption.
 - A bounded COM18 log capture after this investigation reset the board and captured a clean boot: OLED `0x3C` and MPU `0x68` were found, SPP became connectable/discoverable, OLED initialized, MPU-compatible `WHO_AM_I=0x72` configured, and no startup I2C/write errors were logged. The capture did not expose a runtime per-counter breakdown for OLED `ERR`.
+- The first OpenGL attitude view could show the grid while the `GLBoxItem` body was hard to see. The GUI now renders a centered solid `GLMeshItem` cuboid with bright edges and moves the grid below the body. The former `Reset Orientation` control is now `Calibrate Flat`, which records the current filtered roll/pitch/yaw as the level zero point.
+- On this shell, `.\tools\project.ps1 flash` returned exit code `1` without visible stdout when the ESP-IDF profile was not already loaded. Dot-sourcing `C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1` and running `idf.py -C firmware -p COM18 -b 460800 flash` succeeded.
 
 ## Result
 
@@ -151,7 +153,8 @@ Verified:
 
 - `idf.py -C firmware build`: passed after SPP stale-queue cleanup.
 - `idf.py -C firmware size`: passed; total image size `657732` bytes and generated `smart_neckband.bin` length `0xa09c0`, with `0x15f640` bytes free in the 2 MB app partition.
-- `.\tools\project.ps1 pc-test`: 13 pytest tests passed.
+- `.\tools\project.ps1 pc-test`: 14 pytest tests passed, including flat-calibration coverage.
+- `idf.py -C firmware -p COM18 -b 460800 flash`: passed; bootloader, partition table, and app hashes verified, then the board hard-reset.
 - C golden packet arrays match `docs/protocol/v0_golden_vectors.json` for ECG, IMU, and status packets.
 - `git diff --check`: passed.
 

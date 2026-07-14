@@ -44,6 +44,7 @@ class AttitudeWorker:
         self.filter = ComplementaryAttitudeFilter()
         self._stop = Event()
         self._lock = Lock()
+        self._filter_lock = Lock()
         self._last_index: int | None = None
         self._orientation = Orientation(0.0, 0.0, 0.0)
         self._latest_sample: ImuSample | None = None
@@ -56,8 +57,14 @@ class AttitudeWorker:
         self._stop.set()
         self._thread.join(timeout=2.0)
 
+    def calibrate_flat(self) -> None:
+        with self._filter_lock:
+            orientation = self.filter.calibrate_flat()
+        with self._lock:
+            self._orientation = orientation
+
     def reset_orientation(self) -> None:
-        self.filter.reset_orientation()
+        self.calibrate_flat()
 
     def latest(self) -> tuple[Orientation, ImuSample | None]:
         with self._lock:
@@ -69,12 +76,44 @@ class AttitudeWorker:
             for sample in samples:
                 if self._last_index is not None and sample.sample_index <= self._last_index:
                     continue
-                orientation = self.filter.update(sample)
+                with self._filter_lock:
+                    orientation = self.filter.update(sample)
                 with self._lock:
                     self._orientation = orientation
                     self._latest_sample = sample
                     self._last_index = sample.sample_index
             self._stop.wait(0.02)
+
+
+def _body_mesh_data(gl: object) -> object:
+    half_x = 0.9
+    half_y = 0.32
+    half_z = 0.16
+    vertices = [
+        (-half_x, -half_y, -half_z),
+        (half_x, -half_y, -half_z),
+        (half_x, half_y, -half_z),
+        (-half_x, half_y, -half_z),
+        (-half_x, -half_y, half_z),
+        (half_x, -half_y, half_z),
+        (half_x, half_y, half_z),
+        (-half_x, half_y, half_z),
+    ]
+    faces = [
+        (0, 1, 2),
+        (0, 2, 3),
+        (4, 6, 5),
+        (4, 7, 6),
+        (0, 4, 5),
+        (0, 5, 1),
+        (1, 5, 6),
+        (1, 6, 2),
+        (2, 6, 7),
+        (2, 7, 3),
+        (3, 7, 4),
+        (3, 4, 0),
+    ]
+    return gl.MeshData(vertexes=vertices, faces=faces)
 
 
 class MainWindow:
@@ -103,12 +142,12 @@ class MainWindow:
         self.refresh_button = QtWidgets.QPushButton("Refresh")
         self.connect_button = QtWidgets.QPushButton("Connect")
         self.disconnect_button = QtWidgets.QPushButton("Disconnect")
-        self.reset_button = QtWidgets.QPushButton("Reset Orientation")
+        self.calibrate_button = QtWidgets.QPushButton("Calibrate Flat")
         toolbar.addWidget(self.port_combo, 2)
         toolbar.addWidget(self.refresh_button)
         toolbar.addWidget(self.connect_button)
         toolbar.addWidget(self.disconnect_button)
-        toolbar.addWidget(self.reset_button)
+        toolbar.addWidget(self.calibrate_button)
         layout.addLayout(toolbar)
 
         status_layout = QtWidgets.QGridLayout()
@@ -148,18 +187,26 @@ class MainWindow:
         lower.addLayout(imu_panel, 1)
 
         self.gl_widget = None
-        self.gl_box = None
+        self.gl_body = None
         try:
             import pyqtgraph.opengl as gl
-            from PySide6 import QtGui
 
             self.gl_widget = gl.GLViewWidget()
             self.gl_widget.setCameraPosition(distance=4)
             grid = gl.GLGridItem()
+            grid.setSize(x=4, y=4)
+            grid.setSpacing(x=0.5, y=0.5)
+            grid.translate(0, 0, -0.45)
             self.gl_widget.addItem(grid)
-            self.gl_box = gl.GLBoxItem(size=QtGui.QVector3D(1.6, 0.5, 0.25), color=(0.1, 0.45, 0.7, 0.55))
-            self.gl_box.translate(-0.8, -0.25, -0.125)
-            self.gl_widget.addItem(self.gl_box)
+            self.gl_body = gl.GLMeshItem(
+                meshdata=_body_mesh_data(gl),
+                smooth=False,
+                color=(0.12, 0.45, 0.78, 1.0),
+                shader="shaded",
+                drawEdges=True,
+                edgeColor=(0.92, 0.96, 1.0, 1.0),
+            )
+            self.gl_widget.addItem(self.gl_body)
             lower.addWidget(self.gl_widget, 2)
         except Exception:
             lower.addWidget(QtWidgets.QLabel("3D view requires pyqtgraph OpenGL support."), 2)
@@ -169,7 +216,7 @@ class MainWindow:
         self.refresh_button.clicked.connect(self.refresh_ports)
         self.connect_button.clicked.connect(self.connect_serial)
         self.disconnect_button.clicked.connect(self.disconnect_serial)
-        self.reset_button.clicked.connect(self.attitude_worker.reset_orientation)
+        self.calibrate_button.clicked.connect(self.attitude_worker.calibrate_flat)
 
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.update_view)
@@ -267,12 +314,11 @@ class MainWindow:
         self.imu_labels["roll"].setText(f"roll {orientation.roll_deg:.1f}")
         self.imu_labels["pitch"].setText(f"pitch {orientation.pitch_deg:.1f}")
         self.imu_labels["yaw"].setText(f"yaw {orientation.yaw_deg:.1f}")
-        if self.gl_box is not None:
-            self.gl_box.resetTransform()
-            self.gl_box.translate(-0.8, -0.25, -0.125)
-            self.gl_box.rotate(orientation.yaw_deg, 0, 0, 1)
-            self.gl_box.rotate(orientation.pitch_deg, 0, 1, 0)
-            self.gl_box.rotate(orientation.roll_deg, 1, 0, 0)
+        if self.gl_body is not None:
+            self.gl_body.resetTransform()
+            self.gl_body.rotate(orientation.yaw_deg, 0, 0, 1)
+            self.gl_body.rotate(orientation.pitch_deg, 0, 1, 0)
+            self.gl_body.rotate(orientation.roll_deg, 1, 0, 0)
 
 
 def main() -> int:

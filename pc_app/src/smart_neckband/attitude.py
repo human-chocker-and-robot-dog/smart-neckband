@@ -52,10 +52,21 @@ class ComplementaryAttitudeFilter:
         self._pitch_offset = 0.0
         self._yaw_offset = 0.0
 
-    def reset_orientation(self) -> None:
+    def current_orientation(self) -> Orientation:
+        return Orientation(
+            roll_deg=self._roll_deg - self._roll_offset,
+            pitch_deg=self._pitch_deg - self._pitch_offset,
+            yaw_deg=self._yaw_deg - self._yaw_offset,
+        )
+
+    def calibrate_flat(self) -> Orientation:
         self._roll_offset = self._roll_deg
         self._pitch_offset = self._pitch_deg
         self._yaw_offset = self._yaw_deg
+        return self.current_orientation()
+
+    def reset_orientation(self) -> Orientation:
+        return self.calibrate_flat()
 
     def update(self, sample: ImuSample) -> Orientation:
         ax_g, ay_g, az_g = _apply_transform(
@@ -87,8 +98,4 @@ class ComplementaryAttitudeFilter:
             self._yaw_deg += gz_dps * dt
 
         self._last_timestamp_us = sample.timestamp_us
-        return Orientation(
-            roll_deg=self._roll_deg - self._roll_offset,
-            pitch_deg=self._pitch_deg - self._pitch_offset,
-            yaw_deg=self._yaw_deg - self._yaw_offset,
-        )
+        return self.current_orientation()
