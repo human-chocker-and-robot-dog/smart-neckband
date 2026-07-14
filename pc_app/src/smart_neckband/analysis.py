@@ -72,8 +72,10 @@ def analyze_recent_ecg(samples: tuple[EcgSample, ...]) -> EcgAnalysisResult:
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", message="Too few peaks detected.*")
                 quality_values = nk.ecg_quality(cleaned_array, sampling_rate=ECG_SAMPLE_RATE_HZ)
-            if len(quality_values) > 0:
-                quality = float(np.nanmean(quality_values))
+            quality_array = np.asarray(quality_values, dtype=float)
+            finite_quality = quality_array[np.isfinite(quality_array)]
+            if finite_quality.size > 0:
+                quality = float(np.mean(finite_quality))
         except Exception:
             quality = None
 
