@@ -5,6 +5,7 @@ src/smart_neckband/analysis.py
 src/smart_neckband/attitude.py
 src/smart_neckband/buffers.py
 src/smart_neckband/gui.py
+src/smart_neckband/live_uploader.py
 src/smart_neckband/protocol.py
 src/smart_neckband/publisher.py
 src/smart_neckband/recorder.py
@@ -14,4 +15,8 @@ src/smart_neckband_pc.egg-info/SOURCES.txt
 src/smart_neckband_pc.egg-info/dependency_links.txt
 src/smart_neckband_pc.egg-info/requires.txt
 src/smart_neckband_pc.egg-info/top_level.txt
+tests/test_analysis.py
+tests/test_attitude.py
+tests/test_live_uploader.py
 tests/test_protocol_v0.py
+tests/test_serial_io.py
