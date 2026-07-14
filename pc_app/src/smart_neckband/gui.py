@@ -191,8 +191,9 @@ class MainWindow:
         except RuntimeError as exc:
             self.port_combo.addItem(str(exc), "")
             return
+        ports.sort(key=lambda port: (not port.is_bluetooth_outgoing, not port.is_bluetooth_candidate, port.device))
         for port in ports:
-            suffix = " BT" if port.is_bluetooth_candidate else ""
+            suffix = " BT OUT" if port.is_bluetooth_outgoing else " BT" if port.is_bluetooth_candidate else ""
             self.port_combo.addItem(f"{port.device} - {port.description}{suffix}", port.device)
 
     def connect_serial(self) -> None:

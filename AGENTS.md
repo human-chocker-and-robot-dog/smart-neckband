@@ -158,7 +158,8 @@ Preserve user changes. Do not overwrite unrelated modifications.
 - Make small commits with one coherent purpose.
 - Do not commit generated build directories, local ports, virtual environments, captured ECG data, or secrets.
 - Commit `sdkconfig.defaults`, custom partition tables, protocol definitions, lock files, tests, and documentation.
-- Do not commit or push unless the user explicitly requests it.
+- Standing user instruction as of 2026-07-15: after completing a coherent change, running the required validation, and confirming the diff only contains intended files, create a Conventional Commit without asking again.
+- Push the current branch to its configured upstream after such a commit when an upstream exists, unless the user explicitly says not to. If no remote or upstream is configured, report that push was skipped; do not invent remotes or force push.
 - Never use destructive Git commands such as `reset --hard`, `clean -fd`, force push, or history rewriting without explicit user approval.
 - Do not amend a commit unless explicitly requested.
 

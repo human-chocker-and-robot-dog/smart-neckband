@@ -80,6 +80,32 @@ static void add_disconnected_drop(void)
     portEXIT_CRITICAL(&s_status_mux);
 }
 
+static void add_disconnected_drops(uint32_t count)
+{
+    if (count == 0U) {
+        return;
+    }
+    portENTER_CRITICAL(&s_status_mux);
+    s_disconnected_drop_count += count;
+    portEXIT_CRITICAL(&s_status_mux);
+}
+
+static void drop_pending_tx_queue(const char *reason)
+{
+    if (s_tx_queue == NULL) {
+        return;
+    }
+
+    const UBaseType_t queued = uxQueueMessagesWaiting(s_tx_queue);
+    if (queued == 0U) {
+        return;
+    }
+
+    (void)xQueueReset(s_tx_queue);
+    add_disconnected_drops((uint32_t)queued);
+    ESP_LOGI(TAG, "dropped %u stale SPP TX packet(s) on %s", (unsigned)queued, reason);
+}
+
 static void add_write_error(void)
 {
     portENTER_CRITICAL(&s_status_mux);
@@ -330,6 +356,7 @@ static void spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
         }
         break;
     case ESP_SPP_SRV_OPEN_EVT:
+        drop_pending_tx_queue("connect");
         s_client_handle = param->srv_open.handle;
         s_connected = true;
         s_congested = false;
@@ -347,6 +374,7 @@ static void spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
         s_congested = false;
         s_write_pending = false;
         s_client_handle = 0U;
+        drop_pending_tx_queue("disconnect");
         notify_tx_task();
         break;
     case ESP_SPP_CONG_EVT:

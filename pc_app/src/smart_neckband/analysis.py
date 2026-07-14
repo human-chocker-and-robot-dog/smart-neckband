@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import time
+import warnings
 
 from .buffers import EcgSample
 from .protocol import ECG_SAMPLE_RATE_HZ
@@ -50,24 +51,31 @@ def analyze_recent_ecg(samples: tuple[EcgSample, ...]) -> EcgAnalysisResult:
         )
 
     raw_array = np.asarray(raw, dtype=float)
-    cleaned_array = nk.ecg_clean(raw_array, sampling_rate=ECG_SAMPLE_RATE_HZ)
-    _, peak_info = nk.ecg_peaks(cleaned_array, sampling_rate=ECG_SAMPLE_RATE_HZ)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Too few peaks detected.*")
+        cleaned_array = nk.ecg_clean(raw_array, sampling_rate=ECG_SAMPLE_RATE_HZ)
+        _, peak_info = nk.ecg_peaks(cleaned_array, sampling_rate=ECG_SAMPLE_RATE_HZ)
     peaks = tuple(int(index) for index in peak_info.get("ECG_R_Peaks", []))
 
     latest_rr_ms: float | None = None
     heart_rate_bpm: float | None = None
+    message = "need more R peaks"
     if len(peaks) >= 2:
         latest_rr_ms = (peaks[-1] - peaks[-2]) * 1000.0 / ECG_SAMPLE_RATE_HZ
         if latest_rr_ms > 0:
             heart_rate_bpm = 60_000.0 / latest_rr_ms
+            message = "ok"
 
     quality: float | None = None
-    try:
-        quality_values = nk.ecg_quality(cleaned_array, sampling_rate=ECG_SAMPLE_RATE_HZ)
-        if len(quality_values) > 0:
-            quality = float(np.nanmean(quality_values))
-    except Exception:
-        quality = None
+    if len(peaks) >= 2:
+        try:
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message="Too few peaks detected.*")
+                quality_values = nk.ecg_quality(cleaned_array, sampling_rate=ECG_SAMPLE_RATE_HZ)
+            if len(quality_values) > 0:
+                quality = float(np.nanmean(quality_values))
+        except Exception:
+            quality = None
 
     return EcgAnalysisResult(
         timestamp_s=time.time(),
@@ -77,5 +85,5 @@ def analyze_recent_ecg(samples: tuple[EcgSample, ...]) -> EcgAnalysisResult:
         heart_rate_bpm=heart_rate_bpm,
         latest_rr_ms=latest_rr_ms,
         signal_quality=quality,
-        message="ok",
+        message=message,
     )

@@ -133,6 +133,13 @@ This round does not flash, open monitor, or perform a body-connected test unless
 - OLED page switching is intentionally slower than refresh: the status task refreshes once per second and changes pages every 3 seconds.
 - The first SPP implementation set the Classic BT device name and discoverable/connectable scan mode in `ESP_SPP_INIT_EVT` and ignored return values. It now follows the ESP-IDF v6.0.2 `bt_spp_acceptor` ordering more closely: start the SPP server first, set device name and scan mode after `ESP_SPP_START_EVT`, configure SSP/legacy PIN handling, and log BT address, pairing events, and GAP mode changes.
 - A later SPP scan debug showed `esp_bt_gap_set_scan_mode()` could return success while immediate GAP profile readback was still `conn_mode=0 disc_mode=0`. The firmware now configures Classic BT EIR data, disables BT modem sleep for V0 bench debugging, repeats scan-mode setup after EIR configuration, and runs a short discovery watchdog. Captured startup then read back `conn_mode=1 disc_mode=2`, i.e. connectable and general discoverable.
+- Windows and phones may show `paired` but not `connected` until an SPP/RFCOMM client opens the serial service. A pairing attempt produced `BT SSP confirm requested` and `BT authentication success`, but no `SPP client connected`; opening the Windows outgoing RFCOMM COM port produced `SPP client connected` and binary V0 packets. On this bench, `COM19` is the SmartCollar outgoing port and `COM20` is the local placeholder port.
+- For the headless V0 device, Classic BT pairing now advertises no-input/no-output IO capability to avoid numeric-comparison PIN prompts. Existing host bond records may need to be removed before the new pairing behavior is visible.
+- PyQtGraph's 3D widget imports `pyqtgraph.opengl`, which requires the separate `PyOpenGL` package. Without it the GUI falls back to the text `3D view requires pyqtgraph OpenGL support`; the GUI extra now declares `PyOpenGL>=3.1.7`.
+- With USB still connected and AD8232 leads off, NeuroKit2 can warn that too few R peaks exist to compute rate. The PC analysis worker now treats that as an expected no-signal state and reports `need more R peaks` instead of printing repeated warnings.
+- A captured Windows SPP stream showed one sequence gap immediately after opening the outgoing RFCOMM port: stale packet sequence `44` was followed by live sequence `1861`, producing `LOSS 1816` while CRC stayed `0`. The firmware now drops any pending SPP TX queue on SPP connect/disconnect and records those stale queued packets as transport drops instead of sending old data as if it were real-time.
+- Board OLED `ERR` is not the GUI CRC counter. It aggregates missed ECG timer notifications, ADC/I2C errors, ring overflows, SPP queue overflow, and SPP write errors. A captured status value `status_flags=19` means `LO-`, `LO+`, and `SAMPLE_MISSED`; with CRC `0` and I2C error `0`, a small `ERR 7` points to seven accumulated sampling tick misses rather than Bluetooth corruption.
+- A bounded COM18 log capture after this investigation reset the board and captured a clean boot: OLED `0x3C` and MPU `0x68` were found, SPP became connectable/discoverable, OLED initialized, MPU-compatible `WHO_AM_I=0x72` configured, and no startup I2C/write errors were logged. The capture did not expose a runtime per-counter breakdown for OLED `ERR`.
 
 ## Result
 
@@ -142,10 +149,9 @@ ESP32 sensor sampling -> Bluetooth Classic SPP TX queue -> Windows virtual COM r
 
 Verified:
 
-- `.\tools\project.ps1 build`: passed after Classic BT SPP integration.
-- `.\tools\project.ps1 size`: passed.
-- ESP-IDF size tool: total image size `654088` bytes; generated `smart_neckband.bin` length `654208` bytes; 2 MB app partition has `0x160480` bytes free.
-- `.\tools\project.ps1 pc-test`: 12 pytest tests passed.
+- `idf.py -C firmware build`: passed after SPP stale-queue cleanup.
+- `idf.py -C firmware size`: passed; total image size `657732` bytes and generated `smart_neckband.bin` length `0xa09c0`, with `0x15f640` bytes free in the 2 MB app partition.
+- `.\tools\project.ps1 pc-test`: 13 pytest tests passed.
 - C golden packet arrays match `docs/protocol/v0_golden_vectors.json` for ECG, IMU, and status packets.
 - `git diff --check`: passed.
 

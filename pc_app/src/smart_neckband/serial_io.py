@@ -23,6 +23,7 @@ class SerialPortInfo:
     description: str
     hwid: str
     is_bluetooth_candidate: bool
+    is_bluetooth_outgoing: bool = False
 
 
 @dataclass(slots=True)
@@ -49,12 +50,15 @@ def list_serial_ports() -> list[SerialPortInfo]:
     ports: list[SerialPortInfo] = []
     for port in list_ports.comports():
         text = f"{port.description} {port.hwid}".lower()
+        is_bluetooth = "bluetooth" in text or "bthenum" in text
+        is_outgoing = is_bluetooth and "000000000000" not in text
         ports.append(
             SerialPortInfo(
                 device=port.device,
                 description=port.description,
                 hwid=port.hwid,
-                is_bluetooth_candidate="bluetooth" in text or "bthenum" in text,
+                is_bluetooth_candidate=is_bluetooth,
+                is_bluetooth_outgoing=is_outgoing,
             )
         )
     return ports
