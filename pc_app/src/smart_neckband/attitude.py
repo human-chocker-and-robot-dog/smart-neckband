@@ -51,6 +51,12 @@ class ComplementaryAttitudeFilter:
         self._roll_offset = 0.0
         self._pitch_offset = 0.0
         self._yaw_offset = 0.0
+        self._gyro_bias_x_dps = 0.0
+        self._gyro_bias_y_dps = 0.0
+        self._gyro_bias_z_dps = 0.0
+        self._latest_gyro_x_dps = 0.0
+        self._latest_gyro_y_dps = 0.0
+        self._latest_gyro_z_dps = 0.0
 
     def current_orientation(self) -> Orientation:
         return Orientation(
@@ -60,6 +66,9 @@ class ComplementaryAttitudeFilter:
         )
 
     def calibrate_flat(self) -> Orientation:
+        self._gyro_bias_x_dps = self._latest_gyro_x_dps
+        self._gyro_bias_y_dps = self._latest_gyro_y_dps
+        self._gyro_bias_z_dps = self._latest_gyro_z_dps
         self._roll_offset = self._roll_deg
         self._pitch_offset = self._pitch_deg
         self._yaw_offset = self._yaw_deg
@@ -81,6 +90,12 @@ class ComplementaryAttitudeFilter:
             sample.gy / 131.0,
             sample.gz / 131.0,
         )
+        self._latest_gyro_x_dps = gx_dps
+        self._latest_gyro_y_dps = gy_dps
+        self._latest_gyro_z_dps = gz_dps
+        gx_dps -= self._gyro_bias_x_dps
+        gy_dps -= self._gyro_bias_y_dps
+        gz_dps -= self._gyro_bias_z_dps
 
         accel_roll = math.degrees(math.atan2(ay_g, az_g))
         accel_pitch = math.degrees(math.atan2(-ax_g, math.sqrt((ay_g * ay_g) + (az_g * az_g))))

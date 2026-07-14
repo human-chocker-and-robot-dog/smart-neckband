@@ -44,3 +44,14 @@ def test_calibrate_flat_zeroes_current_tilt() -> None:
 
     assert after.roll_deg == approx(0.0)
     assert after.pitch_deg == approx(0.0, abs=0.1)
+
+
+def test_calibrate_flat_removes_stationary_yaw_gyro_bias() -> None:
+    attitude = ComplementaryAttitudeFilter()
+
+    attitude.update(_imu_sample(timestamp_us=0, gz=262))
+    calibrated = attitude.calibrate_flat()
+    after = attitude.update(_imu_sample(timestamp_us=1_000_000, gz=262))
+
+    assert calibrated.yaw_deg == approx(0.0)
+    assert after.yaw_deg == approx(0.0)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import statistics
 import time
 import warnings
 
@@ -18,6 +19,28 @@ class EcgAnalysisResult:
     latest_rr_ms: float | None
     signal_quality: float | None
     message: str
+
+
+def _rr_intervals_ms(peaks: tuple[int, ...]) -> tuple[float, ...]:
+    return tuple(
+        (peaks[index] - peaks[index - 1]) * 1000.0 / ECG_SAMPLE_RATE_HZ
+        for index in range(1, len(peaks))
+    )
+
+
+def _valid_rr_intervals_ms(peaks: tuple[int, ...]) -> tuple[float, ...]:
+    return tuple(rr for rr in _rr_intervals_ms(peaks) if 300.0 <= rr <= 2000.0)
+
+
+def _stable_rr_ms(intervals_ms: tuple[float, ...]) -> float | None:
+    if len(intervals_ms) < 2:
+        return None
+    recent = intervals_ms[-5:]
+    median_rr = statistics.median(recent)
+    if median_rr <= 0.0:
+        return None
+    stable = tuple(rr for rr in recent if (median_rr * 0.75) <= rr <= (median_rr * 1.25))
+    return float(statistics.median(stable or recent))
 
 
 def analyze_recent_ecg(samples: tuple[EcgSample, ...]) -> EcgAnalysisResult:
@@ -74,10 +97,15 @@ def analyze_recent_ecg(samples: tuple[EcgSample, ...]) -> EcgAnalysisResult:
     heart_rate_bpm: float | None = None
     message = "need more R peaks"
     if len(peaks) >= 2:
-        latest_rr_ms = (peaks[-1] - peaks[-2]) * 1000.0 / ECG_SAMPLE_RATE_HZ
-        if latest_rr_ms > 0:
-            heart_rate_bpm = 60_000.0 / latest_rr_ms
+        valid_rr = _valid_rr_intervals_ms(peaks)
+        if valid_rr:
+            latest_rr_ms = valid_rr[-1]
+        stable_rr = _stable_rr_ms(valid_rr)
+        if stable_rr is not None:
+            heart_rate_bpm = 60_000.0 / stable_rr
             message = "ok"
+        else:
+            message = "need stable R peaks"
 
     quality: float | None = None
     if len(peaks) >= 2:

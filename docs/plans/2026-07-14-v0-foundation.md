@@ -144,6 +144,8 @@ This round does not flash, open monitor, or perform a body-connected test unless
 - On this shell, `.\tools\project.ps1 flash` returned exit code `1` without visible stdout when the ESP-IDF profile was not already loaded. Dot-sourcing `C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1` and running `idf.py -C firmware -p COM18 -b 460800 flash` succeeded.
 - After the GUI connected and displayed an initial ECG waveform, NeuroKit2 could return no finite SQI values for the current analysis window. Calling NumPy mean helpers on that empty/all-NaN quality set printed `Mean of empty slice` and `invalid value encountered in scalar divide`; the PC analysis now leaves SQI unset until finite quality values exist.
 - A later raw-log check showed valid SPP packets with CRC `0` and packet loss `0`, but the payload values were bad: ECG samples were all `0` with `ADC_CLIPPING` flags, and IMU six-axis samples were all `0`. This points below the PC parser/transport layer. PC analysis now reports clipped ECG windows directly, and firmware treats an all-zero 14-byte MPU6050 sample as an invalid response, marks the IMU offline, and lets the existing 1 Hz reinitialization path run.
+- After the AD8232 output wiring was corrected away from VN, live ECG waveform appeared. HR could still jump because the PC app used only the last RR interval from the last two detected R peaks; one false or missed peak at the moving 10-second window edge could swing the display. HR now uses a median of recent physiologically plausible RR intervals while still exposing the latest RR separately.
+- The OpenGL attitude body could rotate in place while the device was flat because `Calibrate Flat` only zeroed roll/pitch/yaw offsets; it did not remove stationary gyro bias. Calibration now captures the current transformed gyro zero-rate values and subtracts them before integration. Yaw remains gyro-only and can still drift without a magnetometer, but the immediate flat-table spin should be much smaller after calibration.
 
 ## Result
 
@@ -155,7 +157,7 @@ Verified:
 
 - `idf.py -C firmware build`: passed after SPP stale-queue cleanup.
 - `idf.py -C firmware size`: passed; total image size `657732` bytes and generated `smart_neckband.bin` length `0xa09c0`, with `0x15f640` bytes free in the 2 MB app partition.
-- `.\tools\project.ps1 pc-test`: 16 pytest tests passed, including flat-calibration, no-finite-SQI, and clipped-ECG coverage.
+- `.\tools\project.ps1 pc-test`: 18 pytest tests passed, including flat-calibration, gyro-bias calibration, no-finite-SQI, clipped-ECG, and RR-median HR coverage.
 - `idf.py -C firmware -p COM18 -b 460800 flash`: passed; bootloader, partition table, and app hashes verified, then the board hard-reset.
 - C golden packet arrays match `docs/protocol/v0_golden_vectors.json` for ECG, IMU, and status packets.
 - `git diff --check`: passed.

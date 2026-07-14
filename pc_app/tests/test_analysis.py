@@ -54,3 +54,20 @@ def test_analysis_reports_clipped_ecg_without_neurokit(monkeypatch) -> None:
     assert result.message == "ECG clipped"
     assert result.heart_rate_bpm is None
     assert result.r_peak_indices == ()
+
+
+def test_analysis_uses_stable_rr_median_for_heart_rate(monkeypatch) -> None:
+    fake_neurokit = types.SimpleNamespace(
+        ecg_clean=lambda raw, sampling_rate: np.asarray(raw, dtype=float),
+        ecg_peaks=lambda cleaned, sampling_rate: (
+            None,
+            {"ECG_R_Peaks": np.asarray([100, 600, 1100, 1600, 2100, 2350])},
+        ),
+        ecg_quality=lambda cleaned, sampling_rate: np.asarray([0.9, 0.9]),
+    )
+    monkeypatch.setitem(sys.modules, "neurokit2", fake_neurokit)
+
+    result = analyze_recent_ecg(_ecg_window())
+
+    assert result.latest_rr_ms == 500.0
+    assert result.heart_rate_bpm == 60.0
