@@ -1,0 +1,193 @@
+# AI Smart Collar V0 Live Heartbeat on Vercel
+
+This service is a Vercel-native realtime backend and viewer for PC-derived heartbeat data.
+
+Flow:
+
+```text
+Windows uploader
+-> /api/ws Vercel WebSocket Function
+-> Redis Pub/Sub
+-> /api/ws Vercel WebSocket Function
+-> viewer browser
+```
+
+The uploader sends NeuroKit2-derived clean ECG, R peaks, HR, SQI, and lead-off state. The service does not filter ECG, run NeuroKit2, diagnose medical conditions, or store long-term raw ECG.
+
+## Vercel Deployment
+
+1. Create or select a Vercel project for this repository.
+2. Confirm the project uses the Node.js runtime for functions.
+3. Enable Fluid Compute in the Vercel dashboard under Functions settings. `vercel.json` also sets `"fluid": true`.
+4. Set environment variables listed below.
+5. Deploy with the Vercel Git integration or:
+
+```powershell
+npm install
+npm test
+npm run lint
+npm run typecheck
+npm run build
+vercel deploy --prod
+```
+
+`api/ws.ts` exports a Node `http.Server` using `ws`, matching current Vercel WebSocket Function examples. `vercel.json` sets `maxDuration` for `api/ws.ts`; account limits still apply.
+
+## Redis Marketplace Setup
+
+1. In the Vercel dashboard, open the project.
+2. Go to Marketplace and install a Redis provider integration.
+3. Provision a Redis database and link it to this project.
+4. Confirm Vercel injected a Redis URL environment variable.
+5. Prefer a TCP Redis URL compatible with `ioredis` and Redis Pub/Sub, exposed as `REDIS_URL`.
+6. Redeploy after environment variables are available.
+
+Required Redis features:
+
+- `GET`, `SET EX`, `SET NX EX`, `DEL`, `INCR`, `EXPIRE`
+- Pub/Sub `PUBLISH` / `SUBSCRIBE`
+
+## Environment Variables
+
+| Name | Required | Notes |
+| --- | --- | --- |
+| `ADMIN_TOKEN` | yes | Long random admin token for session creation and stop. |
+| `REDIS_URL` | yes | Redis Marketplace TCP URL for `ioredis` and Pub/Sub. |
+| `PUBLIC_BASE_URL` | recommended | Public deployment origin used to return `viewer_url`. |
+| `SESSION_TTL_SECONDS` | no | Defaults to `43200` seconds / 12 hours. |
+| `SESSION_CREATE_LIMIT_PER_MINUTE` | no | Defaults to `10` per IP. |
+| `WS_UPGRADE_LIMIT_PER_MINUTE` | no | Defaults to `60` per IP. |
+| `WS_MAX_DURATION_SECONDS` | no | Defaults to `780`; choose a value below the configured Vercel maxDuration. |
+
+Never commit real tokens, Redis URLs, or production domains.
+
+## Admin Session API
+
+Create:
+
+```powershell
+$body = '{}'
+Invoke-RestMethod `
+  -Method POST `
+  -Uri 'https://your-project.vercel.app/api/session' `
+  -Headers @{ Authorization = "Bearer $env:ADMIN_TOKEN" } `
+  -ContentType 'application/json' `
+  -Body $body
+```
+
+The response contains:
+
+```json
+{
+  "session_id": "sess_...",
+  "ingest_token": "...",
+  "viewer_token": "...",
+  "viewer_url": "https://your-project.vercel.app/viewer?session_id=...&viewer_token=...",
+  "expires_at_ms": 178...
+}
+```
+
+Stop:
+
+```powershell
+Invoke-RestMethod `
+  -Method DELETE `
+  -Uri 'https://your-project.vercel.app/api/session' `
+  -Headers @{ Authorization = "Bearer $env:ADMIN_TOKEN" } `
+  -ContentType 'application/json' `
+  -Body (@{ session_id = 'sess_...' } | ConvertTo-Json)
+```
+
+Stopping a session deletes Redis status, snapshot, ingest lock, and last sequence keys, then publishes `session_stopped`.
+
+## Windows Uploader Example
+
+The uploader connects to `/api/ws`, authenticates within 5 seconds, then sends clean ECG batches and status updates. Do not send raw firmware ECG or full local recordings to this public service.
+
+```python
+import json
+import time
+import websocket
+
+session_id = "sess_..."
+ingest_token = "..."
+ws = websocket.create_connection("wss://your-project.vercel.app/api/ws")
+ws.send(json.dumps({
+    "type": "auth",
+    "role": "ingest",
+    "session_id": session_id,
+    "token": ingest_token,
+}))
+
+seq = 0
+while True:
+    clean_ecg = [0.0] * 20  # replace with NeuroKit2-cleaned values from the PC app
+    r_peaks = []            # indices within the current batch/window representation
+    ws.send(json.dumps({
+        "type": "ecg_batch",
+        "seq": seq,
+        "timestamp_ms": int(time.time() * 1000),
+        "sample_rate": 500,
+        "samples": clean_ecg,
+        "r_peaks": r_peaks,
+        "hr_bpm": None,
+        "sqi": None,
+        "lead_off": False,
+    }))
+    seq += 1
+    time.sleep(0.04)
+```
+
+Rules enforced by the server:
+
+- JSON message size must be at most 128 KB.
+- `sample_rate` must be `500`.
+- `seq` must strictly increase per session.
+- Samples are not modified, interpolated, filtered, or stored long-term.
+- Only one active ingest connection is allowed per session.
+
+## Viewer URL and QR Flow
+
+1. Create a session with `POST /api/session`.
+2. Share the returned `viewer_url`.
+3. The React viewer generates a QR code from the exact current URL in memory.
+4. The viewer token stays in the URL for the current session and is not written to `localStorage`.
+5. The page and Vercel headers are marked `noindex, nofollow`.
+
+On connect or reconnect, the viewer:
+
+- opens `wss://host/api/ws?session_id=...`;
+- sends `{ "type": "auth", "role": "viewer", "viewer_token": "..." }`;
+- receives a `snapshot` message with `snapshot=true`;
+- resumes live `ecg_batch` messages;
+- de-duplicates by `seq` and `timestamp_ms`;
+- does not high-speed replay old R-peak animation from snapshots.
+
+## Status Behavior
+
+- No ingest data for 3 seconds: `stale`.
+- No ingest data for 10 seconds: `offline`.
+- `lead_off=true`: `signal_lost` immediately.
+- Offline viewers keep the last static snapshot but do not loop old ECG.
+- Snapshot data always carries `snapshot=true`.
+
+## Redis Keys
+
+```text
+session:{id}:meta
+session:{id}:status
+session:{id}:snapshot
+session:{id}:ingest_lock
+session:{id}:last_seq
+session:{id}:live
+```
+
+All session keys have TTL. Pub/Sub channels are not durable.
+
+## Vercel Beta Risks
+
+- Vercel WebSockets are Public Beta; behavior and APIs may change.
+- WebSocket connections close when the Function reaches max duration. Clients must reconnect and reload snapshot.
+- Reconnects may land on a different Function instance or deployment, so Redis must remain the source of truth.
+- Long maxDuration values depend on Vercel account plan; extended 1800-second durations are Beta and account/runtime dependent.
+- Redis provider latency and Pub/Sub delivery are outside the Function process; live updates are realtime best effort.

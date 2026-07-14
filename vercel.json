@@ -1,0 +1,30 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "fluid": true,
+  "functions": {
+    "api/ws.ts": {
+      "runtime": "nodejs",
+      "maxDuration": 800
+    },
+    "api/*.ts": {
+      "runtime": "nodejs"
+    }
+  },
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
+        }
+      ]
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/viewer/:path*",
+      "destination": "/index.html"
+    }
+  ]
+}

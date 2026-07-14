@@ -23,6 +23,11 @@ pytest-cache-files-*/
 .coverage
 htmlcov/
 
+# Node / Vercel frontend build
+node_modules/
+dist/
+.vercel/
+
 # Captured data and logs
 data/
 recordings/
