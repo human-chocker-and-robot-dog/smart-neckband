@@ -96,6 +96,7 @@ git diff --check
 - The crawled reference site defaults to image backgrounds and mutates `document.body.style.background` directly; the production viewer now keeps background rendering behind React settings and explicitly clears `backgroundImage` in solid mode.
 - The local reference crawl lives under ignored `data/`; ESLint now ignores `data/**` so reference artifacts are not treated as production source.
 - Vite dev dependency scanning also discovered ignored `data/reference/**/*.html`; `vite.config.ts` now limits optimize-deps entries to the production `index.html` and ignores `data/**` for dev watch.
+- The first Live Beta redesign drifted too far from the reference page. The viewer now keeps the reference page shell, CSS, wallpaper assets, settings panel, and Three.js particle module, while a TypeScript adapter owns Vercel WebSocket ingestion, real ECG drawing, HR/status updates, default solid background, and default grid-off behavior.
 
 ## Result
 
@@ -134,3 +135,4 @@ Follow-up Live Beta front-end adaptation:
 - Removed reference-site simulation, audio, system, adaptation, footer warning, ICP, and GitHub concepts from the production viewer.
 - Follow-up validation passed: `npm test`, `npm run lint`, `npm run typecheck`, `npm run build`, and `git diff --check`.
 - Local Vite preview was started and probed at `/viewer` with HTTP 200 after excluding the ignored reference crawl from dev scanning.
+- Follow-up correction restored the reference visual effect instead of a custom React redesign. Verified in the browser that the original starfield canvas renders, settings opens, pure color is selected by default, background image is `none`, and the ECG grid/borders are off by default.

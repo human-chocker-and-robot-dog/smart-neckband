@@ -8,11 +8,11 @@ import { deriveState, SessionManager } from "../lib/session-manager";
 import { createHeartbeatServer } from "../lib/ws-server";
 import { reconnectDelayMs, shouldAcceptLiveBatch } from "../src/live-client";
 import {
-  DEFAULT_VIEWER_SETTINGS,
-  coerceViewerSettings,
-  particleDriveFor,
-  solidBackgroundStyle
-} from "../src/viewer-settings";
+  appendEcgBatch,
+  pulseFromBeatAge,
+  solidBackgroundChoice,
+  trimEcgBuffer
+} from "../src/live-rendering";
 
 function testBatch(seq: number, overrides: Partial<EcgBatch> = {}): EcgBatch {
   return {
@@ -215,44 +215,22 @@ describe("viewer client helpers", () => {
   });
 });
 
-describe("viewer settings", () => {
-  it("defaults to a pure solid background and hides the ECG grid", () => {
-    const style = solidBackgroundStyle(DEFAULT_VIEWER_SETTINGS);
-
-    expect(DEFAULT_VIEWER_SETTINGS.backgroundMode).toBe("solid");
-    expect(DEFAULT_VIEWER_SETTINGS.showEcgGrid).toBe(false);
-    expect(style.backgroundColor).toBe(DEFAULT_VIEWER_SETTINGS.backgroundColor);
-    expect(style.backgroundImage).toBe("none");
+describe("live reference-shell rendering helpers", () => {
+  it("defaults to a pure solid background choice", () => {
+    expect(solidBackgroundChoice()).toEqual({ type: "color", color: "#000000", image: "" });
   });
 
-  it("coerces stored settings without reintroducing image backgrounds", () => {
-    const settings = coerceViewerSettings({
-      backgroundMode: "image",
-      backgroundImage: "images/bg1.jpg",
-      backgroundColor: "#101010",
-      showEcgGrid: true,
-      particleEffect: "pulse",
-      particleCount: 5_000
-    });
+  it("keeps R peak indexes aligned when trimming ECG buffers", () => {
+    const buffer = appendEcgBatch({ samples: [1, 2, 3], rPeaks: [1] }, [4, 5, 6], [1], 4);
 
-    expect(settings.backgroundMode).toBe("solid");
-    expect((settings as { backgroundImage?: string }).backgroundImage).toBeUndefined();
-    expect(settings.backgroundColor).toBe("#101010");
-    expect(settings.showEcgGrid).toBe(true);
-    expect(settings.particleEffect).toBe("pulse");
-    expect(settings.particleCount).toBe(900);
+    expect(buffer.samples).toEqual([3, 4, 5, 6]);
+    expect(buffer.rPeaks).toEqual([2]);
+    expect(trimEcgBuffer({ samples: [1, 2, 3], rPeaks: [0, 2] }, 2)).toEqual({ samples: [2, 3], rPeaks: [1] });
   });
 
-  it("binds particles to heart rate only while the stream is live", () => {
-    const live = particleDriveFor({ state: "live", hr_bpm: 96 }, DEFAULT_VIEWER_SETTINGS);
-    const stale = particleDriveFor({ state: "stale", hr_bpm: 96 }, DEFAULT_VIEWER_SETTINGS);
-    const signalLost = particleDriveFor({ state: "signal_lost", hr_bpm: 96 }, DEFAULT_VIEWER_SETTINGS);
-
-    expect(live.mode).toBe("live");
-    expect(live.pulsePerSecond).toBeCloseTo(96 / 60);
-    expect(stale.mode).toBe("idle");
-    expect(stale.pulsePerSecond).toBe(0);
-    expect(signalLost.mode).toBe("idle");
-    expect(signalLost.pulsePerSecond).toBe(0);
+  it("only produces visual pulse while connected and close to a real beat", () => {
+    expect(pulseFromBeatAge(100, true)).toBeGreaterThan(0);
+    expect(pulseFromBeatAge(100, false)).toBe(0);
+    expect(pulseFromBeatAge(700, true)).toBe(0);
   });
 });
