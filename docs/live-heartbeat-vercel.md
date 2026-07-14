@@ -53,7 +53,7 @@ Required Redis features:
 | --- | --- | --- |
 | `ADMIN_TOKEN` | yes | Long random admin token for session creation and stop. |
 | `REDIS_URL` | yes | Redis Marketplace TCP URL for `ioredis` and Pub/Sub. |
-| `PUBLIC_BASE_URL` | recommended | Public deployment origin used to return `viewer_url`. |
+| `PUBLIC_BASE_URL` | no | Optional override for `viewer_url`; when omitted, the API derives the origin from forwarded Vercel request headers. |
 | `SESSION_TTL_SECONDS` | no | Defaults to `43200` seconds / 12 hours. |
 | `SESSION_CREATE_LIMIT_PER_MINUTE` | no | Defaults to `10` per IP. |
 | `WS_UPGRADE_LIMIT_PER_MINUTE` | no | Defaults to `60` per IP. |

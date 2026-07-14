@@ -2,6 +2,7 @@ import { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { hashToken } from "../lib/auth";
+import { publicBaseUrlFromHeaders } from "../lib/http";
 import { FakeRedis } from "../lib/redis";
 import { ECG_SAMPLE_RATE_HZ, EcgBatch, ServerEvent } from "../lib/protocol";
 import { deriveState, SessionManager } from "../lib/session-manager";
@@ -140,6 +141,32 @@ describe("session manager", () => {
 
     await manager.createSession("127.0.0.1");
     await expect(manager.createSession("127.0.0.1")).rejects.toThrow("rate limit");
+  });
+});
+
+describe("HTTP deployment helpers", () => {
+  it("derives public base URL from forwarded Vercel headers", () => {
+    expect(
+      publicBaseUrlFromHeaders(
+        {
+          "x-forwarded-proto": "https",
+          "x-forwarded-host": "ai-smart-collar-v0-live-heartbeat.vercel.app"
+        },
+        undefined
+      )
+    ).toBe("https://ai-smart-collar-v0-live-heartbeat.vercel.app");
+  });
+
+  it("lets PUBLIC_BASE_URL override forwarded headers", () => {
+    expect(
+      publicBaseUrlFromHeaders(
+        {
+          "x-forwarded-proto": "https",
+          "x-forwarded-host": "preview.vercel.app"
+        },
+        "https://live.example.test"
+      )
+    ).toBe("https://live.example.test");
   });
 });
 

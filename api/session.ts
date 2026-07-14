@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { requireAdminBearer } from "../lib/auth";
-import { clientIp, methodNotAllowed, readJsonBody, sendJson } from "../lib/http";
+import { clientIp, methodNotAllowed, publicBaseUrl, readJsonBody, sendJson } from "../lib/http";
 import { getRedis } from "../lib/redis";
 import { SessionManager } from "../lib/session-manager";
 import { SessionIdSchema } from "../lib/protocol";
@@ -10,7 +10,7 @@ type StopBody = {
 };
 
 export default async function handler(request: IncomingMessage, response: ServerResponse): Promise<void> {
-  const manager = new SessionManager({ redis: getRedis() });
+  const manager = new SessionManager({ redis: getRedis(), baseUrl: publicBaseUrl(request) });
   try {
     if (request.method === "POST") {
       requireAdminBearer(request.headers.authorization);

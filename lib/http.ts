@@ -1,4 +1,4 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
 
 export async function readJsonBody<T>(request: IncomingMessage, maxBytes = 64 * 1024): Promise<T> {
   const chunks: Buffer[] = [];
@@ -34,4 +34,24 @@ export function clientIp(request: IncomingMessage): string {
   const forwarded = request.headers["x-forwarded-for"];
   const value = Array.isArray(forwarded) ? forwarded[0] : forwarded;
   return value?.split(",")[0]?.trim() || request.socket.remoteAddress || "unknown";
+}
+
+export function publicBaseUrlFromHeaders(headers: IncomingHttpHeaders, configuredBaseUrl = process.env.PUBLIC_BASE_URL): string | undefined {
+  if (configuredBaseUrl) {
+    return configuredBaseUrl;
+  }
+  const host = firstHeader(headers["x-forwarded-host"] ?? headers.host)?.split(",")[0]?.trim();
+  if (!host) {
+    return undefined;
+  }
+  const protocol = firstHeader(headers["x-forwarded-proto"])?.split(",")[0]?.trim() || "https";
+  return `${protocol}://${host}`;
+}
+
+export function publicBaseUrl(request: IncomingMessage): string | undefined {
+  return publicBaseUrlFromHeaders(request.headers);
+}
+
+function firstHeader(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
 }
