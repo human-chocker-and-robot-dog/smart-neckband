@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { clientIp, methodNotAllowed, sendJson } from "../lib/http";
-import { getRedis } from "../lib/redis";
-import { SessionManager } from "../lib/session-manager";
+import { clientIp, methodNotAllowed, sendJson } from "../lib/http.js";
+import { getRedis } from "../lib/redis.js";
+import { SessionManager } from "../lib/session-manager.js";
 
 export default async function handler(request: IncomingMessage, response: ServerResponse): Promise<void> {
   if (request.method !== "GET") {

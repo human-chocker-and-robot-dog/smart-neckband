@@ -1,19 +1,19 @@
 import { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import { hashToken } from "../lib/auth";
-import { publicBaseUrlFromHeaders } from "../lib/http";
-import { FakeRedis } from "../lib/redis";
-import { ECG_SAMPLE_RATE_HZ, EcgBatch, ServerEvent } from "../lib/protocol";
-import { deriveState, SessionManager } from "../lib/session-manager";
-import { createHeartbeatServer } from "../lib/ws-server";
-import { reconnectDelayMs, shouldAcceptLiveBatch } from "../src/live-client";
+import { hashToken } from "../lib/auth.js";
+import { publicBaseUrlFromHeaders } from "../lib/http.js";
+import { FakeRedis } from "../lib/redis.js";
+import { ECG_SAMPLE_RATE_HZ, EcgBatch, ServerEvent } from "../lib/protocol.js";
+import { deriveState, SessionManager } from "../lib/session-manager.js";
+import { createHeartbeatServer } from "../lib/ws-server.js";
+import { reconnectDelayMs, shouldAcceptLiveBatch } from "../src/live-client.js";
 import {
   appendEcgBatch,
   pulseFromBeatAge,
   solidBackgroundChoice,
   trimEcgBuffer
-} from "../src/live-rendering";
+} from "../src/live-rendering.js";
 
 function testBatch(seq: number, overrides: Partial<EcgBatch> = {}): EcgBatch {
   return {

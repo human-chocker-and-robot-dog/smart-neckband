@@ -11,9 +11,9 @@ import {
   SNAPSHOT_SECONDS,
   STALE_AFTER_MS,
   StatusUpdate
-} from "./protocol";
-import { createSessionId, createToken, hashToken, safeEqualHash } from "./auth";
-import { RedisLike } from "./redis";
+} from "./protocol.js";
+import { createSessionId, createToken, hashToken, safeEqualHash } from "./auth.js";
+import { RedisLike } from "./redis.js";
 
 export type SessionMeta = {
   session_id: string;

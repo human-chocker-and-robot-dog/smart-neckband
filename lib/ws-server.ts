@@ -8,10 +8,10 @@ import {
   parseJsonMessage,
   ServerEvent,
   serializedSizeBytes
-} from "./protocol";
-import { clientIp } from "./http";
-import { duplicateSubscriber, RedisLike } from "./redis";
-import { SessionManager } from "./session-manager";
+} from "./protocol.js";
+import { clientIp } from "./http.js";
+import { duplicateSubscriber, RedisLike } from "./redis.js";
+import { SessionManager } from "./session-manager.js";
 
 const AUTH_TIMEOUT_MS = 5_000;
 const VIEWER_QUEUE_LIMIT = 32;

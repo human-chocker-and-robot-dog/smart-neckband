@@ -1,9 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { requireAdminBearer } from "../lib/auth";
-import { clientIp, methodNotAllowed, publicBaseUrl, readJsonBody, sendJson } from "../lib/http";
-import { getRedis } from "../lib/redis";
-import { SessionManager } from "../lib/session-manager";
-import { SessionIdSchema } from "../lib/protocol";
+import { requireAdminBearer } from "../lib/auth.js";
+import { clientIp, methodNotAllowed, publicBaseUrl, readJsonBody, sendJson } from "../lib/http.js";
+import { getRedis } from "../lib/redis.js";
+import { SessionManager } from "../lib/session-manager.js";
+import { SessionIdSchema } from "../lib/protocol.js";
 
 type StopBody = {
   session_id?: string;

@@ -5,15 +5,15 @@ import {
   ServerEventSchema,
   Snapshot,
   SNAPSHOT_SECONDS
-} from "../lib/protocol";
-import { DedupeState, reconnectDelayMs, shouldAcceptLiveBatch } from "./live-client";
+} from "../lib/protocol.js";
+import { DedupeState, reconnectDelayMs, shouldAcceptLiveBatch } from "./live-client.js";
 import {
   BackgroundChoice,
   EcgPointBuffer,
   appendEcgBatch,
   pulseFromBeatAge,
   solidBackgroundChoice
-} from "./live-rendering";
+} from "./live-rendering.js";
 import "./styles.css";
 
 const MAX_SAMPLES = ECG_SAMPLE_RATE_HZ * SNAPSHOT_SECONDS;

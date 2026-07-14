@@ -1,4 +1,4 @@
-import type { LiveEcgBatch } from "../lib/protocol";
+import type { LiveEcgBatch } from "../lib/protocol.js";
 
 export type DedupeState = {
   lastSeq: number;
