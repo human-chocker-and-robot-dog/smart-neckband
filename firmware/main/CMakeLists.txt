@@ -2,10 +2,20 @@ idf_component_register(
     SRCS
         "app_main.c"
         "i2c_scan.c"
+        "oled_status.c"
+        "packet_task.c"
         "protocol_v0.c"
+        "sample_ring.c"
+        "sensors.c"
+        "spp_transport.c"
     PRIV_REQUIRES
+        bt
+        esp_adc
+        esp_driver_gptimer
         esp_driver_gpio
         esp_driver_i2c
+        esp_timer
+        nvs_flash
         esp_partition
         spi_flash
     INCLUDE_DIRS

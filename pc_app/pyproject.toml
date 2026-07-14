@@ -13,6 +13,16 @@ dependencies = []
 dev = [
     "pytest>=8",
 ]
+gui = [
+    "neurokit2>=0.2",
+    "numpy>=1.26",
+    "pyqtgraph>=0.13",
+    "pyserial>=3.5",
+    "PySide6>=6.7",
+]
+serial = [
+    "pyserial>=3.5",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

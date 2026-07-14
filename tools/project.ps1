@@ -53,10 +53,100 @@ function Invoke-Idf {
     $escapedFirmwareDir = $FirmwareDir.Replace('"', '\"')
     $commandParts = @("idf.py", "-C", ('"{0}"' -f $escapedFirmwareDir)) + $Arguments
     $commandLine = $commandParts -join " "
-    & eim run $commandLine
-    if ($LASTEXITCODE -ne 0) {
-        throw "eim run failed with exit code $LASTEXITCODE"
+    try {
+        & eim run $commandLine
+        $lastExit = Get-Variable -Name LASTEXITCODE -ValueOnly -ErrorAction SilentlyContinue
+        if (($null -ne $lastExit) -and ($lastExit -eq 0)) {
+            return
+        }
     }
+    catch {
+        Write-Warning "eim run failed: $($_.Exception.Message)"
+    }
+
+    if (Invoke-IdfLocalBuildFallback -Arguments $Arguments) {
+        return
+    }
+
+    $fallbackExit = Get-Variable -Name LASTEXITCODE -ValueOnly -ErrorAction SilentlyContinue
+    $message = "eim run failed"
+    if ($null -ne $fallbackExit) {
+        $message = "$message with exit code $fallbackExit"
+    }
+    throw $message
+}
+
+function Add-PathPrefix {
+    param([Parameter(Mandatory)][string]$PathPrefix)
+
+    if ((Test-Path -LiteralPath $PathPrefix) -and
+        -not (($env:PATH -split ';') -contains $PathPrefix)) {
+        $env:PATH = "$PathPrefix;$env:PATH"
+    }
+}
+
+function Initialize-LocalIdfToolEnvironment {
+    $idfRoot = Join-Path "C:\Espressif" $ExpectedIdfVersion
+    $idfPath = Join-Path $idfRoot "esp-idf"
+    if (-not (Test-Path -LiteralPath $idfPath)) {
+        throw "ESP-IDF path not found: $idfPath"
+    }
+    $env:IDF_PATH = $idfPath
+
+    $ccache = Get-ChildItem -LiteralPath "C:\Espressif\tools\ccache" -Recurse -Filter "ccache.exe" -ErrorAction SilentlyContinue |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if ($null -ne $ccache) {
+        Add-PathPrefix -PathPrefix (Split-Path -Parent $ccache.FullName)
+    }
+
+    $xtensaGcc = Get-ChildItem -LiteralPath "C:\Espressif\tools\xtensa-esp-elf" -Recurse -Filter "xtensa-esp32-elf-gcc.exe" -ErrorAction SilentlyContinue |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if ($null -ne $xtensaGcc) {
+        Add-PathPrefix -PathPrefix (Split-Path -Parent $xtensaGcc.FullName)
+    }
+
+    $ninja = Get-ChildItem -LiteralPath "C:\Espressif\tools\ninja" -Recurse -Filter "ninja.exe" -ErrorAction SilentlyContinue |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if ($null -eq $ninja) {
+        throw "ninja.exe not found under C:\Espressif\tools\ninja"
+    }
+    Add-PathPrefix -PathPrefix (Split-Path -Parent $ninja.FullName)
+
+    $romElf = Get-ChildItem -LiteralPath "C:\Espressif\tools\esp-rom-elfs" -Recurse -Filter "esp32_rev0_rom.elf" -ErrorAction SilentlyContinue |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if ($null -ne $romElf) {
+        $env:ESP_ROM_ELF_DIR = Split-Path -Parent $romElf.FullName
+    }
+
+    return $ninja.FullName
+}
+
+function Invoke-IdfLocalBuildFallback {
+    param([Parameter(Mandatory)][string[]]$Arguments)
+
+    if ($Arguments.Count -ne 1 -or ($Arguments[0] -notin @("build", "size"))) {
+        return $false
+    }
+
+    $buildDir = Join-Path $FirmwareDir "build"
+    $buildNinja = Join-Path $buildDir "build.ninja"
+    if (-not (Test-Path -LiteralPath $buildNinja)) {
+        return $false
+    }
+
+    Write-Warning "Falling back to local Ninja for idf.py $($Arguments[0])."
+    $ninja = Initialize-LocalIdfToolEnvironment
+    $ninjaArgs = @("-C", $buildDir)
+    if ($Arguments[0] -eq "size") {
+        $ninjaArgs += "size"
+    }
+
+    Invoke-Native -FilePath $ninja -Arguments $ninjaArgs -Description "ninja $($Arguments[0])"
+    return $true
 }
 
 function Invoke-Native {

@@ -9,8 +9,12 @@
 #include "esp_partition.h"
 #include "esp_system.h"
 #include "i2c_scan.h"
+#include "oled_status.h"
+#include "packet_task.h"
 #include "protocol_v0.h"
 #include "sdkconfig.h"
+#include "sensors.h"
+#include "spp_transport.h"
 
 static const char *TAG = "v0_boot";
 
@@ -106,8 +110,11 @@ void app_main(void)
     ESP_LOGI(TAG, "minimum free heap=%" PRIu32 " bytes", esp_get_minimum_free_heap_size());
 
     if (protocol_v0_self_test()) {
-        ESP_LOGI(TAG, "protocol_v0 golden self-test=PASS packet_size=%u crc=CCITT-FALSE",
-                 PROTOCOL_V0_ECG_PACKET_SIZE);
+        ESP_LOGI(TAG,
+                 "protocol_v0 golden self-test=PASS ecg=%u imu=%u status=%u crc=CCITT-FALSE",
+                 PROTOCOL_V0_ECG_PACKET_SIZE,
+                 PROTOCOL_V0_IMU_PACKET_SIZE,
+                 PROTOCOL_V0_DEVICE_STATUS_PACKET_SIZE);
     } else {
         ESP_LOGE(TAG, "protocol_v0 golden self-test=FAIL");
     }
@@ -117,5 +124,25 @@ void app_main(void)
         ESP_LOGW(TAG, "I2C scan did not complete cleanly: %s", esp_err_to_name(scan_err));
     }
 
-    ESP_LOGI(TAG, "V0 foundation ready; ECG sampler and transports are not started in this build");
+    const esp_err_t spp_err = v0_spp_transport_start();
+    if (spp_err != ESP_OK) {
+        ESP_LOGW(TAG, "SPP transport not ready: %s", esp_err_to_name(spp_err));
+    }
+
+    const esp_err_t sensor_err = v0_sensors_start();
+    if (sensor_err != ESP_OK) {
+        ESP_LOGE(TAG, "sensor acquisition failed to start: %s", esp_err_to_name(sensor_err));
+    }
+
+    const esp_err_t packet_err = v0_packet_task_start();
+    if (packet_err != ESP_OK) {
+        ESP_LOGE(TAG, "packet task failed to start: %s", esp_err_to_name(packet_err));
+    }
+
+    const esp_err_t oled_err = v0_oled_status_start();
+    if (oled_err != ESP_OK) {
+        ESP_LOGW(TAG, "OLED status task failed to start: %s", esp_err_to_name(oled_err));
+    }
+
+    ESP_LOGI(TAG, "V0 runtime ready; waiting for Bluetooth Classic SPP client");
 }
