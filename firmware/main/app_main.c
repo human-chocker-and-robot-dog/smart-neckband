@@ -88,12 +88,13 @@ static void log_board_config(void)
              BOARD_AD8232_LO_MINUS_GPIO,
              BOARD_AD8232_LO_PLUS_GPIO);
     ESP_LOGI(TAG,
-             "I2C port=%d sda=GPIO%d scl=GPIO%d imu_rate=%uHz oled_max=%uHz",
+             "I2C port=%d sda=GPIO%d scl=GPIO%d imu_rate=%uHz oled_max=%uHz oled_page=%ums",
              BOARD_I2C_PORT,
              BOARD_I2C_SDA_GPIO,
              BOARD_I2C_SCL_GPIO,
              BOARD_IMU_SAMPLE_RATE_HZ,
-             BOARD_OLED_REFRESH_RATE_HZ);
+             BOARD_OLED_REFRESH_RATE_HZ,
+             BOARD_OLED_PAGE_INTERVAL_MS);
 }
 
 void app_main(void)

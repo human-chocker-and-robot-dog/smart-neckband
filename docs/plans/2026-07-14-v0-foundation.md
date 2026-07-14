@@ -129,6 +129,10 @@ This round does not flash, open monitor, or perform a body-connected test unless
 - The fix was to retry IMU initialization only once per second while offline, start OLED before sampling, lower I2C to 50 kHz for bench wiring, and use millisecond I2C transfer timeouts instead of FreeRTOS tick-converted values.
 - The IMU at address `0x68` reports `WHO_AM_I=0x72`, so firmware now treats `0x68`, `0x70`, `0x71`, and `0x72` as MPU6050-compatible IDs for the V0 raw six-axis path.
 - After the fix, hardware boot logs show OLED `0x3C` ready, SPP acceptor started as `SmartCollar-V0`, MPU-compatible `WHO_AM_I=0x72`, IMU configured for 50 Hz, packet task started, and no I2C timeout during the captured startup window.
+- OLED `ERR` originally included `disconnected_drop_count`, so it climbed by the normal packet production rate while Bluetooth was waiting for a PC connection. That count is now kept in `transport_drop_count`; OLED/protocol `error_count` only aggregates missed sampling, ADC/I2C errors, ring overflows, SPP queue overflow, and SPP write errors.
+- OLED page switching is intentionally slower than refresh: the status task refreshes once per second and changes pages every 3 seconds.
+- The first SPP implementation set the Classic BT device name and discoverable/connectable scan mode in `ESP_SPP_INIT_EVT` and ignored return values. It now follows the ESP-IDF v6.0.2 `bt_spp_acceptor` ordering more closely: start the SPP server first, set device name and scan mode after `ESP_SPP_START_EVT`, configure SSP/legacy PIN handling, and log BT address, pairing events, and GAP mode changes.
+- A later SPP scan debug showed `esp_bt_gap_set_scan_mode()` could return success while immediate GAP profile readback was still `conn_mode=0 disc_mode=0`. The firmware now configures Classic BT EIR data, disables BT modem sleep for V0 bench debugging, repeats scan-mode setup after EIR configuration, and runs a short discovery watchdog. Captured startup then read back `conn_mode=1 disc_mode=2`, i.e. connectable and general discoverable.
 
 ## Result
 

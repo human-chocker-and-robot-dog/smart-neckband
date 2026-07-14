@@ -202,7 +202,6 @@ static uint32_t status_error_count(const v0_sensor_status_t *sensor,
            v0_sample_ring_ecg_overflow_count() +
            v0_sample_ring_imu_overflow_count() +
            transport->queue_overflow_count +
-           transport->disconnected_drop_count +
            transport->write_error_count;
 }
 
@@ -244,6 +243,7 @@ static void oled_task(void *arg)
     (void)arg;
 
     bool second_page = false;
+    uint32_t page_elapsed_ms = 0U;
     for (;;) {
         if (!s_oled_online) {
             (void)oled_init_device();
@@ -253,9 +253,13 @@ static void oled_task(void *arg)
             if (oled_flush() != ESP_OK) {
                 ESP_LOGW(TAG, "OLED flush failed");
             }
-            second_page = !second_page;
         }
-        vTaskDelay(pdMS_TO_TICKS(1000U / BOARD_OLED_REFRESH_RATE_HZ));
+        vTaskDelay(pdMS_TO_TICKS(BOARD_OLED_REFRESH_INTERVAL_MS));
+        page_elapsed_ms += BOARD_OLED_REFRESH_INTERVAL_MS;
+        if (page_elapsed_ms >= BOARD_OLED_PAGE_INTERVAL_MS) {
+            second_page = !second_page;
+            page_elapsed_ms = 0U;
+        }
     }
 }
 

@@ -87,7 +87,6 @@ static uint32_t total_error_count(const v0_sensor_status_t *sensor,
            v0_sample_ring_ecg_overflow_count() +
            v0_sample_ring_imu_overflow_count() +
            transport->queue_overflow_count +
-           transport->disconnected_drop_count +
            transport->write_error_count;
 }
 
@@ -103,7 +102,6 @@ static uint16_t aggregate_status_flags(const v0_sensor_status_t *sensor,
         flags |= PROTOCOL_V0_FLAG_SAMPLE_QUEUE_OVERFLOW;
     }
     if (transport->queue_overflow_count > 0U ||
-        transport->disconnected_drop_count > 0U ||
         transport->write_error_count > 0U) {
         flags |= PROTOCOL_V0_FLAG_TRANSPORT_OVERFLOW;
     }
