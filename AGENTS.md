@@ -171,6 +171,36 @@ After firmware changes:
 .\tools\project.ps1 size
 ```
 
+### 12.1 ESP-IDF v6.0.2 PowerShell fast path
+
+For this Windows setup, the fastest reliable ESP-IDF command shape is to load the Espressif installer-generated PowerShell profile first, then call the repository wrapper:
+
+```powershell
+. 'C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1'
+.\tools\project.ps1 doctor
+.\tools\project.ps1 build
+.\tools\project.ps1 size
+.\tools\project.ps1 flash
+```
+
+Known local facts from the Hello World baseline exploration:
+
+- The currently used ESP32 bench port is `COM18`; keep it in ignored `config/local.ps1` as `$ProjectSerialPort = "COM18"`.
+- The installed IDF root is `C:\Espressif\v6.0.2\esp-idf`.
+- The installer profile uses `C:\Espressif\tools\python\v6.0.2\venv` and reports `ESP-IDF v6.0.2`.
+- Directly dot-sourcing `C:\Espressif\v6.0.2\esp-idf\export.ps1` can fail on this machine because it expects a missing user Python environment under `C:\Users\XWen1024\.espressif\python_env\...`.
+- Plain `eim run "idf.py --version"` may return an empty version and `Failed to setup logging`; prefer the installer profile above when the official PowerShell environment is needed.
+- In the managed Codex sandbox, `idf.py build` may fail with Windows pipe permission errors such as `PermissionError: [WinError 5]`. If that happens, do not retry the same shape; classify it as a sandbox/process issue and rerun the same IDF command outside the sandbox with approval.
+- A first full ESP-IDF build can take many minutes. Use a long timeout, or a background terminal/session if the current Codex surface supports it. Do not start a second build against the same `firmware/build` directory while `ninja`, `cmake`, `ccache`, or `xtensa-*gcc` processes are still running.
+- If a long build times out but compiler processes are still active, treat it as an observation timeout, not a build failure. Check `firmware/build`, `firmware/build/log`, running processes, and expected artifacts such as `firmware/build/hello_world.bin`, then wait for the existing build to finish.
+- After the first full build, rerun `.\tools\project.ps1 build` to obtain a clean, fast, explicit success exit code before reporting validation.
+
+### 12.2 Hardware smoke-test monitor
+
+`flash` verifies that bootloader, partition table, and app images were written and hash-checked, but it does not prove that application logs reached the serial console. When the user explicitly asks for runtime verification or explicitly permits monitor use, open a bounded monitor session on `COM18` long enough to capture boot output such as `Hello world!`, chip revision, flash size, and restart messages.
+
+Do not leave `idf.py monitor` running indefinitely. If a background terminal/session is available, use it for monitor output and stop it promptly after the expected evidence is captured. If only blocking shell execution is available, use a short explicit timeout and report whether the monitor output was captured, timed out, or was not run.
+
 After PC application changes:
 
 ```powershell

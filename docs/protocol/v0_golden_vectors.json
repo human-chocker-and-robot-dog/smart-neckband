@@ -1,0 +1,46 @@
+{
+    "protocol": "smart-neckband-v0",
+    "byte_order": "little-endian",
+    "crc": "CRC-16/CCITT-FALSE",
+    "vectors": [
+        {
+            "name": "ecg_20_samples_lo_minus_adc_clipping",
+            "packet_hex": "534e0101300004030201080706050403020100100000f401140500080108020803080408050806080708080809080a080b080c080d080e080f08100811081208130879a9",
+            "crc16_ccitt_false": "0xa979",
+            "fields": {
+                "magic": "0x4e53",
+                "protocol_version": 1,
+                "packet_type": 1,
+                "payload_length": 48,
+                "packet_sequence": "0x01020304",
+                "timestamp_us": "0x0102030405060708",
+                "first_sample_index": 4096,
+                "sample_rate_hz": 500,
+                "sample_count": 20,
+                "flags": "0x05",
+                "samples": [
+                    2048,
+                    2049,
+                    2050,
+                    2051,
+                    2052,
+                    2053,
+                    2054,
+                    2055,
+                    2056,
+                    2057,
+                    2058,
+                    2059,
+                    2060,
+                    2061,
+                    2062,
+                    2063,
+                    2064,
+                    2065,
+                    2066,
+                    2067
+                ]
+            }
+        }
+    ]
+}

@@ -59,6 +59,30 @@ function Invoke-Idf {
     }
 }
 
+function Invoke-Native {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [Parameter(Mandatory)][string]$Description
+    )
+
+    & $FilePath @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Description failed with exit code $LASTEXITCODE"
+    }
+}
+
+function Test-PythonModule {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [string[]]$BaseArguments = @(),
+        [Parameter(Mandatory)][string]$ModuleName
+    )
+
+    & $FilePath @BaseArguments -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('$ModuleName') else 1)" *> $null
+    return $LASTEXITCODE -eq 0
+}
+
 switch ($Action) {
     "doctor" {
         & (Join-Path $PSScriptRoot "doctor.ps1")
@@ -99,28 +123,52 @@ switch ($Action) {
         }
         Push-Location $PcDir
         try {
-            if (-not (Test-Path -LiteralPath ".venv")) {
-                & py -3.12 -m venv .venv
+            $venvPython = Join-Path $PcDir ".venv\Scripts\python.exe"
+            $venvNeedsRepair = -not (Test-Path -LiteralPath $venvPython)
+            if (-not $venvNeedsRepair) {
+                $venvNeedsRepair = -not (Test-PythonModule -FilePath $venvPython -ModuleName "pip")
             }
-            & .\.venv\Scripts\python.exe -m pip install --upgrade pip
-            & .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+
+            if ($venvNeedsRepair) {
+                $venvArgs = @("-3.12", "-m", "venv")
+                if (Test-Path -LiteralPath ".venv") {
+                    $venvArgs += "--clear"
+                }
+                $venvArgs += ".venv"
+                Invoke-Native -FilePath "py" -Arguments $venvArgs -Description "Python virtual environment creation"
+            }
+
+            Invoke-Native -FilePath $venvPython -Arguments @("-m", "pip", "install", "pytest>=8") -Description "pytest installation"
         }
         finally {
             Pop-Location
         }
     }
     "pc-test" {
-        if (-not (Test-Path -LiteralPath (Join-Path $PcDir ".venv\Scripts\python.exe"))) {
-            throw "PC virtual environment missing. Run .\tools\project.ps1 pc-setup first."
+        $venvPython = Join-Path $PcDir ".venv\Scripts\python.exe"
+        $pythonPath = "py"
+        $pythonArgs = @("-3.12")
+
+        if ((Test-Path -LiteralPath $venvPython) -and
+            (Test-PythonModule -FilePath $venvPython -ModuleName "pytest")) {
+            $pythonPath = $venvPython
+            $pythonArgs = @()
         }
+
+        $srcPath = Join-Path $PcDir "src"
+        $oldPythonPath = $env:PYTHONPATH
+        if ([string]::IsNullOrWhiteSpace($oldPythonPath)) {
+            $env:PYTHONPATH = $srcPath
+        } else {
+            $env:PYTHONPATH = "$srcPath;$oldPythonPath"
+        }
+
         Push-Location $PcDir
         try {
-            & .\.venv\Scripts\python.exe -m pytest
-            if ($LASTEXITCODE -ne 0) {
-                throw "pytest failed with exit code $LASTEXITCODE"
-            }
+            Invoke-Native -FilePath $pythonPath -Arguments ($pythonArgs + @("-m", "pytest")) -Description "pytest"
         }
         finally {
+            $env:PYTHONPATH = $oldPythonPath
             Pop-Location
         }
     }
