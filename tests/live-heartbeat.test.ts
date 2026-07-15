@@ -11,13 +11,10 @@ import { reconnectDelayMs, shouldAcceptLiveBatch, shouldLoadPublicLiveSession } 
 import {
   appendEcgBatch,
   beatIntervalMsFromHr,
-  desaturateHexColor,
   pulseFromBeatAge,
-  scrollingSampleOffset,
   smoothEcgBuffer,
   solidBackgroundChoice,
-  trimEcgBuffer,
-  visibleEcgWindowSamples
+  trimEcgBuffer
 } from "../src/live-rendering.js";
 
 function testBatch(seq: number, overrides: Partial<EcgBatch> = {}): EcgBatch {
@@ -306,20 +303,4 @@ describe("live reference-shell rendering helpers", () => {
     expect(beatIntervalMsFromHr(300)).toBeNull();
   });
 
-  it("converts elapsed render time into bounded ECG scroll samples", () => {
-    expect(scrollingSampleOffset(0, 500, 1000)).toBe(0);
-    expect(scrollingSampleOffset(200, 500, 1000)).toBe(100);
-    expect(scrollingSampleOffset(5000, 500, 1000)).toBe(1000);
-  });
-
-  it("expands short live ECG buffers to the visible window until the 10 second window is full", () => {
-    expect(visibleEcgWindowSamples(250, 0, 5000)).toBe(250);
-    expect(visibleEcgWindowSamples(250, 100, 5000)).toBe(350);
-    expect(visibleEcgWindowSamples(6000, 0, 5000)).toBe(5000);
-  });
-
-  it("desaturates the newest ECG tail without changing invalid CSS colors", () => {
-    expect(desaturateHexColor("#ff0033", 0.32)).toBe("rgb(121, 39, 56)");
-    expect(desaturateHexColor("var(--accent)", 0.32)).toBe("var(--accent)");
-  });
 });

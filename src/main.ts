@@ -12,12 +12,9 @@ import {
   EcgPointBuffer,
   appendEcgBatch,
   beatIntervalMsFromHr,
-  desaturateHexColor,
   pulseFromBeatAge,
-  scrollingSampleOffset,
   smoothEcgBuffer,
-  solidBackgroundChoice,
-  visibleEcgWindowSamples
+  solidBackgroundChoice
 } from "./live-rendering.js";
 import "./styles.css";
 
@@ -106,8 +103,6 @@ let reconnectTimer: number | null = null;
 let closed = false;
 let attempt = 0;
 let beatAnimationTimer: number | null = null;
-let latestEcgSamplePerfMs = -Infinity;
-let latestEcgBatchSampleCount = ECG_SAMPLE_RATE_HZ / 2;
 let nextEstimatedBeatAtMs = Number.POSITIVE_INFINITY;
 let audioContext: AudioContext | null = null;
 let audioGain: GainNode | null = null;
@@ -803,7 +798,7 @@ function resizeCanvas(canvas: HTMLCanvasElement): CanvasRenderingContext2D | nul
   return context;
 }
 
-function drawEcg(buffer = displayedWaveform, connected = false): void {
+function drawEcg(buffer = displayedWaveform): void {
   const canvas = byId<HTMLCanvasElement>("ecg-canvas");
   if (!canvas) return;
   const context = resizeCanvas(canvas);
@@ -822,43 +817,26 @@ function drawEcg(buffer = displayedWaveform, connected = false): void {
   const center = height * settings.ecgLineHeight;
   const amplitude = height * 0.38;
   const yFor = (value: number) => center - ((value - min) / span - 0.5) * amplitude * 2;
-  const elapsedMs = connected ? performance.now() - latestEcgSamplePerfMs : 0;
-  const scrollOffset = scrollingSampleOffset(elapsedMs, ECG_SAMPLE_RATE_HZ, latestEcgBatchSampleCount);
-  const visibleWindow = visibleEcgWindowSamples(buffer.samples.length, scrollOffset, MAX_SAMPLES);
-  const sampleSpacing = width / visibleWindow;
-  const xFor = (index: number) => width - (buffer.samples.length - 1 - index + scrollOffset) * sampleSpacing;
-  const freshTailWidth = Math.max(0.04, Math.min(0.16, latestEcgBatchSampleCount / visibleWindow));
-  const freshTailStart = 1 - freshTailWidth;
-  const strokeGradient = context.createLinearGradient(0, 0, width, 0);
-  strokeGradient.addColorStop(0, settings.ecgLineColor);
-  strokeGradient.addColorStop(freshTailStart, settings.ecgLineColor);
-  strokeGradient.addColorStop(1, desaturateHexColor(settings.ecgLineColor, 0.32));
+  const xFor = (index: number) => (buffer.samples.length <= 1 ? width : (index / (buffer.samples.length - 1)) * width);
 
   context.save();
   context.lineWidth = settings.ecgLineWidth;
   context.lineJoin = "round";
   context.lineCap = "round";
-  context.strokeStyle = strokeGradient;
+  context.strokeStyle = settings.ecgLineColor;
   context.shadowColor = settings.ecgLineColor;
   context.shadowBlur = 12;
   context.beginPath();
-  let started = false;
   buffer.samples.forEach((sample, index) => {
     const x = xFor(index);
-    if (x < -sampleSpacing || x > width + sampleSpacing) {
-      return;
-    }
     const y = yFor(sample);
-    if (!started) {
+    if (index === 0) {
       context.moveTo(x, y);
-      started = true;
     } else {
       context.lineTo(x, y);
     }
   });
-  if (started) {
-    context.stroke();
-  }
+  context.stroke();
   context.restore();
 }
 
@@ -868,12 +846,10 @@ function buildSnapshot(snapshot: Snapshot): void {
     waveform = appendEcgBatch(waveform, batch.samples, batch.r_peaks, MAX_SAMPLES);
   }
   displayedWaveform = { samples: [...waveform.samples], rPeaks: [...waveform.rPeaks] };
-  latestEcgSamplePerfMs = performance.now();
   nextEstimatedBeatAtMs = Number.POSITIVE_INFINITY;
   status = snapshot.status;
   const lastBatch = snapshot.batches.at(-1);
   if (lastBatch) {
-    latestEcgBatchSampleCount = Math.max(1, lastBatch.samples.length);
     dedupe.lastSeq = lastBatch.seq;
     dedupe.lastTimestampMs = lastBatch.timestamp_ms;
     lastSeq = lastBatch.seq;
@@ -885,8 +861,6 @@ function applyLiveBatch(batch: LiveEcgBatch): void {
   const nowMs = performance.now();
   lastSeq = batch.seq;
   waveform = appendEcgBatch(waveform, batch.samples, batch.r_peaks, MAX_SAMPLES);
-  latestEcgSamplePerfMs = nowMs;
-  latestEcgBatchSampleCount = Math.max(1, batch.samples.length);
   if (batch.hr_bpm != null || batch.sqi != null || batch.lead_off) {
     status = {
       type: "status",
@@ -1052,7 +1026,7 @@ function animate(time: number): void {
   three?.updateThree(time, pulse, settings.effectIntensity, settings.effectSpeed);
   three?.renderThree();
   displayedWaveform = smoothEcgBuffer(displayedWaveform, waveform, 0.22);
-  drawEcg(displayedWaveform, connected);
+  drawEcg(displayedWaveform);
   window.requestAnimationFrame(animate);
 }
 
