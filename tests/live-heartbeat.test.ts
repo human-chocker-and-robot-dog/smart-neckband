@@ -11,6 +11,7 @@ import { reconnectDelayMs, shouldAcceptLiveBatch, shouldLoadPublicLiveSession } 
 import {
   appendEcgBatch,
   beatIntervalMsFromHr,
+  desaturateHexColor,
   pulseFromBeatAge,
   scrollingSampleOffset,
   smoothEcgBuffer,
@@ -315,5 +316,10 @@ describe("live reference-shell rendering helpers", () => {
     expect(visibleEcgWindowSamples(250, 0, 5000)).toBe(250);
     expect(visibleEcgWindowSamples(250, 100, 5000)).toBe(350);
     expect(visibleEcgWindowSamples(6000, 0, 5000)).toBe(5000);
+  });
+
+  it("desaturates the newest ECG tail without changing invalid CSS colors", () => {
+    expect(desaturateHexColor("#ff0033", 0.32)).toBe("rgb(121, 39, 56)");
+    expect(desaturateHexColor("var(--accent)", 0.32)).toBe("var(--accent)");
   });
 });

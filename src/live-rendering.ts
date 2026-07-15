@@ -82,6 +82,22 @@ export function visibleEcgWindowSamples(sampleCount: number, scrollOffsetSamples
   return Math.max(1, Math.min(maxSamples, sampleCount + Math.max(0, scrollOffsetSamples)));
 }
 
+export function desaturateHexColor(color: string, saturationRatio: number): string {
+  const match = /^#([0-9a-f]{6})$/i.exec(color);
+  if (!match) {
+    return color;
+  }
+
+  const value = Number.parseInt(match[1], 16);
+  const red = (value >> 16) & 0xff;
+  const green = (value >> 8) & 0xff;
+  const blue = value & 0xff;
+  const gray = red * 0.2126 + green * 0.7152 + blue * 0.0722;
+  const ratio = Math.max(0, Math.min(1, saturationRatio));
+  const mix = (channel: number) => Math.round(gray + (channel - gray) * ratio);
+  return `rgb(${mix(red)}, ${mix(green)}, ${mix(blue)})`;
+}
+
 export function pulseFromBeatAge(ageMs: number, connected: boolean): number {
   if (!connected || ageMs < 0 || ageMs > 620) {
     return 0;

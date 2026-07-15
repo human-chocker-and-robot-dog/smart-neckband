@@ -12,6 +12,7 @@ import {
   EcgPointBuffer,
   appendEcgBatch,
   beatIntervalMsFromHr,
+  desaturateHexColor,
   pulseFromBeatAge,
   scrollingSampleOffset,
   smoothEcgBuffer,
@@ -106,6 +107,7 @@ let closed = false;
 let attempt = 0;
 let beatAnimationTimer: number | null = null;
 let latestEcgSamplePerfMs = -Infinity;
+let latestEcgBatchSampleCount = ECG_SAMPLE_RATE_HZ / 2;
 let nextEstimatedBeatAtMs = Number.POSITIVE_INFINITY;
 let audioContext: AudioContext | null = null;
 let audioGain: GainNode | null = null;
@@ -821,16 +823,22 @@ function drawEcg(buffer = displayedWaveform, connected = false): void {
   const amplitude = height * 0.38;
   const yFor = (value: number) => center - ((value - min) / span - 0.5) * amplitude * 2;
   const elapsedMs = connected ? performance.now() - latestEcgSamplePerfMs : 0;
-  const scrollOffset = scrollingSampleOffset(elapsedMs, ECG_SAMPLE_RATE_HZ, ECG_SAMPLE_RATE_HZ * 2);
+  const scrollOffset = scrollingSampleOffset(elapsedMs, ECG_SAMPLE_RATE_HZ, latestEcgBatchSampleCount);
   const visibleWindow = visibleEcgWindowSamples(buffer.samples.length, scrollOffset, MAX_SAMPLES);
   const sampleSpacing = width / visibleWindow;
   const xFor = (index: number) => width - (buffer.samples.length - 1 - index + scrollOffset) * sampleSpacing;
+  const freshTailWidth = Math.max(0.04, Math.min(0.16, latestEcgBatchSampleCount / visibleWindow));
+  const freshTailStart = 1 - freshTailWidth;
+  const strokeGradient = context.createLinearGradient(0, 0, width, 0);
+  strokeGradient.addColorStop(0, settings.ecgLineColor);
+  strokeGradient.addColorStop(freshTailStart, settings.ecgLineColor);
+  strokeGradient.addColorStop(1, desaturateHexColor(settings.ecgLineColor, 0.32));
 
   context.save();
   context.lineWidth = settings.ecgLineWidth;
   context.lineJoin = "round";
   context.lineCap = "round";
-  context.strokeStyle = settings.ecgLineColor;
+  context.strokeStyle = strokeGradient;
   context.shadowColor = settings.ecgLineColor;
   context.shadowBlur = 12;
   context.beginPath();
@@ -865,6 +873,7 @@ function buildSnapshot(snapshot: Snapshot): void {
   status = snapshot.status;
   const lastBatch = snapshot.batches.at(-1);
   if (lastBatch) {
+    latestEcgBatchSampleCount = Math.max(1, lastBatch.samples.length);
     dedupe.lastSeq = lastBatch.seq;
     dedupe.lastTimestampMs = lastBatch.timestamp_ms;
     lastSeq = lastBatch.seq;
@@ -877,6 +886,7 @@ function applyLiveBatch(batch: LiveEcgBatch): void {
   lastSeq = batch.seq;
   waveform = appendEcgBatch(waveform, batch.samples, batch.r_peaks, MAX_SAMPLES);
   latestEcgSamplePerfMs = nowMs;
+  latestEcgBatchSampleCount = Math.max(1, batch.samples.length);
   if (batch.hr_bpm != null || batch.sqi != null || batch.lead_off) {
     status = {
       type: "status",
