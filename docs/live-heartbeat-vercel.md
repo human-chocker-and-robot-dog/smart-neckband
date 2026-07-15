@@ -146,7 +146,11 @@ py -3.12 -m smart_neckband.live_uploader `
   --ingest-token $env:LIVE_INGEST_TOKEN
 ```
 
-The uploader reads the Bluetooth SPP COM port, keeps raw binary logging optional, runs NeuroKit2 on the PC, uploads only incremental clean ECG samples, maps R peaks into each uploaded batch, and sends status with lead-off, packet loss, and CRC counters.
+The uploader prints one health line per second with serial packet count, ECG buffer size, acknowledged upload batches/samples, HR, SQI, lead-off, packet loss, CRC errors, analysis duration, and analysis state. Tokens and ECG sample values are never logged. Use `--duration 20` for a bounded diagnostic run and `--log-level DEBUG` for connection troubleshooting.
+
+The uploader reads the Bluetooth SPP COM port, keeps raw binary logging optional, runs NeuroKit2 on a separate PC worker thread, uploads only incremental clean ECG samples, maps R peaks into each uploaded batch, and sends status with lead-off, packet loss, and CRC counters. Ingest authentication returns Redis's `next_seq`, and every upload must receive an acknowledgement; restarts therefore continue the existing session sequence instead of silently replaying sequence `0`.
+
+The first Python process can spend about seven seconds importing NeuroKit2 and NumPy. Serial reading, status updates, and health logs continue during that warmup; subsequent 10-second ECG analyses take tens of milliseconds on the confirmed Windows machine.
 
 The lower-level protocol example is:
 

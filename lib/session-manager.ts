@@ -186,6 +186,11 @@ export class SessionManager {
     return true;
   }
 
+  async nextSequence(sessionId: string): Promise<number> {
+    const previousRaw = await this.redis.get(this.lastSeqKey(sessionId));
+    return previousRaw === null ? 0 : Number(previousRaw) + 1;
+  }
+
   async updateFromEcgBatch(sessionId: string, batch: EcgBatch): Promise<{ live: LiveEcgBatch; status: PublicStatus; signalLost: boolean }> {
     const live: LiveEcgBatch = {
       ...batch,

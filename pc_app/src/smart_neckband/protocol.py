@@ -497,5 +497,7 @@ class PacketParser:
             expected = (last + 1) & 0xFFFFFFFF
             if sequence != expected:
                 self.stats.sequence_gap_count += 1
-                self.stats.packets_lost += (sequence - expected) & 0xFFFFFFFF
+                forward_distance = (sequence - expected) & 0xFFFFFFFF
+                if forward_distance < 0x80000000:
+                    self.stats.packets_lost += forward_distance
         self.stats.last_sequence = sequence

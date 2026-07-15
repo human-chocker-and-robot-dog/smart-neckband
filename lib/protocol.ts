@@ -26,6 +26,20 @@ export const ViewerAuthSchema = z.object({
 
 export const AuthMessageSchema = z.discriminatedUnion("role", [IngestAuthSchema, ViewerAuthSchema]);
 
+export const AuthOkSchema = z.object({
+  type: z.literal("auth_ok"),
+  role: z.enum(["ingest", "viewer"]),
+  session_id: SessionIdSchema,
+  next_seq: z.number().int().nonnegative().optional()
+});
+
+export const IngestAckSchema = z.object({
+  type: z.literal("ingest_ack"),
+  message_type: z.enum(["ecg_batch", "status"]),
+  seq: z.number().int().nonnegative().nullable(),
+  next_seq: z.number().int().nonnegative()
+});
+
 export const EcgBatchSchema = z.object({
   type: z.literal("ecg_batch"),
   seq: z.number().int().nonnegative(),
@@ -84,6 +98,8 @@ export const SnapshotSchema = z.object({
 });
 
 export const ServerEventSchema = z.discriminatedUnion("type", [
+  AuthOkSchema,
+  IngestAckSchema,
   LiveEcgBatchSchema,
   PublicStatusSchema,
   SnapshotSchema,
@@ -108,6 +124,8 @@ export const ServerEventSchema = z.discriminatedUnion("type", [
 export type IngestAuth = z.infer<typeof IngestAuthSchema>;
 export type ViewerAuth = z.infer<typeof ViewerAuthSchema>;
 export type AuthMessage = z.infer<typeof AuthMessageSchema>;
+export type AuthOk = z.infer<typeof AuthOkSchema>;
+export type IngestAck = z.infer<typeof IngestAckSchema>;
 export type EcgBatch = z.infer<typeof EcgBatchSchema>;
 export type StatusUpdate = z.infer<typeof StatusUpdateSchema>;
 export type IngestDataMessage = z.infer<typeof IngestDataMessageSchema>;

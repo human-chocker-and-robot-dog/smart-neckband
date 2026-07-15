@@ -54,6 +54,7 @@ Excluded:
 7. Run `npm test`, `npm run lint`, `npm run typecheck`, `npm run build`, and `git diff --check`.
 8. Document deployment, Redis Marketplace configuration, environment variables, Windows uploader example, viewer URL/QR flow, and Vercel Beta risks.
 9. Add `/live` fixed public viewer discovery and a PC live uploader command path.
+10. Make ingest restart-safe and observable with a Redis-derived next sequence, per-message acknowledgements, and bounded uploader diagnostics.
 
 ## Validation
 
@@ -88,6 +89,9 @@ git diff --check
 - [x] Adapt the viewer into the Live Beta front end with solid background defaults, Canvas particles, real ECG display, and simplified settings.
 - [x] Add fixed `/live` public viewer discovery and static live session credential support.
 - [x] Add PC `smart_neckband.live_uploader` command for uploading PC-cleaned ECG to the live room.
+- [x] Diagnose the silent uploader failure after process restart.
+- [x] Add restart-safe ingest sequencing, acknowledgements, and uploader runtime logs.
+- [x] Run a bounded COM19-to-production live smoke test and verify the viewer receives new samples.
 
 ## Discoveries
 
@@ -143,3 +147,14 @@ Follow-up Live Beta front-end adaptation:
 - Production deployment required removing invalid `functions.runtime = "nodejs"` from `vercel.json`; Vercel auto-detects TypeScript files in `api/` as Node.js Functions.
 - Production Node ESM required `.js` extensions on relative TypeScript imports after Vercel compilation.
 - The fixed public page uses `/api/live-session` so the configured custom-domain `/live` URL stays stable without query tokens. WebSocket function recycling still happens, but the browser reconnects with the same live room credentials.
+- A production diagnostic found that the PC uploader restarted its ECG sequence at `0` while Redis retained sequence `2223`. The server correctly returned `invalid_seq`, but the uploader never read post-auth WebSocket messages, so it continued silently while every ECG batch was rejected. The viewer, Redis snapshot, credentials, and both WebSocket auth roles were independently verified.
+- The same diagnostic exposed `packet_loss=4294967295`: one stale/backward serial sequence was interpreted as a full unsigned forward gap. Backward/duplicate packets must increment the gap counter without adding billions to packet loss.
+- A first 15-second COM19 smoke test resumed at Redis sequence `2224` and delivered acknowledged batches, but exposed a 7-second synchronous NeuroKit2 startup pause in the uploader send loop. Moving analysis to a dedicated worker kept serial/status/WebSocket work responsive; after warmup, measured analysis time was 31-63 ms.
+- A final 20-second production smoke test resumed at sequence `2295`, parsed 967 device packets, uploaded 23 acknowledged batches / 9100 ECG points, and reported zero CRC errors and zero packet loss. The refreshed `https://heart.xwenlabs.com/live` viewer showed `实时`, HR 76, Seq 2311, and a current ECG trace while the uploader was active.
+
+Follow-up ingest reliability result:
+
+- Fixed silent `invalid_seq` rejection after uploader process restarts by returning Redis `next_seq` in ingest auth and acknowledging every ECG/status message.
+- Added safe uploader health logging and bounded `--duration` diagnostics without logging tokens or ECG sample values.
+- Moved NeuroKit2 work off the upload loop and corrected stale/backward serial packet loss accounting.
+- Verified the full Classic SPP COM19 -> PC clean ECG -> Vercel WebSocket -> Redis -> public viewer path on production with real runtime logs. This was an electronics transport test; it does not claim body-connected safety or medical validation.

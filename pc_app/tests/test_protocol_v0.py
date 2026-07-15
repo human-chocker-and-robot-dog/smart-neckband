@@ -172,6 +172,26 @@ def test_stream_parser_resyncs_and_tracks_sequence_gap() -> None:
     assert parser.stats.packets_lost == 1
 
 
+def test_stream_parser_does_not_count_stale_packet_as_billions_lost() -> None:
+    parser = PacketParser()
+    current = encode_ecg_packet(
+        packet_sequence=100,
+        timestamp_us=1_000,
+        first_sample_index=0,
+        samples=(2000,) * 20,
+    )
+    stale = encode_ecg_packet(
+        packet_sequence=50,
+        timestamp_us=2_000,
+        first_sample_index=20,
+        samples=(2001,) * 20,
+    )
+
+    assert len(parser.feed(current + stale)) == 2
+    assert parser.stats.sequence_gap_count == 1
+    assert parser.stats.packets_lost == 0
+
+
 def test_stream_parser_rejects_crc_error() -> None:
     packet = bytearray(bytes.fromhex(load_vectors()["ecg_batch_20_samples_lo_minus_adc_clipping"]["packet_hex"]))
     packet[-1] ^= 0xFF

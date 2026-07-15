@@ -105,7 +105,9 @@ describe("session manager", () => {
     const manager = new SessionManager({ redis });
     const created = await manager.createSession("127.0.0.1");
 
+    await expect(manager.nextSequence(created.session_id)).resolves.toBe(0);
     await expect(manager.validateSequence(created.session_id, 1)).resolves.toBe(true);
+    await expect(manager.nextSequence(created.session_id)).resolves.toBe(2);
     await manager.updateFromEcgBatch(created.session_id, testBatch(1));
     await expect(manager.validateSequence(created.session_id, 1)).resolves.toBe(false);
     const snapshot = await manager.getSnapshot(created.session_id);
@@ -214,13 +216,20 @@ describe("websocket flow", () => {
         token: created.ingest_token
       })
     );
-    await waitForMessage<{ type: string }>(ingest, (message) => message.type === "auth_ok");
-    ingest.send(JSON.stringify(testBatch(1)));
-    const live = await waitForMessage<ServerEvent>(
+    const auth = await waitForMessage<{ type: string; next_seq?: number }>(ingest, (message) => message.type === "auth_ok");
+    expect(auth.next_seq).toBe(0);
+    const ackPromise = waitForMessage<{ type: string; message_type?: string; seq?: number; next_seq?: number }>(
+      ingest,
+      (message) => message.type === "ingest_ack"
+    );
+    const livePromise = waitForMessage<ServerEvent>(
       viewer,
       (message) => message.type === "ecg_batch" && message.seq === 1
     );
+    ingest.send(JSON.stringify(testBatch(1)));
+    const [ack, live] = await Promise.all([ackPromise, livePromise]);
 
+    expect(ack).toMatchObject({ type: "ingest_ack", message_type: "ecg_batch", seq: 1, next_seq: 2 });
     expect(live.type).toBe("ecg_batch");
     viewer.close();
     ingest.close();

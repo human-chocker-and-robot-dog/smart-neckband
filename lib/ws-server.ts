@@ -76,6 +76,12 @@ function sendError(socket: WebSocket, code: string, message: string): void {
   }
 }
 
+function sendIngestAck(socket: WebSocket, messageType: "ecg_batch" | "status", seq: number | undefined, nextSeq: number): void {
+  if (socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: "ingest_ack", message_type: messageType, seq: seq ?? null, next_seq: nextSeq }));
+  }
+}
+
 function payloadLength(data: WebSocket.RawData): number {
   if (typeof data === "string") {
     return Buffer.byteLength(data);
@@ -131,6 +137,7 @@ async function handleConnection(
   let releaseLock: (() => Promise<void>) | null = null;
   let cleanupSubscriber: (() => Promise<void>) | null = null;
   let statusInterval: NodeJS.Timeout | null = null;
+  let nextIngestSequence: number | null = null;
 
   const authTimer = setTimeout(() => {
     if (!authenticated) {
@@ -182,6 +189,7 @@ async function handleConnection(
           const ingestSessionId = auth.data.session_id;
           sessionId = ingestSessionId;
           role = "ingest";
+          nextIngestSequence = await manager.nextSequence(ingestSessionId);
           releaseLock = () => manager.releaseIngestLock(ingestSessionId, connectionOwner);
         } else {
           const viewerSessionId = auth.data.session_id ?? querySessionId;
@@ -196,7 +204,14 @@ async function handleConnection(
         }
         authenticated = true;
         clearTimeout(authTimer);
-        socket.send(JSON.stringify({ type: "auth_ok", role, session_id: sessionId }));
+        socket.send(
+          JSON.stringify({
+            type: "auth_ok",
+            role,
+            session_id: sessionId,
+            ...(role === "ingest" ? { next_seq: nextIngestSequence ?? 0 } : {})
+          })
+        );
         return;
       }
 
@@ -219,13 +234,23 @@ async function handleConnection(
       await manager.refreshIngestLock(sessionId, connectionOwner);
       if (message.data.type === "ecg_batch") {
         if (!(await manager.validateSequence(sessionId, message.data.seq))) {
+          nextIngestSequence = await manager.nextSequence(sessionId);
+          console.warn("[live-ws] rejected ECG sequence", {
+            session_id: sessionId,
+            received_seq: message.data.seq,
+            next_seq: nextIngestSequence
+          });
           sendError(socket, "invalid_seq", "sequence must be strictly increasing");
           return;
         }
         await manager.updateFromEcgBatch(sessionId, message.data);
+        nextIngestSequence = message.data.seq + 1;
+        sendIngestAck(socket, "ecg_batch", message.data.seq, nextIngestSequence);
       } else {
         const status = await manager.updateStatus(sessionId, message.data);
         await manager.redis.publish(manager.channel(sessionId), JSON.stringify(status));
+        nextIngestSequence ??= await manager.nextSequence(sessionId);
+        sendIngestAck(socket, "status", message.data.seq, nextIngestSequence);
       }
     })();
   });

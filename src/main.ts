@@ -788,6 +788,11 @@ function connect(): void {
       buildSnapshot(message);
       connection = "live";
       attempt = 0;
+    } else if (message.type === "auth_ok") {
+      connection = "live";
+      attempt = 0;
+    } else if (message.type === "ingest_ack") {
+      // Viewer sockets never receive ingest acknowledgements.
     } else if (message.type === "ecg_batch") {
       applyLiveBatch(message);
     } else if (message.type === "status") {
