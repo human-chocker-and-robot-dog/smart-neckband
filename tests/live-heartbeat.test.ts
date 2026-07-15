@@ -11,6 +11,7 @@ import { reconnectDelayMs, shouldAcceptLiveBatch, shouldLoadPublicLiveSession } 
 import {
   appendEcgBatch,
   pulseFromBeatAge,
+  smoothEcgBuffer,
   solidBackgroundChoice,
   trimEcgBuffer
 } from "../src/live-rendering.js";
@@ -279,6 +280,13 @@ describe("live reference-shell rendering helpers", () => {
     expect(buffer.samples).toEqual([3, 4, 5, 6]);
     expect(buffer.rPeaks).toEqual([2]);
     expect(trimEcgBuffer({ samples: [1, 2, 3], rPeaks: [0, 2] }, 2)).toEqual({ samples: [2, 3], rPeaks: [1] });
+  });
+
+  it("smooths visible ECG samples while preserving target R peaks", () => {
+    const current = { samples: [0, 0, 0], rPeaks: [1] };
+    const target = { samples: [0, 10, 20, 30], rPeaks: [3] };
+
+    expect(smoothEcgBuffer(current, target, 0.5)).toEqual({ samples: [0, 5, 10, 15], rPeaks: [3] });
   });
 
   it("only produces visual pulse while connected and close to a real beat", () => {

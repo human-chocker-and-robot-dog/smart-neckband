@@ -88,6 +88,7 @@ git diff --check
 - [x] Adapt the viewer into the Live Beta front end with solid background defaults, Canvas particles, real ECG display, and simplified settings.
 - [x] Add fixed `/live` public viewer discovery and static live session credential support.
 - [x] Add PC `smart_neckband.live_uploader` command for uploading PC-cleaned ECG to the live room.
+- [x] Smooth the reference-shell ECG display, remove visual R-peak dots, restore heartbeat audio via Web Audio, and add local clean ECG JSONL logging.
 
 ## Discoveries
 
@@ -143,3 +144,4 @@ Follow-up Live Beta front-end adaptation:
 - Production deployment required removing invalid `functions.runtime = "nodejs"` from `vercel.json`; Vercel auto-detects TypeScript files in `api/` as Node.js Functions.
 - Production Node ESM required `.js` extensions on relative TypeScript imports after Vercel compilation.
 - The fixed public page uses `/api/live-session` so the configured custom-domain `/live` URL stays stable without query tokens. WebSocket function recycling still happens, but the browser reconnects with the same live room credentials.
+- The official reference site uses a `modules/audio.js` Web Audio oscillator for heartbeat sounds rather than static audio files. The Live Beta adapter keeps that behavior in TypeScript and triggers it only from live R-peak batches.

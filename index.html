@@ -129,7 +129,7 @@
                 <button class="settings-nav-item" data-section="ecg">心电图设置</button>
                 <button class="settings-nav-item" data-section="audio">音频设置</button>
                 <button class="settings-nav-item" data-section="system">系统设置</button>
-                <button class="settings-nav-item" data-section="about">关于与适配</button>
+                <button class="settings-nav-item" data-section="about">关于</button>
             </div>
             <!-- 设置内容 -->
             <div class="settings-content">
@@ -189,7 +189,7 @@
                     <h4>音频设置</h4>
                     <div class="settings-group">
                         <label class="toggle-switch">
-                            <input type="checkbox" id="audioToggleSetting" checked>
+                            <input type="checkbox" id="audioToggleSetting">
                             <span class="toggle-slider"></span>
                             <span class="toggle-label">启用音效</span>
                         </label>
@@ -219,114 +219,27 @@
                             <span id="audioVolumeValue" class="range-value">70%</span>
                         </div>
                     </div>
-                    <div class="settings-group">
-                        <label class="toggle-switch">
-                            <input type="checkbox" id="alarmToggle" checked>
-                            <span class="toggle-slider"></span>
-                            <span class="toggle-label">启用心率警报</span>
-                        </label>
-                    </div>
-                    <div class="settings-group">
-                        <label class="settings-label">心率警报阈值</label>
-                        <div class="threshold-controls">
-                            <div class="threshold-item">
-                                <label class="sub-label">最低</label>
-                                <input type="number" id="alarmMinBpm" min="30" max="200" value="50" class="number-input">
-                                <span>次/分</span>
-                            </div>
-                            <div class="threshold-item">
-                                <label class="sub-label">最高</label>
-                                <input type="number" id="alarmMaxBpm" min="30" max="200" value="180" class="number-input">
-                                <span>次/分</span>
-                            </div>
-                        </div>
-                    </div>
                 </div>
 
                 <!-- 系统设置 -->
                 <div class="settings-section" id="system-section" style="display: none;">
                     <h4>系统设置</h4>
                     <div class="settings-group">
-                        <label class="settings-label">日志级别</label>
-                        <select id="logLevelSelect" class="settings-select">
-                            <option value="none">关闭</option>
-                            <option value="basic" selected>基本</option>
-                            <option value="detailed">详细</option>
-                        </select>
-                    </div>
-                    <div class="settings-group">
-                        <label class="toggle-switch">
-                            <input type="checkbox" id="logDisplay">
-                            <span class="toggle-slider"></span>
-                            <span class="toggle-label">显示日志面板</span>
-                        </label>
-                    </div>
-                    <div class="settings-group">
                         <button type="button" class="settings-btn danger" id="resetAllSettingsBtn">重置所有设置</button>
                     </div>
                 </div>
 
-                <!-- 关于与适配 -->
+                <!-- 关于 -->
                 <div class="settings-section settings-about" id="about-section" style="display: none;">
-                    <h4>一、适配设备列表</h4>
+                    <h4>关于 Live Beta</h4>
                     <div class="about-content">
-                        <p>列表可直接访问：<a href="https://xn--n6qv0quslfsn.top/xinsu/watch/" target="_blank" rel="noopener">https://昊天兽王.top/xinsu/watch/</a></p>
-                        <p class="about-tip">提示：不同品牌开启心率广播的方式可能不同，通常需在手表设置中手动开启「心率广播」或「心率共享」功能。</p>
-                        <p><strong>接收端要求：</strong></p>
+                        <p>AI Smart Collar V0 Live Beta 保留了「心宿 v2.1」的视觉氛围、粒子背景和部分外观设置，但实时数据来自 Smart Collar Windows uploader 上传的 clean ECG、R 峰、HR、SQI 和 lead-off。</p>
+                        <p class="about-tip">原项目面向手表心率广播，ECG 为基于 BPM 的模拟可视化；本分支把显示层改造成真实 ECG 实时可视化，不改变、不插值、不滤波浏览器收到的 clean ECG 样本。</p>
                         <ul>
-                            <li><strong>电脑端：</strong>需配备硬件蓝牙模块，操作系统能正常识别并开启蓝牙功能。主流 Windows、macOS 均可，浏览器需支持 Web Bluetooth API（推荐 Edge）。</li>
-                            <li><strong>手机端：</strong>
-                                <ul>
-                                    <li>Android：建议使用 Chrome 或 Edge 浏览器，确保系统版本和浏览器支持 Web Bluetooth。</li>
-                                    <li>iOS：推荐 Bluefy 浏览器。</li>
-                                    <li>鸿蒙：鸿蒙 6 推荐 Kiwi Browser 浏览器。</li>
-                                </ul>
-                            </li>
+                            <li>原作者开源仓库：<a href="https://github.com/haotianshouwang/xinsu" target="_blank" rel="noopener">github.com/haotianshouwang/xinsu</a></li>
+                            <li>原官方页面：<a href="https://xn--n6qv0quslfsn.top/xinsu/v2.1/" target="_blank" rel="noopener">昊天兽王.top/xinsu/v2.1</a></li>
                         </ul>
-                    </div>
-                    <h4>二、常见问题处理</h4>
-                    <div class="about-content">
-                        <div class="about-faq-item">
-                            <strong>1. 页面报错 nofind...</strong>
-                            <p><strong>原因：</strong>当前浏览器不支持 Web Bluetooth 功能。</p>
-                            <p><strong>解决方法：</strong>请使用最新版的 Edge 或 Chrome 浏览器（包括电脑和手机版）。</p>
-                        </div>
-                        <div class="about-faq-item">
-                            <strong>2. 页面报错 uuid0X180D</strong>
-                            <p><strong>原因：</strong>此问题主要出现在部分小米设备上，属于特定机型的小 bug。</p>
-                            <p><strong>3 个解决方案（按优先级尝试）：</strong></p>
-                            <ol>
-                                <li>使用 AstroBox 应用重新连接手表。</li>
-                                <li>重置手机蓝牙（关闭蓝牙再开启）。</li>
-                                <li>解除手表与手机的绑定（<em>警告：此操作可能导致手表数据丢失，请谨慎操作</em>）。</li>
-                            </ol>
-                        </div>
-                        <div class="about-faq-item">
-                            <strong>3. 弹出配对设备框，但扫描不到手表</strong>
-                            <p><strong>原因：</strong>手表未开启心率广播功能。</p>
-                            <p><strong>解决方法：</strong>请手动在手表设置中找到「心率广播」或类似选项并打开，然后再重新扫描。</p>
-                        </div>
-                        <div class="about-faq-item">
-                            <strong>4. 已经给予权限，但仍然提示「需要更新权限」</strong>
-                            <p><strong>原因：</strong>此问题主要出现在少数魅族手机，属于系统权限管理 bug，与网站无关。</p>
-                            <p><strong>解决方法：</strong>建议更换其他设备访问。</p>
-                        </div>
-                        <div class="about-faq-item">
-                            <strong>5. 页面显示的心电图是否有参考价值？</strong>
-                            <p><strong>免责声明：</strong>页面上实时显示的心电图是根据接收到的实时心率（BPM）数据模拟计算生成的，仅展示心率变化频率，不具备医疗诊断价值，不能用于任何医疗判断，仅供娱乐参考。</p>
-                        </div>
-                        <div class="about-faq-item">
-                            <strong>6. 其他浏览器兼容性问题</strong>
-                            <p>若您在鸿蒙系统原生浏览器、微信内置浏览器、Via、夸克等无法使用，请尝试更换为推荐的浏览器或设备。</p>
-                        </div>
-                    </div>
-                    <h4>三、相关链接</h4>
-                    <div class="about-content">
-                        <ul class="about-links">
-                            <li>在线工具地址：<a href="https://昊天兽王.top/xinsu" target="_blank" rel="noopener">昊天兽王.top/xinsu</a></li>
-                            <li>开源代码仓库：<a href="https://github.com/haotianshouwang/xinsu" target="_blank" rel="noopener">github.com</a></li>
-                        </ul>
-                        <p>如有其他问题 可以到github提交issues，也欢迎进入主页 QQ 群 <strong>1082944203</strong>密码，我是唐太宗， 或私信评论联系开发者。祝您使用愉快！</p>
+                        <p>本页面仅用于实时可视化，不用于医疗诊断。</p>
                     </div>
                 </div>
 
@@ -376,7 +289,7 @@
                         <div class="particle-effect-container">
                             <select id="particlesEffect" class="settings-select short">
                                 <option value="标准">标准</option>
-                                <option value="星空1" selected>星空1</option>
+                                <option value="星空1" selected>星空</option>
                                 <option value="原始星空">原始星空</option>
                                 <option value="律动星空">律动星空</option>
                                 <option value="星云">星云</option>
@@ -389,10 +302,6 @@
                                 <option value="暴风雪">暴风雪</option>
                                 <option value="原始粒子云">原始粒子云</option>
                             </select>
-                            <div class="particle-preview" id="particlePreview">
-                                <div class="preview-label">效果预览</div>
-                                <div class="preview-container" id="previewContainer"></div>
-                            </div>
                         </div>
                     </div>
                     <div class="settings-group">
@@ -654,49 +563,7 @@
                 <div class="settings-section" id="ecg-section" style="display: none;">
                     <h4>心电图设置</h4>
                     <div class="settings-group">
-                        <label class="settings-label">网格设置</label>
-                        <div class="ecg-grid-controls">
-                            <div class="grid-control-item">
-                                <label class="sub-label">网格颜色</label>
-                                <input type="color" id="ecgGridColor" value="#ffff00" class="color-picker small">
-                            </div>
-                            <div class="grid-control-item">
-                            <label class="sub-label">网格透明度</label>
-                            <div class="range-control">
-                                <input type="range" id="ecgGridOpacity" min="0" max="1" value="0.5" step="0.01" class="range-slider">
-                                <span id="ecgGridOpacityValue" class="range-value">0.5</span>
-                            </div>
-                        </div>
-                        <div class="grid-control-item">
-                            <label class="sub-label">网格高度</label>
-                            <div class="range-control">
-                                <input type="range" id="ecgGridHeight" min="100" max="300" value="200" step="10" class="range-slider">
-                                <span id="ecgGridHeightValue" class="range-value">200</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="settings-group">
-                        <label class="settings-label">显示效果</label>
-                        <div style="display: flex; align-items: center; gap: 20px;">
-                            <select id="ecgEffect" class="settings-select">
-                                <option value="标准" selected>标准</option>
-                                <option value="怀旧1">怀旧1</option>
-                                <option value="怀旧2">怀旧2</option>
-                                <option value="科技感">科技感</option>
-                                <option value="极简">极简</option>
-                                <option value="复古">复古</option>
-                                <option value="霓虹">霓虹</option>
-                                <option value="未来">未来</option>
-                                <option value="热力">热力</option>
-                                <option value="冷光">冷光</option>
-                                <option value="脉冲">脉冲</option>
-                                <option value="梦幻">梦幻</option>
-                            </select>
-                            <div class="effect-preview" style="width: 300px; height: 120px; border: 1px solid #333; border-radius: 4px; overflow: hidden; background: #000; position: relative;">
-                                <canvas id="ecgEffectPreview" width="300" height="120" style="width: 100%; height: 100%;"></canvas>
-                                <div style="position: absolute; bottom: 2px; left: 2px; font-size: 10px; color: #666;">预览</div>
-                            </div>
-                        </div>
+                        <p class="smart-note">波形来自 uploader 上传的真实 clean ECG；浏览器只做显示动画，不生成模拟 ECG。</p>
                     </div>
                     <div class="settings-group">
                         <label class="settings-label">波形设置</label>
@@ -719,82 +586,9 @@
                             </div>
                         </div>
                     </div>
-                    <div class="settings-group">
-                        <label class="settings-label">波形参数</label>
-                        <div class="wave-params">
-                            <div class="param-item">
-                                <label class="sub-label">P波幅度</label>
-                                <div class="range-control">
-                                    <input type="range" id="ecgPWave" min="0" max="0.3" value="0.15" step="0.01" class="range-slider">
-                                    <span id="ecgPWaveValue" class="range-value">0.15</span>
-                                </div>
-                            </div>
-                            <div class="param-item">
-                                <label class="sub-label">Q波幅度</label>
-                                <div class="range-control">
-                                    <input type="range" id="ecgQWave" min="-0.4" max="0" value="-0.1" step="0.01" class="range-slider">
-                                    <span id="ecgQWaveValue" class="range-value">-0.1</span>
-                                </div>
-                            </div>
-                            <div class="param-item">
-                                <label class="sub-label">R波幅度</label>
-                                <div class="range-control">
-                                    <input type="range" id="ecgRWave" min="0" max="1" value="0.8" step="0.01" class="range-slider">
-                                    <span id="ecgRWaveValue" class="range-value">0.8</span>
-                                </div>
-                            </div>
-                            <div class="param-item">
-                                <label class="sub-label">S波幅度</label>
-                                <div class="range-control">
-                                    <input type="range" id="ecgSWave" min="-0.4" max="0" value="-0.2" step="0.01" class="range-slider">
-                                    <span id="ecgSWaveValue" class="range-value">-0.2</span>
-                                </div>
-                            </div>
-                            <div class="param-item">
-                                <label class="sub-label">T波幅度</label>
-                                <div class="range-control">
-                                    <input type="range" id="ecgTWave" min="-0.3" max="0.4" value="0.25" step="0.01" class="range-slider">
-                                    <span id="ecgTWaveValue" class="range-value">0.25</span>
-                                </div>
-                            </div>
-                            <div class="param-item">
-                                <label class="sub-label">抖动强度</label>
-                                <div class="range-control">
-                                    <input type="range" id="ecgJitter" min="0" max="0.3" value="0.05" step="0.01" class="range-slider">
-                                    <span id="ecgJitterValue" class="range-value">0.05</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="settings-group">
-                        <label class="settings-label">预设模板</label>
-                        <select id="ecgPreset" class="settings-select">
-                            <option value="默认" selected>默认</option>
-                            <option value="正常">正常心电图</option>
-                            <option value="心肌梗塞">心肌梗塞模拟</option>
-                            <option value="干扰">干扰信号模拟</option>
-                        </select>
-                    </div>
-
-                    <div class="settings-group">
-                        <button class="settings-btn primary" id="ecgRandomBtn">随机生成参数</button>
-                    </div>
                 </div>
             </div>
         </div>
-    </div>
-
-    <!-- 日志显示面板 -->
-    <div id="log-panel" class="log-panel">
-        <div class="log-header">
-            <h4>日志</h4>
-            <div class="log-controls">
-                <button id="clearLogBtn">清空</button>
-                <button id="pinLogBtn">📎</button>
-                <button id="closeLogBtn">×</button>
-            </div>
-        </div>
-        <div class="log-content" id="logContent"></div>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

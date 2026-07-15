@@ -1,6 +1,8 @@
+import json
+
 from smart_neckband.analysis import EcgAnalysisResult
 from smart_neckband.buffers import EcgSample
-from smart_neckband.live_uploader import build_ecg_upload_batch
+from smart_neckband.live_uploader import CleanEcgJsonlRecorder, build_ecg_upload_batch
 
 
 def _samples(count: int) -> tuple[EcgSample, ...]:
@@ -62,3 +64,27 @@ def test_build_ecg_upload_batch_returns_none_when_no_new_samples() -> None:
         )
         is None
     )
+
+
+def test_clean_ecg_jsonl_recorder_writes_uploaded_batch(tmp_path) -> None:
+    path = tmp_path / "clean-ecg.jsonl"
+    message = {
+        "type": "ecg_batch",
+        "seq": 3,
+        "timestamp_ms": 123,
+        "sample_rate": 500,
+        "samples": [0.1, 0.2],
+        "r_peaks": [1],
+        "hr_bpm": 72.0,
+        "sqi": 0.9,
+        "lead_off": False,
+    }
+
+    with CleanEcgJsonlRecorder(path) as recorder:
+        recorder.write(message)
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    record = json.loads(lines[0])
+    assert isinstance(record["written_at_ms"], int)
+    assert record["message"] == message
