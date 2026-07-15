@@ -70,34 +70,3 @@ body.smart-collar-live .wallpaper-item.selected {
 body.smart-collar-live #ecg-canvas {
   image-rendering: auto;
 }
-
-body.smart-collar-live #bpm-display {
-  transform-origin: center;
-  transition:
-    color 180ms ease,
-    text-shadow 180ms ease;
-}
-
-body.smart-collar-live .heart-rate-display.style-pulse #bpm-display.live-beat,
-body.smart-collar-live .heart-rate-display:not(.style-3d) #bpm-display.live-beat {
-  animation: smart-collar-bpm-beat 460ms ease-out;
-}
-
-@keyframes smart-collar-bpm-beat {
-  0% {
-    transform: scale(1);
-    text-shadow: 0 0 0 rgba(var(--accent-rgb), 0);
-  }
-
-  18% {
-    transform: scale(1.08);
-    text-shadow:
-      0 0 12px rgba(var(--accent-rgb), 0.55),
-      0 0 28px rgba(var(--accent-rgb), 0.28);
-  }
-
-  100% {
-    transform: scale(1);
-    text-shadow: 0 0 0 rgba(var(--accent-rgb), 0);
-  }
-}

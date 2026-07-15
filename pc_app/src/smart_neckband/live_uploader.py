@@ -19,39 +19,6 @@ class UploadBatch:
     last_sample_index: int
 
 
-class CleanEcgJsonlRecorder:
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self._handle: Any | None = None
-
-    def __enter__(self) -> CleanEcgJsonlRecorder:
-        self.open()
-        return self
-
-    def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
-        self.close()
-
-    def open(self) -> None:
-        if self._handle is not None:
-            return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._handle = self.path.open("a", encoding="utf-8", newline="\n")
-
-    def write(self, message: dict[str, Any]) -> None:
-        if self._handle is None:
-            self.open()
-        assert self._handle is not None
-        record = {"written_at_ms": int(time.time() * 1000), "message": message}
-        self._handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
-        self._handle.write("\n")
-        self._handle.flush()
-
-    def close(self) -> None:
-        if self._handle is not None:
-            self._handle.close()
-            self._handle = None
-
-
 def _valid_hr(value: float | None) -> float | None:
     if value is None or not 20.0 <= value <= 240.0:
         return None
@@ -174,7 +141,6 @@ def run_live_upload(
     session_id: str,
     ingest_token: str,
     raw_log_path: Path | None,
-    clean_log_path: Path | None,
     interval_s: float,
 ) -> int:
     stores = PcDataStores.create()
@@ -184,7 +150,6 @@ def run_live_upload(
     status_seq = 0
     last_sent_sample_index: int | None = None
     next_status_at = 0.0
-    clean_recorder = CleanEcgJsonlRecorder(clean_log_path) if clean_log_path is not None else None
     reader.start()
     try:
         while True:
@@ -202,8 +167,6 @@ def run_live_upload(
             )
             if batch is not None:
                 live.send_json(batch.message)
-                if clean_recorder is not None:
-                    clean_recorder.write(batch.message)
                 last_sent_sample_index = batch.last_sample_index
                 seq += 1
             if now >= next_status_at:
@@ -229,8 +192,6 @@ def run_live_upload(
     except KeyboardInterrupt:
         return 0
     finally:
-        if clean_recorder is not None:
-            clean_recorder.close()
         live.close()
         reader.stop()
 
@@ -242,19 +203,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--session-id", required=True, help="Configured LIVE_SESSION_ID.")
     parser.add_argument("--ingest-token", required=True, help="Configured LIVE_INGEST_TOKEN.")
     parser.add_argument("--raw-log", default="", help="Optional local raw binary log path.")
-    parser.add_argument("--clean-log", default="", help="Optional local JSONL path for uploaded clean ECG batches.")
     parser.add_argument("--interval", type=float, default=0.5, help="NeuroKit2 analysis/upload interval in seconds.")
     args = parser.parse_args(argv)
 
     raw_log_path = Path(args.raw_log) if args.raw_log else None
-    clean_log_path = Path(args.clean_log) if args.clean_log else None
     return run_live_upload(
         port=args.port,
         ws_url=args.ws_url,
         session_id=args.session_id,
         ingest_token=args.ingest_token,
         raw_log_path=raw_log_path,
-        clean_log_path=clean_log_path,
         interval_s=max(0.2, args.interval),
     )
 

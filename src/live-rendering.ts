@@ -37,25 +37,6 @@ export function appendEcgBatch(
   );
 }
 
-export function smoothEcgBuffer(current: EcgPointBuffer, target: EcgPointBuffer, alpha: number): EcgPointBuffer {
-  const boundedAlpha = Math.max(0, Math.min(1, alpha));
-  if (target.samples.length === 0) {
-    return { samples: [], rPeaks: [] };
-  }
-  if (current.samples.length === 0 || boundedAlpha >= 1) {
-    return { samples: [...target.samples], rPeaks: [...target.rPeaks] };
-  }
-
-  const offset = target.samples.length - current.samples.length;
-  const samples = target.samples.map((targetValue, index) => {
-    const currentIndex = index - offset;
-    const currentValue =
-      currentIndex >= 0 && currentIndex < current.samples.length ? current.samples[currentIndex] : targetValue;
-    return currentValue + (targetValue - currentValue) * boundedAlpha;
-  });
-  return { samples, rPeaks: [...target.rPeaks] };
-}
-
 export function solidBackgroundChoice(color = "#000000"): BackgroundChoice {
   return {
     type: "color",
@@ -64,17 +45,10 @@ export function solidBackgroundChoice(color = "#000000"): BackgroundChoice {
   };
 }
 
-export function beatIntervalMsFromHr(hrBpm: number | null | undefined): number | null {
-  if (hrBpm == null || !Number.isFinite(hrBpm) || hrBpm < 20 || hrBpm > 240) {
-    return null;
-  }
-  return 60_000 / hrBpm;
-}
-
 export function pulseFromBeatAge(ageMs: number, connected: boolean): number {
-  if (!connected || ageMs < 0 || ageMs > 620) {
+  if (!connected || ageMs < 0 || ageMs > 420) {
     return 0;
   }
-  const normalized = 1 - ageMs / 620;
+  const normalized = 1 - ageMs / 420;
   return Math.max(0, normalized * normalized);
 }

@@ -139,18 +139,14 @@ Then start the fixed live uploader:
 cd C:\Users\XWen1024\Documents\smart-neckband\pc_app
 $env:LIVE_SESSION_ID = "sess_live_main_..."
 $env:LIVE_INGEST_TOKEN = "..."
-$rawLog = "..\data\smartcollar_live_$(Get-Date -Format yyyyMMdd_HHmmss).bin"
-$cleanLog = "..\data\smartcollar_clean_$(Get-Date -Format yyyyMMdd_HHmmss).jsonl"
 py -3.12 -m smart_neckband.live_uploader `
   --port COM19 `
   --ws-url "wss://<public-host>/api/ws" `
   --session-id $env:LIVE_SESSION_ID `
-  --ingest-token $env:LIVE_INGEST_TOKEN `
-  --raw-log $rawLog `
-  --clean-log $cleanLog
+  --ingest-token $env:LIVE_INGEST_TOKEN
 ```
 
-The uploader reads the Bluetooth SPP COM port, keeps raw binary logging optional, can write uploaded clean ECG batches to JSONL with `--clean-log`, runs NeuroKit2 on the PC, uploads only incremental clean ECG samples, maps R peaks into each uploaded batch, and sends status with lead-off, packet loss, and CRC counters.
+The uploader reads the Bluetooth SPP COM port, keeps raw binary logging optional, runs NeuroKit2 on the PC, uploads only incremental clean ECG samples, maps R peaks into each uploaded batch, and sends status with lead-off, packet loss, and CRC counters.
 
 The lower-level protocol example is:
 

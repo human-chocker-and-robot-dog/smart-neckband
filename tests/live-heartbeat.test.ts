@@ -10,9 +10,7 @@ import { createHeartbeatServer } from "../lib/ws-server.js";
 import { reconnectDelayMs, shouldAcceptLiveBatch, shouldLoadPublicLiveSession } from "../src/live-client.js";
 import {
   appendEcgBatch,
-  beatIntervalMsFromHr,
   pulseFromBeatAge,
-  smoothEcgBuffer,
   solidBackgroundChoice,
   trimEcgBuffer
 } from "../src/live-rendering.js";
@@ -283,24 +281,9 @@ describe("live reference-shell rendering helpers", () => {
     expect(trimEcgBuffer({ samples: [1, 2, 3], rPeaks: [0, 2] }, 2)).toEqual({ samples: [2, 3], rPeaks: [1] });
   });
 
-  it("smooths visible ECG samples while preserving target R peaks", () => {
-    const current = { samples: [0, 0, 0], rPeaks: [1] };
-    const target = { samples: [0, 10, 20, 30], rPeaks: [3] };
-
-    expect(smoothEcgBuffer(current, target, 0.5)).toEqual({ samples: [0, 5, 10, 15], rPeaks: [3] });
-  });
-
   it("only produces visual pulse while connected and close to a real beat", () => {
     expect(pulseFromBeatAge(100, true)).toBeGreaterThan(0);
     expect(pulseFromBeatAge(100, false)).toBe(0);
     expect(pulseFromBeatAge(700, true)).toBe(0);
   });
-
-  it("derives live beat intervals from valid HR only", () => {
-    expect(beatIntervalMsFromHr(80)).toBe(750);
-    expect(beatIntervalMsFromHr(null)).toBeNull();
-    expect(beatIntervalMsFromHr(5)).toBeNull();
-    expect(beatIntervalMsFromHr(300)).toBeNull();
-  });
-
 });

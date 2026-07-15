@@ -11,19 +11,16 @@ import {
   BackgroundChoice,
   EcgPointBuffer,
   appendEcgBatch,
-  beatIntervalMsFromHr,
   pulseFromBeatAge,
-  smoothEcgBuffer,
   solidBackgroundChoice
 } from "./live-rendering.js";
 import "./styles.css";
 
 const MAX_SAMPLES = ECG_SAMPLE_RATE_HZ * SNAPSHOT_SECONDS;
-const SETTINGS_KEY = "smart-collar-xinsu-adapter:v2";
+const SETTINGS_KEY = "smart-collar-xinsu-adapter:v1";
 const WALLPAPERS = Array.from({ length: 10 }, (_, index) => `/xinsu/images/bg${index + 1}.jpg`);
 
 type ConnectionState = "missing_config" | "connecting" | "live" | "reconnecting" | "closed";
-type AudioType = "standard" | "digital" | "ambient" | "lowfreq" | "custom" | "none";
 
 type ThreeRuntime = {
   initThree(containerId: string, currentStyle: string): void;
@@ -56,17 +53,13 @@ type UiSettings = {
   ecgLineColor: string;
   ecgLineWidth: number;
   ecgLineHeight: number;
-  audioEnabled: boolean;
-  audioType: AudioType;
-  audioVolume: number;
-  audioFrequency: number;
 };
 
 const defaultSettings: UiSettings = {
   background: solidBackgroundChoice("#000000"),
   accentColor: "#ff0033",
   particleColor: "#ffffff",
-  particleEffect: "原始星空",
+  particleEffect: "星空1",
   particleCount: 2000,
   particleSize: 0.5,
   particlesEnabled: true,
@@ -77,11 +70,7 @@ const defaultSettings: UiSettings = {
   ecgGridColor: "#ffff00",
   ecgLineColor: "#ff0033",
   ecgLineWidth: 3,
-  ecgLineHeight: 0.5,
-  audioEnabled: false,
-  audioType: "standard",
-  audioVolume: 70,
-  audioFrequency: 667
+  ecgLineHeight: 0.5
 };
 
 const params = new URLSearchParams(window.location.search);
@@ -93,7 +82,6 @@ const dedupe: DedupeState = { lastSeq: -1, lastTimestampMs: 0 };
 let settings = loadSettings();
 let three: ThreeRuntime | null = null;
 let waveform: EcgPointBuffer = { samples: [], rPeaks: [] };
-let displayedWaveform: EcgPointBuffer = { samples: [], rPeaks: [] };
 let status: PublicStatus | null = null;
 let connection: ConnectionState = sessionId && viewerToken ? "connecting" : publicLiveMode ? "connecting" : "missing_config";
 let lastSeq: number | null = null;
@@ -102,10 +90,6 @@ let socket: WebSocket | null = null;
 let reconnectTimer: number | null = null;
 let closed = false;
 let attempt = 0;
-let beatAnimationTimer: number | null = null;
-let nextEstimatedBeatAtMs = Number.POSITIVE_INFINITY;
-let audioContext: AudioContext | null = null;
-let audioGain: GainNode | null = null;
 
 function byId<T extends HTMLElement>(id: string): T | null {
   return document.getElementById(id) as T | null;
@@ -148,12 +132,6 @@ function cleanBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
-function cleanAudioType(value: unknown, fallback: AudioType): AudioType {
-  return value === "standard" || value === "digital" || value === "ambient" || value === "lowfreq" || value === "custom" || value === "none"
-    ? value
-    : fallback;
-}
-
 function loadSettings(): UiSettings {
   try {
     const raw = window.localStorage.getItem(SETTINGS_KEY);
@@ -182,11 +160,7 @@ function loadSettings(): UiSettings {
       ecgGridColor: cleanString(parsed.ecgGridColor, defaultSettings.ecgGridColor),
       ecgLineColor: cleanString(parsed.ecgLineColor, defaultSettings.ecgLineColor),
       ecgLineWidth: cleanNumber(parsed.ecgLineWidth, defaultSettings.ecgLineWidth, 1, 5),
-      ecgLineHeight: cleanNumber(parsed.ecgLineHeight, defaultSettings.ecgLineHeight, 0.1, 1),
-      audioEnabled: cleanBoolean(parsed.audioEnabled, defaultSettings.audioEnabled),
-      audioType: cleanAudioType(parsed.audioType, defaultSettings.audioType),
-      audioVolume: cleanNumber(parsed.audioVolume, defaultSettings.audioVolume, 0, 100),
-      audioFrequency: Math.round(cleanNumber(parsed.audioFrequency, defaultSettings.audioFrequency, 200, 1000))
+      ecgLineHeight: cleanNumber(parsed.ecgLineHeight, defaultSettings.ecgLineHeight, 0.1, 1)
     };
   } catch {
     return { ...defaultSettings, background: { ...defaultSettings.background } };
@@ -333,11 +307,6 @@ function setupSettingsPanel(): void {
   byId("settingsBtn")?.addEventListener("click", () => panel?.classList.add("show"));
   byId("closeSettingsBtn")?.addEventListener("click", () => panel?.classList.remove("show"));
   byId("resetSettingsBtn")?.addEventListener("click", () => {
-    settings = { ...defaultSettings, background: { ...defaultSettings.background } };
-    syncControlsFromSettings();
-    saveSettings();
-  });
-  byId("resetAllSettingsBtn")?.addEventListener("click", () => {
     settings = { ...defaultSettings, background: { ...defaultSettings.background } };
     syncControlsFromSettings();
     saveSettings();
@@ -569,152 +538,6 @@ function setupEcgControls(): void {
   });
 }
 
-function ensureAudioContext(): boolean {
-  if (audioContext && audioGain) {
-    return true;
-  }
-  const audioWindow = window as Window & { webkitAudioContext?: typeof AudioContext };
-  const AudioCtor = window.AudioContext ?? audioWindow.webkitAudioContext;
-  if (!AudioCtor) {
-    updateError("当前浏览器不支持 Web Audio");
-    return false;
-  }
-  audioContext = new AudioCtor();
-  audioGain = audioContext.createGain();
-  audioGain.gain.value = settings.audioVolume / 100;
-  audioGain.connect(audioContext.destination);
-  return true;
-}
-
-function setAudioEnabled(enabled: boolean): void {
-  settings.audioEnabled = enabled;
-  const headerToggle = byId<HTMLInputElement>("audioToggle");
-  const settingsToggle = byId<HTMLInputElement>("audioToggleSetting");
-  if (headerToggle) headerToggle.checked = enabled;
-  if (settingsToggle) settingsToggle.checked = enabled;
-  if (enabled && ensureAudioContext()) {
-    void audioContext?.resume().then(() => playHeartbeatAudio({ force: true }));
-  }
-  saveSettings();
-}
-
-function audioProfile(type: AudioType): { oscillator: OscillatorType; frequency: number; attack: number; sustain: number; release: number; gain: number } {
-  if (type === "digital") {
-    return { oscillator: "square", frequency: 800, attack: 0.005, sustain: 0.08, release: 0.03, gain: 0.4 };
-  }
-  if (type === "ambient") {
-    return { oscillator: "sine", frequency: 440, attack: 0.05, sustain: 0.15, release: 0.1, gain: 0.3 };
-  }
-  if (type === "lowfreq") {
-    return { oscillator: "sine", frequency: 100, attack: 0.02, sustain: 0.12, release: 0.08, gain: 0.6 };
-  }
-  if (type === "custom") {
-    return { oscillator: "sine", frequency: settings.audioFrequency, attack: 0.01, sustain: 0.1, release: 0.05, gain: 0.5 };
-  }
-  return { oscillator: "sine", frequency: 667, attack: 0.01, sustain: 0.1, release: 0.05, gain: 0.5 };
-}
-
-function playHeartbeatAudio(options: { force?: boolean } = {}): void {
-  if (!settings.audioEnabled || settings.audioType === "none" || (!options.force && connection !== "live")) {
-    return;
-  }
-  if (!ensureAudioContext() || !audioContext || !audioGain) {
-    return;
-  }
-  void audioContext.resume();
-  const profile = audioProfile(settings.audioType);
-  const oscillator = audioContext.createOscillator();
-  const envelope = audioContext.createGain();
-  const now = audioContext.currentTime;
-  oscillator.type = profile.oscillator;
-  oscillator.frequency.value = profile.frequency;
-  envelope.gain.setValueAtTime(0, now);
-  envelope.gain.linearRampToValueAtTime(profile.gain, now + profile.attack);
-  envelope.gain.setValueAtTime(profile.gain, now + profile.attack + profile.sustain);
-  envelope.gain.linearRampToValueAtTime(0, now + profile.attack + profile.sustain + profile.release);
-  oscillator.connect(envelope);
-  envelope.connect(audioGain);
-  oscillator.start(now);
-  oscillator.stop(now + profile.attack + profile.sustain + profile.release + 0.01);
-}
-
-function triggerBeatAnimation(): void {
-  const bpmDisplay = byId("bpm-display");
-  if (!bpmDisplay) return;
-  bpmDisplay.classList.remove("live-beat");
-  void bpmDisplay.offsetWidth;
-  bpmDisplay.classList.add("live-beat");
-  if (beatAnimationTimer !== null) {
-    window.clearTimeout(beatAnimationTimer);
-  }
-  beatAnimationTimer = window.setTimeout(() => {
-    bpmDisplay.classList.remove("live-beat");
-    beatAnimationTimer = null;
-  }, 460);
-}
-
-function triggerHeartbeatEffects(nowMs: number, playAudio = true): void {
-  lastBeatAtMs = nowMs;
-  triggerBeatAnimation();
-  if (playAudio) {
-    playHeartbeatAudio();
-  }
-  const interval = beatIntervalMsFromHr(status?.hr_bpm ?? null);
-  nextEstimatedBeatAtMs = interval == null ? Number.POSITIVE_INFINITY : nowMs + interval;
-}
-
-function armEstimatedBeat(nowMs: number, hrBpm: number | null | undefined): void {
-  const interval = beatIntervalMsFromHr(hrBpm);
-  if (interval == null) {
-    nextEstimatedBeatAtMs = Number.POSITIVE_INFINITY;
-    return;
-  }
-  if (!Number.isFinite(nextEstimatedBeatAtMs) || nextEstimatedBeatAtMs < nowMs - interval) {
-    nextEstimatedBeatAtMs = nowMs;
-  }
-}
-
-function maybeTriggerEstimatedBeat(nowMs: number, connected: boolean): void {
-  if (!connected) {
-    nextEstimatedBeatAtMs = Number.POSITIVE_INFINITY;
-    return;
-  }
-  const interval = beatIntervalMsFromHr(status?.hr_bpm ?? null);
-  if (interval == null) {
-    nextEstimatedBeatAtMs = Number.POSITIVE_INFINITY;
-    return;
-  }
-  if (!Number.isFinite(nextEstimatedBeatAtMs)) {
-    nextEstimatedBeatAtMs = nowMs + interval;
-    return;
-  }
-  if (nowMs >= nextEstimatedBeatAtMs) {
-    triggerHeartbeatEffects(nowMs);
-  }
-}
-
-function setupAudioControls(): void {
-  byId<HTMLInputElement>("audioToggle")?.addEventListener("change", (event) => setAudioEnabled(inputChecked(event)));
-  byId<HTMLInputElement>("audioToggleSetting")?.addEventListener("change", (event) => setAudioEnabled(inputChecked(event)));
-  byId<HTMLSelectElement>("audioTypeSelect")?.addEventListener("change", (event) => {
-    settings.audioType = cleanAudioType(inputValue(event), defaultSettings.audioType);
-    saveSettings();
-  });
-  byId<HTMLInputElement>("audioFrequency")?.addEventListener("input", (event) => {
-    settings.audioFrequency = Math.round(Number(inputValue(event)));
-    const value = byId("audioFrequencyValue");
-    if (value) value.textContent = `${settings.audioFrequency} Hz`;
-    saveSettings();
-  });
-  byId<HTMLInputElement>("audioVolume")?.addEventListener("input", (event) => {
-    settings.audioVolume = Number(inputValue(event));
-    const value = byId("audioVolumeValue");
-    if (value) value.textContent = `${settings.audioVolume}%`;
-    if (audioGain) audioGain.gain.value = settings.audioVolume / 100;
-    saveSettings();
-  });
-}
-
 function applyGridVisibility(): void {
   const grid = document.querySelector<HTMLElement>(".ecg-grid");
   if (!grid) return;
@@ -744,21 +567,6 @@ function syncControlsFromSettings(): void {
   if (particlesSizeInput) particlesSizeInput.value = String(settings.particleSize);
   const effectHeartRateToggle = byId<HTMLInputElement>("effectHeartRateToggle");
   if (effectHeartRateToggle) effectHeartRateToggle.checked = settings.bindEffectsToHeartRate;
-  const headerAudioToggle = byId<HTMLInputElement>("audioToggle");
-  if (headerAudioToggle) headerAudioToggle.checked = settings.audioEnabled;
-  const settingsAudioToggle = byId<HTMLInputElement>("audioToggleSetting");
-  if (settingsAudioToggle) settingsAudioToggle.checked = settings.audioEnabled;
-  const audioType = byId<HTMLSelectElement>("audioTypeSelect");
-  if (audioType) audioType.value = settings.audioType;
-  const audioFrequency = byId<HTMLInputElement>("audioFrequency");
-  if (audioFrequency) audioFrequency.value = String(settings.audioFrequency);
-  const audioFrequencyValue = byId("audioFrequencyValue");
-  if (audioFrequencyValue) audioFrequencyValue.textContent = `${settings.audioFrequency} Hz`;
-  const audioVolume = byId<HTMLInputElement>("audioVolume");
-  if (audioVolume) audioVolume.value = String(settings.audioVolume);
-  const audioVolumeValue = byId("audioVolumeValue");
-  if (audioVolumeValue) audioVolumeValue.textContent = `${settings.audioVolume}%`;
-  if (audioGain) audioGain.gain.value = settings.audioVolume / 100;
   const gridOpacity = byId<HTMLInputElement>("ecgGridOpacity");
   if (gridOpacity) gridOpacity.value = String(settings.ecgGridOpacity);
   const gridOpacityValue = byId("ecgGridOpacityValue");
@@ -798,7 +606,7 @@ function resizeCanvas(canvas: HTMLCanvasElement): CanvasRenderingContext2D | nul
   return context;
 }
 
-function drawEcg(buffer = displayedWaveform): void {
+function drawEcg(): void {
   const canvas = byId<HTMLCanvasElement>("ecg-canvas");
   if (!canvas) return;
   const context = resizeCanvas(canvas);
@@ -807,17 +615,17 @@ function drawEcg(buffer = displayedWaveform): void {
   const height = canvas.height / (window.devicePixelRatio || 1);
   context.clearRect(0, 0, width, height);
 
-  if (buffer.samples.length === 0) {
+  if (waveform.samples.length === 0) {
     return;
   }
 
-  const min = Math.min(...buffer.samples);
-  const max = Math.max(...buffer.samples);
+  const min = Math.min(...waveform.samples);
+  const max = Math.max(...waveform.samples);
   const span = Math.max(1e-6, max - min);
   const center = height * settings.ecgLineHeight;
   const amplitude = height * 0.38;
   const yFor = (value: number) => center - ((value - min) / span - 0.5) * amplitude * 2;
-  const xFor = (index: number) => (buffer.samples.length <= 1 ? width : (index / (buffer.samples.length - 1)) * width);
+  const xFor = (index: number) => (waveform.samples.length <= 1 ? width : (index / (waveform.samples.length - 1)) * width);
 
   context.save();
   context.lineWidth = settings.ecgLineWidth;
@@ -827,7 +635,7 @@ function drawEcg(buffer = displayedWaveform): void {
   context.shadowColor = settings.ecgLineColor;
   context.shadowBlur = 12;
   context.beginPath();
-  buffer.samples.forEach((sample, index) => {
+  waveform.samples.forEach((sample, index) => {
     const x = xFor(index);
     const y = yFor(sample);
     if (index === 0) {
@@ -838,6 +646,22 @@ function drawEcg(buffer = displayedWaveform): void {
   });
   context.stroke();
   context.restore();
+
+  context.save();
+  for (const peak of waveform.rPeaks) {
+    if (peak < 0 || peak >= waveform.samples.length) continue;
+    const x = xFor(peak);
+    const y = yFor(waveform.samples[peak]);
+    const gradient = context.createRadialGradient(x, y, 0, x, y, 22);
+    gradient.addColorStop(0, "rgba(255,255,255,0.95)");
+    gradient.addColorStop(0.25, "rgba(255,0,51,0.8)");
+    gradient.addColorStop(1, "rgba(255,0,51,0)");
+    context.fillStyle = gradient;
+    context.beginPath();
+    context.arc(x, y, 22, 0, Math.PI * 2);
+    context.fill();
+  }
+  context.restore();
 }
 
 function buildSnapshot(snapshot: Snapshot): void {
@@ -845,8 +669,6 @@ function buildSnapshot(snapshot: Snapshot): void {
   for (const batch of snapshot.batches) {
     waveform = appendEcgBatch(waveform, batch.samples, batch.r_peaks, MAX_SAMPLES);
   }
-  displayedWaveform = { samples: [...waveform.samples], rPeaks: [...waveform.rPeaks] };
-  nextEstimatedBeatAtMs = Number.POSITIVE_INFINITY;
   status = snapshot.status;
   const lastBatch = snapshot.batches.at(-1);
   if (lastBatch) {
@@ -858,9 +680,11 @@ function buildSnapshot(snapshot: Snapshot): void {
 
 function applyLiveBatch(batch: LiveEcgBatch): void {
   if (!shouldAcceptLiveBatch(batch, dedupe)) return;
-  const nowMs = performance.now();
   lastSeq = batch.seq;
   waveform = appendEcgBatch(waveform, batch.samples, batch.r_peaks, MAX_SAMPLES);
+  if (batch.r_peaks.length > 0) {
+    lastBeatAtMs = performance.now();
+  }
   if (batch.hr_bpm != null || batch.sqi != null || batch.lead_off) {
     status = {
       type: "status",
@@ -875,11 +699,6 @@ function applyLiveBatch(batch: LiveEcgBatch): void {
       crc_errors: status?.crc_errors ?? 0,
       note: status?.note ?? null
     };
-  }
-  if (batch.r_peaks.length > 0) {
-    triggerHeartbeatEffects(nowMs);
-  } else {
-    armEstimatedBeat(nowMs, batch.hr_bpm ?? status?.hr_bpm ?? null);
   }
 }
 
@@ -1020,13 +839,10 @@ async function connectInitial(): Promise<void> {
 
 function animate(time: number): void {
   const connected = connection === "live" && status?.state === "live";
-  const nowMs = performance.now();
-  maybeTriggerEstimatedBeat(nowMs, connected);
-  const pulse = settings.bindEffectsToHeartRate ? pulseFromBeatAge(nowMs - lastBeatAtMs, connected) : 0;
+  const pulse = settings.bindEffectsToHeartRate ? pulseFromBeatAge(performance.now() - lastBeatAtMs, connected) : 0;
   three?.updateThree(time, pulse, settings.effectIntensity, settings.effectSpeed);
   three?.renderThree();
-  displayedWaveform = smoothEcgBuffer(displayedWaveform, waveform, 0.22);
-  drawEcg(displayedWaveform);
+  drawEcg();
   window.requestAnimationFrame(animate);
 }
 
@@ -1062,7 +878,6 @@ function init(): void {
   setupParticleControls();
   setupHeartRateControls();
   setupEcgControls();
-  setupAudioControls();
   syncControlsFromSettings();
   updateStatusUi();
   void initThreeRuntime();
