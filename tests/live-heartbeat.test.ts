@@ -12,6 +12,7 @@ import {
   appendEcgBatch,
   beatIntervalMsFromHr,
   pulseFromBeatAge,
+  scrollingSampleOffset,
   smoothEcgBuffer,
   solidBackgroundChoice,
   trimEcgBuffer
@@ -301,5 +302,11 @@ describe("live reference-shell rendering helpers", () => {
     expect(beatIntervalMsFromHr(null)).toBeNull();
     expect(beatIntervalMsFromHr(5)).toBeNull();
     expect(beatIntervalMsFromHr(300)).toBeNull();
+  });
+
+  it("converts elapsed render time into bounded ECG scroll samples", () => {
+    expect(scrollingSampleOffset(0, 500, 1000)).toBe(0);
+    expect(scrollingSampleOffset(200, 500, 1000)).toBe(100);
+    expect(scrollingSampleOffset(5000, 500, 1000)).toBe(1000);
   });
 });

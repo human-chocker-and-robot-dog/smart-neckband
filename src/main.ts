@@ -13,6 +13,7 @@ import {
   appendEcgBatch,
   beatIntervalMsFromHr,
   pulseFromBeatAge,
+  scrollingSampleOffset,
   smoothEcgBuffer,
   solidBackgroundChoice
 } from "./live-rendering.js";
@@ -103,7 +104,8 @@ let reconnectTimer: number | null = null;
 let closed = false;
 let attempt = 0;
 let beatAnimationTimer: number | null = null;
-let ecgBeatAnimationTimer: number | null = null;
+let peripheralBeatAnimationTimer: number | null = null;
+let latestEcgSamplePerfMs = -Infinity;
 let nextEstimatedBeatAtMs = Number.POSITIVE_INFINITY;
 let audioContext: AudioContext | null = null;
 let audioGain: GainNode | null = null;
@@ -654,25 +656,23 @@ function triggerBeatAnimation(): void {
   }, 460);
 }
 
-function triggerEcgBeatAnimation(): void {
-  const wrapper = document.querySelector<HTMLElement>(".ecg-wrapper");
-  if (!wrapper) return;
-  wrapper.classList.remove("live-ecg-beat");
-  void wrapper.offsetWidth;
-  wrapper.classList.add("live-ecg-beat");
-  if (ecgBeatAnimationTimer !== null) {
-    window.clearTimeout(ecgBeatAnimationTimer);
+function triggerPeripheralBeatAnimation(): void {
+  document.body.classList.remove("live-peripheral-beat");
+  void document.body.offsetWidth;
+  document.body.classList.add("live-peripheral-beat");
+  if (peripheralBeatAnimationTimer !== null) {
+    window.clearTimeout(peripheralBeatAnimationTimer);
   }
-  ecgBeatAnimationTimer = window.setTimeout(() => {
-    wrapper.classList.remove("live-ecg-beat");
-    ecgBeatAnimationTimer = null;
-  }, 520);
+  peripheralBeatAnimationTimer = window.setTimeout(() => {
+    document.body.classList.remove("live-peripheral-beat");
+    peripheralBeatAnimationTimer = null;
+  }, 620);
 }
 
 function triggerHeartbeatEffects(nowMs: number, playAudio = true): void {
   lastBeatAtMs = nowMs;
   triggerBeatAnimation();
-  triggerEcgBeatAnimation();
+  triggerPeripheralBeatAnimation();
   if (playAudio) {
     playHeartbeatAudio();
   }
@@ -815,7 +815,7 @@ function resizeCanvas(canvas: HTMLCanvasElement): CanvasRenderingContext2D | nul
   return context;
 }
 
-function drawEcg(buffer = displayedWaveform): void {
+function drawEcg(buffer = displayedWaveform, connected = false): void {
   const canvas = byId<HTMLCanvasElement>("ecg-canvas");
   if (!canvas) return;
   const context = resizeCanvas(canvas);
@@ -834,7 +834,10 @@ function drawEcg(buffer = displayedWaveform): void {
   const center = height * settings.ecgLineHeight;
   const amplitude = height * 0.38;
   const yFor = (value: number) => center - ((value - min) / span - 0.5) * amplitude * 2;
-  const xFor = (index: number) => (buffer.samples.length <= 1 ? width : (index / (buffer.samples.length - 1)) * width);
+  const sampleSpacing = width / MAX_SAMPLES;
+  const elapsedMs = connected ? performance.now() - latestEcgSamplePerfMs : 0;
+  const scrollOffset = scrollingSampleOffset(elapsedMs, ECG_SAMPLE_RATE_HZ, ECG_SAMPLE_RATE_HZ * 2);
+  const xFor = (index: number) => width - (buffer.samples.length - 1 - index + scrollOffset) * sampleSpacing;
 
   context.save();
   context.lineWidth = settings.ecgLineWidth;
@@ -844,16 +847,23 @@ function drawEcg(buffer = displayedWaveform): void {
   context.shadowColor = settings.ecgLineColor;
   context.shadowBlur = 12;
   context.beginPath();
+  let started = false;
   buffer.samples.forEach((sample, index) => {
     const x = xFor(index);
+    if (x < -sampleSpacing || x > width + sampleSpacing) {
+      return;
+    }
     const y = yFor(sample);
-    if (index === 0) {
+    if (!started) {
       context.moveTo(x, y);
+      started = true;
     } else {
       context.lineTo(x, y);
     }
   });
-  context.stroke();
+  if (started) {
+    context.stroke();
+  }
   context.restore();
 }
 
@@ -863,6 +873,7 @@ function buildSnapshot(snapshot: Snapshot): void {
     waveform = appendEcgBatch(waveform, batch.samples, batch.r_peaks, MAX_SAMPLES);
   }
   displayedWaveform = { samples: [...waveform.samples], rPeaks: [...waveform.rPeaks] };
+  latestEcgSamplePerfMs = performance.now();
   nextEstimatedBeatAtMs = Number.POSITIVE_INFINITY;
   status = snapshot.status;
   const lastBatch = snapshot.batches.at(-1);
@@ -878,6 +889,7 @@ function applyLiveBatch(batch: LiveEcgBatch): void {
   const nowMs = performance.now();
   lastSeq = batch.seq;
   waveform = appendEcgBatch(waveform, batch.samples, batch.r_peaks, MAX_SAMPLES);
+  latestEcgSamplePerfMs = nowMs;
   if (batch.hr_bpm != null || batch.sqi != null || batch.lead_off) {
     status = {
       type: "status",
@@ -1043,7 +1055,7 @@ function animate(time: number): void {
   three?.updateThree(time, pulse, settings.effectIntensity, settings.effectSpeed);
   three?.renderThree();
   displayedWaveform = smoothEcgBuffer(displayedWaveform, waveform, 0.22);
-  drawEcg(displayedWaveform);
+  drawEcg(displayedWaveform, connected);
   window.requestAnimationFrame(animate);
 }
 

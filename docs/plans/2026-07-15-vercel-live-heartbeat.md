@@ -90,6 +90,7 @@ git diff --check
 - [x] Add PC `smart_neckband.live_uploader` command for uploading PC-cleaned ECG to the live room.
 - [x] Smooth the reference-shell ECG display, remove visual R-peak dots, restore heartbeat audio via Web Audio, and add local clean ECG JSONL logging.
 - [x] Restore visible heartbeat-linked motion after removing R-peak dots by using live HR fallback beats, ECG glow animation, and `原始星空` as the reset default particle effect.
+- [x] Replace ECG beat glow with rolling-strip ECG rendering and a page-edge heartbeat glow so ECG motion reads like a live monitor trace.
 
 ## Discoveries
 

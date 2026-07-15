@@ -71,6 +71,13 @@ export function beatIntervalMsFromHr(hrBpm: number | null | undefined): number |
   return 60_000 / hrBpm;
 }
 
+export function scrollingSampleOffset(elapsedMs: number, sampleRateHz: number, maxOffsetSamples: number): number {
+  if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) {
+    return 0;
+  }
+  return Math.min(maxOffsetSamples, (elapsedMs * sampleRateHz) / 1000);
+}
+
 export function pulseFromBeatAge(ageMs: number, connected: boolean): number {
   if (!connected || ageMs < 0 || ageMs > 620) {
     return 0;
