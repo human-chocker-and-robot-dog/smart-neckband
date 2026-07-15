@@ -14,7 +14,7 @@ let canvasContainer = null;
 // 粒子效果配置
 let particleConfig = {
 
-    效果: '星空1',
+    效果: '原始星空',
     color: '', // 从index.html中的粒子颜色选择器获取默认值
     colors: {}, // 多颜色效果的颜色配置
     数量: 2000,

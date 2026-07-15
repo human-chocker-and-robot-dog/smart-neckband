@@ -10,6 +10,7 @@ import { createHeartbeatServer } from "../lib/ws-server.js";
 import { reconnectDelayMs, shouldAcceptLiveBatch, shouldLoadPublicLiveSession } from "../src/live-client.js";
 import {
   appendEcgBatch,
+  beatIntervalMsFromHr,
   pulseFromBeatAge,
   smoothEcgBuffer,
   solidBackgroundChoice,
@@ -293,5 +294,12 @@ describe("live reference-shell rendering helpers", () => {
     expect(pulseFromBeatAge(100, true)).toBeGreaterThan(0);
     expect(pulseFromBeatAge(100, false)).toBe(0);
     expect(pulseFromBeatAge(700, true)).toBe(0);
+  });
+
+  it("derives live beat intervals from valid HR only", () => {
+    expect(beatIntervalMsFromHr(80)).toBe(750);
+    expect(beatIntervalMsFromHr(null)).toBeNull();
+    expect(beatIntervalMsFromHr(5)).toBeNull();
+    expect(beatIntervalMsFromHr(300)).toBeNull();
   });
 });

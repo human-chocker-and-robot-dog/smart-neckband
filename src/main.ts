@@ -11,6 +11,7 @@ import {
   BackgroundChoice,
   EcgPointBuffer,
   appendEcgBatch,
+  beatIntervalMsFromHr,
   pulseFromBeatAge,
   smoothEcgBuffer,
   solidBackgroundChoice
@@ -18,7 +19,7 @@ import {
 import "./styles.css";
 
 const MAX_SAMPLES = ECG_SAMPLE_RATE_HZ * SNAPSHOT_SECONDS;
-const SETTINGS_KEY = "smart-collar-xinsu-adapter:v1";
+const SETTINGS_KEY = "smart-collar-xinsu-adapter:v2";
 const WALLPAPERS = Array.from({ length: 10 }, (_, index) => `/xinsu/images/bg${index + 1}.jpg`);
 
 type ConnectionState = "missing_config" | "connecting" | "live" | "reconnecting" | "closed";
@@ -65,7 +66,7 @@ const defaultSettings: UiSettings = {
   background: solidBackgroundChoice("#000000"),
   accentColor: "#ff0033",
   particleColor: "#ffffff",
-  particleEffect: "星空1",
+  particleEffect: "原始星空",
   particleCount: 2000,
   particleSize: 0.5,
   particlesEnabled: true,
@@ -102,6 +103,8 @@ let reconnectTimer: number | null = null;
 let closed = false;
 let attempt = 0;
 let beatAnimationTimer: number | null = null;
+let ecgBeatAnimationTimer: number | null = null;
+let nextEstimatedBeatAtMs = Number.POSITIVE_INFINITY;
 let audioContext: AudioContext | null = null;
 let audioGain: GainNode | null = null;
 
@@ -591,7 +594,7 @@ function setAudioEnabled(enabled: boolean): void {
   if (headerToggle) headerToggle.checked = enabled;
   if (settingsToggle) settingsToggle.checked = enabled;
   if (enabled && ensureAudioContext()) {
-    void audioContext?.resume();
+    void audioContext?.resume().then(() => playHeartbeatAudio({ force: true }));
   }
   saveSettings();
 }
@@ -612,8 +615,8 @@ function audioProfile(type: AudioType): { oscillator: OscillatorType; frequency:
   return { oscillator: "sine", frequency: 667, attack: 0.01, sustain: 0.1, release: 0.05, gain: 0.5 };
 }
 
-function playHeartbeatAudio(): void {
-  if (!settings.audioEnabled || settings.audioType === "none" || connection !== "live") {
+function playHeartbeatAudio(options: { force?: boolean } = {}): void {
+  if (!settings.audioEnabled || settings.audioType === "none" || (!options.force && connection !== "live")) {
     return;
   }
   if (!ensureAudioContext() || !audioContext || !audioGain) {
@@ -649,6 +652,62 @@ function triggerBeatAnimation(): void {
     bpmDisplay.classList.remove("live-beat");
     beatAnimationTimer = null;
   }, 460);
+}
+
+function triggerEcgBeatAnimation(): void {
+  const wrapper = document.querySelector<HTMLElement>(".ecg-wrapper");
+  if (!wrapper) return;
+  wrapper.classList.remove("live-ecg-beat");
+  void wrapper.offsetWidth;
+  wrapper.classList.add("live-ecg-beat");
+  if (ecgBeatAnimationTimer !== null) {
+    window.clearTimeout(ecgBeatAnimationTimer);
+  }
+  ecgBeatAnimationTimer = window.setTimeout(() => {
+    wrapper.classList.remove("live-ecg-beat");
+    ecgBeatAnimationTimer = null;
+  }, 520);
+}
+
+function triggerHeartbeatEffects(nowMs: number, playAudio = true): void {
+  lastBeatAtMs = nowMs;
+  triggerBeatAnimation();
+  triggerEcgBeatAnimation();
+  if (playAudio) {
+    playHeartbeatAudio();
+  }
+  const interval = beatIntervalMsFromHr(status?.hr_bpm ?? null);
+  nextEstimatedBeatAtMs = interval == null ? Number.POSITIVE_INFINITY : nowMs + interval;
+}
+
+function armEstimatedBeat(nowMs: number, hrBpm: number | null | undefined): void {
+  const interval = beatIntervalMsFromHr(hrBpm);
+  if (interval == null) {
+    nextEstimatedBeatAtMs = Number.POSITIVE_INFINITY;
+    return;
+  }
+  if (!Number.isFinite(nextEstimatedBeatAtMs) || nextEstimatedBeatAtMs < nowMs - interval) {
+    nextEstimatedBeatAtMs = nowMs;
+  }
+}
+
+function maybeTriggerEstimatedBeat(nowMs: number, connected: boolean): void {
+  if (!connected) {
+    nextEstimatedBeatAtMs = Number.POSITIVE_INFINITY;
+    return;
+  }
+  const interval = beatIntervalMsFromHr(status?.hr_bpm ?? null);
+  if (interval == null) {
+    nextEstimatedBeatAtMs = Number.POSITIVE_INFINITY;
+    return;
+  }
+  if (!Number.isFinite(nextEstimatedBeatAtMs)) {
+    nextEstimatedBeatAtMs = nowMs + interval;
+    return;
+  }
+  if (nowMs >= nextEstimatedBeatAtMs) {
+    triggerHeartbeatEffects(nowMs);
+  }
 }
 
 function setupAudioControls(): void {
@@ -804,6 +863,7 @@ function buildSnapshot(snapshot: Snapshot): void {
     waveform = appendEcgBatch(waveform, batch.samples, batch.r_peaks, MAX_SAMPLES);
   }
   displayedWaveform = { samples: [...waveform.samples], rPeaks: [...waveform.rPeaks] };
+  nextEstimatedBeatAtMs = Number.POSITIVE_INFINITY;
   status = snapshot.status;
   const lastBatch = snapshot.batches.at(-1);
   if (lastBatch) {
@@ -815,13 +875,9 @@ function buildSnapshot(snapshot: Snapshot): void {
 
 function applyLiveBatch(batch: LiveEcgBatch): void {
   if (!shouldAcceptLiveBatch(batch, dedupe)) return;
+  const nowMs = performance.now();
   lastSeq = batch.seq;
   waveform = appendEcgBatch(waveform, batch.samples, batch.r_peaks, MAX_SAMPLES);
-  if (batch.r_peaks.length > 0) {
-    lastBeatAtMs = performance.now();
-    triggerBeatAnimation();
-    playHeartbeatAudio();
-  }
   if (batch.hr_bpm != null || batch.sqi != null || batch.lead_off) {
     status = {
       type: "status",
@@ -836,6 +892,11 @@ function applyLiveBatch(batch: LiveEcgBatch): void {
       crc_errors: status?.crc_errors ?? 0,
       note: status?.note ?? null
     };
+  }
+  if (batch.r_peaks.length > 0) {
+    triggerHeartbeatEffects(nowMs);
+  } else {
+    armEstimatedBeat(nowMs, batch.hr_bpm ?? status?.hr_bpm ?? null);
   }
 }
 
@@ -976,7 +1037,9 @@ async function connectInitial(): Promise<void> {
 
 function animate(time: number): void {
   const connected = connection === "live" && status?.state === "live";
-  const pulse = settings.bindEffectsToHeartRate ? pulseFromBeatAge(performance.now() - lastBeatAtMs, connected) : 0;
+  const nowMs = performance.now();
+  maybeTriggerEstimatedBeat(nowMs, connected);
+  const pulse = settings.bindEffectsToHeartRate ? pulseFromBeatAge(nowMs - lastBeatAtMs, connected) : 0;
   three?.updateThree(time, pulse, settings.effectIntensity, settings.effectSpeed);
   three?.renderThree();
   displayedWaveform = smoothEcgBuffer(displayedWaveform, waveform, 0.22);

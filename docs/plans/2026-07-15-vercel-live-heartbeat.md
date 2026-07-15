@@ -89,6 +89,7 @@ git diff --check
 - [x] Add fixed `/live` public viewer discovery and static live session credential support.
 - [x] Add PC `smart_neckband.live_uploader` command for uploading PC-cleaned ECG to the live room.
 - [x] Smooth the reference-shell ECG display, remove visual R-peak dots, restore heartbeat audio via Web Audio, and add local clean ECG JSONL logging.
+- [x] Restore visible heartbeat-linked motion after removing R-peak dots by using live HR fallback beats, ECG glow animation, and `原始星空` as the reset default particle effect.
 
 ## Discoveries
 

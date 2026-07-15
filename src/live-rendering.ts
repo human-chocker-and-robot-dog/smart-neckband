@@ -64,10 +64,17 @@ export function solidBackgroundChoice(color = "#000000"): BackgroundChoice {
   };
 }
 
+export function beatIntervalMsFromHr(hrBpm: number | null | undefined): number | null {
+  if (hrBpm == null || !Number.isFinite(hrBpm) || hrBpm < 20 || hrBpm > 240) {
+    return null;
+  }
+  return 60_000 / hrBpm;
+}
+
 export function pulseFromBeatAge(ageMs: number, connected: boolean): number {
-  if (!connected || ageMs < 0 || ageMs > 420) {
+  if (!connected || ageMs < 0 || ageMs > 620) {
     return 0;
   }
-  const normalized = 1 - ageMs / 420;
+  const normalized = 1 - ageMs / 620;
   return Math.max(0, normalized * normalized);
 }
