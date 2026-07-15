@@ -91,6 +91,7 @@ git diff --check
 - [x] Smooth the reference-shell ECG display, remove visual R-peak dots, restore heartbeat audio via Web Audio, and add local clean ECG JSONL logging.
 - [x] Restore visible heartbeat-linked motion after removing R-peak dots by using live HR fallback beats, ECG glow animation, and `原始星空` as the reset default particle effect.
 - [x] Replace ECG beat glow with rolling-strip ECG rendering and a page-edge heartbeat glow so ECG motion reads like a live monitor trace.
+- [x] Remove the page-edge red alert glow and make short live ECG buffers fill the visible strip before the 10-second window is fully populated.
 
 ## Discoveries
 

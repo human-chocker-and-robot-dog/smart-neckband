@@ -15,7 +15,8 @@ import {
   scrollingSampleOffset,
   smoothEcgBuffer,
   solidBackgroundChoice,
-  trimEcgBuffer
+  trimEcgBuffer,
+  visibleEcgWindowSamples
 } from "../src/live-rendering.js";
 
 function testBatch(seq: number, overrides: Partial<EcgBatch> = {}): EcgBatch {
@@ -308,5 +309,11 @@ describe("live reference-shell rendering helpers", () => {
     expect(scrollingSampleOffset(0, 500, 1000)).toBe(0);
     expect(scrollingSampleOffset(200, 500, 1000)).toBe(100);
     expect(scrollingSampleOffset(5000, 500, 1000)).toBe(1000);
+  });
+
+  it("expands short live ECG buffers to the visible window until the 10 second window is full", () => {
+    expect(visibleEcgWindowSamples(250, 0, 5000)).toBe(250);
+    expect(visibleEcgWindowSamples(250, 100, 5000)).toBe(350);
+    expect(visibleEcgWindowSamples(6000, 0, 5000)).toBe(5000);
   });
 });

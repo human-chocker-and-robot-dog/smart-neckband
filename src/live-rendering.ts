@@ -78,6 +78,10 @@ export function scrollingSampleOffset(elapsedMs: number, sampleRateHz: number, m
   return Math.min(maxOffsetSamples, (elapsedMs * sampleRateHz) / 1000);
 }
 
+export function visibleEcgWindowSamples(sampleCount: number, scrollOffsetSamples: number, maxSamples: number): number {
+  return Math.max(1, Math.min(maxSamples, sampleCount + Math.max(0, scrollOffsetSamples)));
+}
+
 export function pulseFromBeatAge(ageMs: number, connected: boolean): number {
   if (!connected || ageMs < 0 || ageMs > 620) {
     return 0;

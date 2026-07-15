@@ -15,7 +15,8 @@ import {
   pulseFromBeatAge,
   scrollingSampleOffset,
   smoothEcgBuffer,
-  solidBackgroundChoice
+  solidBackgroundChoice,
+  visibleEcgWindowSamples
 } from "./live-rendering.js";
 import "./styles.css";
 
@@ -104,7 +105,6 @@ let reconnectTimer: number | null = null;
 let closed = false;
 let attempt = 0;
 let beatAnimationTimer: number | null = null;
-let peripheralBeatAnimationTimer: number | null = null;
 let latestEcgSamplePerfMs = -Infinity;
 let nextEstimatedBeatAtMs = Number.POSITIVE_INFINITY;
 let audioContext: AudioContext | null = null;
@@ -656,23 +656,9 @@ function triggerBeatAnimation(): void {
   }, 460);
 }
 
-function triggerPeripheralBeatAnimation(): void {
-  document.body.classList.remove("live-peripheral-beat");
-  void document.body.offsetWidth;
-  document.body.classList.add("live-peripheral-beat");
-  if (peripheralBeatAnimationTimer !== null) {
-    window.clearTimeout(peripheralBeatAnimationTimer);
-  }
-  peripheralBeatAnimationTimer = window.setTimeout(() => {
-    document.body.classList.remove("live-peripheral-beat");
-    peripheralBeatAnimationTimer = null;
-  }, 620);
-}
-
 function triggerHeartbeatEffects(nowMs: number, playAudio = true): void {
   lastBeatAtMs = nowMs;
   triggerBeatAnimation();
-  triggerPeripheralBeatAnimation();
   if (playAudio) {
     playHeartbeatAudio();
   }
@@ -834,9 +820,10 @@ function drawEcg(buffer = displayedWaveform, connected = false): void {
   const center = height * settings.ecgLineHeight;
   const amplitude = height * 0.38;
   const yFor = (value: number) => center - ((value - min) / span - 0.5) * amplitude * 2;
-  const sampleSpacing = width / MAX_SAMPLES;
   const elapsedMs = connected ? performance.now() - latestEcgSamplePerfMs : 0;
   const scrollOffset = scrollingSampleOffset(elapsedMs, ECG_SAMPLE_RATE_HZ, ECG_SAMPLE_RATE_HZ * 2);
+  const visibleWindow = visibleEcgWindowSamples(buffer.samples.length, scrollOffset, MAX_SAMPLES);
+  const sampleSpacing = width / visibleWindow;
   const xFor = (index: number) => width - (buffer.samples.length - 1 - index + scrollOffset) * sampleSpacing;
 
   context.save();
