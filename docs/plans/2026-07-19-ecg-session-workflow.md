@@ -87,6 +87,7 @@ Firmware build/size is not required unless firmware files change.
 - [x] Phase 3: add action marker buttons, marker JSON persistence, and live Raw/Clean marker lines.
 - [x] Phase 4: add historical session scanner, raw.bin ECG loader, static Raw/Clean ECG viewer, metadata summary, analysis summary, marker display, and loader tests.
 - [x] Phase 5: add A/B session comparison, Raw/Clean mode, zero-mean y-axis mode, marker alignment lines, JSON summary export, PNG export, and export tests.
+- [x] Layout refinement: move IMU attitude, 3D view, flat calibration, and ECG analysis configuration from the live page into a dedicated diagnostics page so Raw/Clean ECG plots keep the main live-page space.
 
 ## Discoveries
 
@@ -98,7 +99,8 @@ Firmware build/size is not required unless firmware files change.
 - Live markers are currently shown as vertical lines on Raw and Clean ECG plots. Marker text labels are persisted in `markers.json` and can be rendered by the historical viewer in Phase 4.
 - Historical ECG loading reuses the same V0 binary `PacketParser`, ignores IMU/status packets for the ECG viewer, and downsamples plot points for display only. The saved `raw.bin` is not modified.
 - Dual-track comparison reuses the historical loader and aligns each track to its own session start in seconds. Marker alignment is visualized as colored vertical lines per track.
+- The live page now prioritizes connection state, recording controls, HR/RR/SQI/lead/loss/CRC status, and Raw/Clean ECG. IMU orientation and ECG algorithm details live on the diagnostics page.
 
 ## Result
 
-Implemented through Phase 5 pending final validation and commit.
+Implemented through Phase 5. Live-page layout refinement is implemented and validated.

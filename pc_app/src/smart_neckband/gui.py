@@ -175,12 +175,10 @@ class MainWindow:
         self.refresh_button = QtWidgets.QPushButton("刷新串口")
         self.connect_button = QtWidgets.QPushButton("连接设备")
         self.disconnect_button = QtWidgets.QPushButton("断开连接")
-        self.calibrate_button = QtWidgets.QPushButton("平放校准")
         toolbar.addWidget(self.port_combo, 2)
         toolbar.addWidget(self.refresh_button)
         toolbar.addWidget(self.connect_button)
         toolbar.addWidget(self.disconnect_button)
-        toolbar.addWidget(self.calibrate_button)
         layout.addLayout(toolbar)
 
         connection_group = QtWidgets.QGroupBox("连接状态")
@@ -282,56 +280,11 @@ class MainWindow:
         splitter.addWidget(self.clean_plot)
         layout.addWidget(splitter, 3)
 
-        lower = QtWidgets.QHBoxLayout()
-        imu_panel = QtWidgets.QGridLayout()
-        self.imu_labels: dict[str, object] = {}
-        for row, name in enumerate(("ax", "ay", "az", "gx", "gy", "gz", "roll", "pitch", "yaw")):
-            label = QtWidgets.QLabel(f"{name} --")
-            self.imu_labels[name] = label
-            imu_panel.addWidget(label, row // 3, row % 3)
-        self.yaw_note = QtWidgets.QLabel("Yaw is gyro-integrated and may drift.")
-        imu_panel.addWidget(self.yaw_note, 3, 0, 1, 3)
-        lower.addLayout(imu_panel, 1)
-
-        self.gl_widget = None
-        self.gl_body = None
-        try:
-            import pyqtgraph.opengl as gl
-
-            self.gl_widget = gl.GLViewWidget()
-            self.gl_widget.setCameraPosition(distance=4)
-            grid = gl.GLGridItem()
-            grid.setSize(x=4, y=4)
-            grid.setSpacing(x=0.5, y=0.5)
-            grid.translate(0, 0, -0.45)
-            self.gl_widget.addItem(grid)
-            self.gl_body = gl.GLMeshItem(
-                meshdata=_body_mesh_data(gl),
-                smooth=False,
-                color=(0.12, 0.45, 0.78, 1.0),
-                shader="shaded",
-                drawEdges=True,
-                edgeColor=(0.92, 0.96, 1.0, 1.0),
-            )
-            self.gl_widget.addItem(self.gl_body)
-            lower.addWidget(self.gl_widget, 2)
-        except Exception:
-            lower.addWidget(QtWidgets.QLabel("3D 姿态视图需要 pyqtgraph OpenGL 支持。"), 2)
-        layout.addLayout(lower, 2)
-
-        analysis_group = QtWidgets.QGroupBox("当前 ECG 分析方式")
-        analysis_layout = QtWidgets.QGridLayout(analysis_group)
-        self.analysis_info_labels: list[object] = []
-        for row, text in enumerate(self._analysis_info_lines()):
-            label = QtWidgets.QLabel(text)
-            label.setWordWrap(True)
-            self.analysis_info_labels.append(label)
-            analysis_layout.addWidget(label, row // 2, row % 2)
-        layout.addWidget(analysis_group)
-
+        diagnostics_tab = self._build_diagnostics_tab()
         history_tab = self._build_history_tab()
         compare_tab = self._build_compare_tab()
         tabs.addTab(live_tab, "实时")
+        tabs.addTab(diagnostics_tab, "诊断")
         tabs.addTab(history_tab, "历史记录")
         tabs.addTab(compare_tab, "双轨对比")
         self.window.setCentralWidget(tabs)
@@ -362,6 +315,66 @@ class MainWindow:
         self.timer.start(100)
         self.refresh_ports()
         self.refresh_history_sessions()
+
+    def _build_diagnostics_tab(self) -> object:
+        QtWidgets = self.QtWidgets
+        layout_widget = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(layout_widget)
+
+        controls = QtWidgets.QHBoxLayout()
+        self.calibrate_button = QtWidgets.QPushButton("平放校准")
+        controls.addWidget(self.calibrate_button)
+        controls.addStretch(1)
+        layout.addLayout(controls)
+
+        imu_group = QtWidgets.QGroupBox("IMU 姿态")
+        imu_group_layout = QtWidgets.QHBoxLayout(imu_group)
+        imu_panel = QtWidgets.QGridLayout()
+        self.imu_labels: dict[str, object] = {}
+        for row, name in enumerate(("ax", "ay", "az", "gx", "gy", "gz", "roll", "pitch", "yaw")):
+            label = QtWidgets.QLabel(f"{name} --")
+            self.imu_labels[name] = label
+            imu_panel.addWidget(label, row // 3, row % 3)
+        self.yaw_note = QtWidgets.QLabel("Yaw is gyro-integrated and may drift.")
+        imu_panel.addWidget(self.yaw_note, 3, 0, 1, 3)
+        imu_group_layout.addLayout(imu_panel, 1)
+
+        self.gl_widget = None
+        self.gl_body = None
+        try:
+            import pyqtgraph.opengl as gl
+
+            self.gl_widget = gl.GLViewWidget()
+            self.gl_widget.setCameraPosition(distance=4)
+            grid = gl.GLGridItem()
+            grid.setSize(x=4, y=4)
+            grid.setSpacing(x=0.5, y=0.5)
+            grid.translate(0, 0, -0.45)
+            self.gl_widget.addItem(grid)
+            self.gl_body = gl.GLMeshItem(
+                meshdata=_body_mesh_data(gl),
+                smooth=False,
+                color=(0.12, 0.45, 0.78, 1.0),
+                shader="shaded",
+                drawEdges=True,
+                edgeColor=(0.92, 0.96, 1.0, 1.0),
+            )
+            self.gl_widget.addItem(self.gl_body)
+            imu_group_layout.addWidget(self.gl_widget, 2)
+        except Exception:
+            imu_group_layout.addWidget(QtWidgets.QLabel("3D 姿态视图需要 pyqtgraph OpenGL 支持。"), 2)
+        layout.addWidget(imu_group, 2)
+
+        analysis_group = QtWidgets.QGroupBox("当前 ECG 分析方式")
+        analysis_layout = QtWidgets.QGridLayout(analysis_group)
+        self.analysis_info_labels: list[object] = []
+        for row, text in enumerate(self._analysis_info_lines()):
+            label = QtWidgets.QLabel(text)
+            label.setWordWrap(True)
+            self.analysis_info_labels.append(label)
+            analysis_layout.addWidget(label, row // 2, row % 2)
+        layout.addWidget(analysis_group, 1)
+        return layout_widget
 
     def _build_history_tab(self) -> object:
         QtWidgets = self.QtWidgets
@@ -708,25 +721,7 @@ class MainWindow:
 
     def stop_recording(self) -> None:
         if self.session_recorder is None:
-            marker_enabled = False
-            for button in (
-                self.swallow_marker_button,
-                self.cough_marker_button,
-                self.talk_marker_button,
-                self.turn_marker_button,
-                self.custom_marker_button,
-            ):
-                button.setEnabled(marker_enabled)
             return
-        marker_enabled = self.recording_state is RecordingState.RECORDING
-        for button in (
-            self.swallow_marker_button,
-            self.cough_marker_button,
-            self.talk_marker_button,
-            self.turn_marker_button,
-            self.custom_marker_button,
-        ):
-            button.setEnabled(marker_enabled)
         if self.recording_state in (RecordingState.COUNTDOWN, RecordingState.WAITING_FIRST_VALID_SAMPLE):
             self._finish_recording(status="interrupted", reason="用户停止，尚未写入有效 ECG 数据")
             return
@@ -765,6 +760,15 @@ class MainWindow:
         self.stop_record_button.setEnabled(self.session_recorder is not None)
         self.cancel_countdown_button.setEnabled(self.recording_state is RecordingState.COUNTDOWN)
         self.start_record_button.setEnabled(self.session_recorder is None)
+        marker_enabled = self.session_recorder is not None and self.recording_state is RecordingState.RECORDING
+        for button in (
+            self.swallow_marker_button,
+            self.cough_marker_button,
+            self.talk_marker_button,
+            self.turn_marker_button,
+            self.custom_marker_button,
+        ):
+            button.setEnabled(marker_enabled)
         if self.session_recorder is None:
             return
 
