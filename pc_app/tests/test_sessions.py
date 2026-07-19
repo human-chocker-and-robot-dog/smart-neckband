@@ -37,6 +37,12 @@ def test_session_recorder_writes_completed_session_files(tmp_path) -> None:
     recorder.start_at_sample(100)
     recorder.write_raw(b"packet-1")
     recorder.update_latest_sample(139)
+    marker = recorder.add_marker(
+        label="吞咽",
+        marker_type="swallow",
+        sample_index=120,
+        device_timestamp_us=240_000,
+    )
     recorder.write_raw(b"packet-2")
     final_dir = recorder.finish(status="completed")
 
@@ -57,8 +63,13 @@ def test_session_recorder_writes_completed_session_files(tmp_path) -> None:
     assert metadata.end_sample_index == 139
     assert metadata.interrupted_reason is None
 
+    assert marker.id == "m0001"
     markers = json.loads((final_dir / "markers.json").read_text(encoding="utf-8"))
-    assert markers == {"schema_version": 1, "markers": []}
+    assert markers["schema_version"] == 1
+    assert markers["markers"][0]["label"] == "吞咽"
+    assert markers["markers"][0]["type"] == "swallow"
+    assert markers["markers"][0]["sample_index"] == 120
+    assert markers["markers"][0]["device_timestamp_us"] == 240_000
     analysis = json.loads((final_dir / "analysis.json").read_text(encoding="utf-8"))
     assert analysis["analysis_completed"] is False
     assert analysis["sampling_rate_hz"] == ECG_SAMPLE_RATE_HZ

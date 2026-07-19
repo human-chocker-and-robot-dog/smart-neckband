@@ -224,6 +224,19 @@ class ExperimentSessionRecorder:
             if self._state is RecordingState.RECORDING:
                 self._latest_sample_index = max(sample_index, self._latest_sample_index or sample_index)
 
+    def add_marker(self, *, label: str, marker_type: str, sample_index: int, device_timestamp_us: int) -> SessionMarker:
+        with self._lock:
+            marker = SessionMarker(
+                id=f"m{len(self.markers) + 1:04d}",
+                label=label.strip() or marker_type,
+                type=marker_type,
+                sample_index=sample_index,
+                device_timestamp_us=device_timestamp_us,
+                created_at_pc=now_iso(),
+            )
+            self.markers.append(marker)
+            return marker
+
     def write_raw(self, data: bytes) -> None:
         if self._state is not RecordingState.RECORDING:
             return

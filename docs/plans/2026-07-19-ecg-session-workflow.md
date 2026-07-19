@@ -84,7 +84,7 @@ Firmware build/size is not required unless firmware files change.
 - [x] Phase 1: add serial runtime status and Chinese connection-state mapping.
 - [x] Phase 1: add live GUI connection status and analysis information panel.
 - [x] Phase 2: add session metadata model, delayed recording controls, raw session capture, interrupted-save behavior, and session directory creation.
-- [ ] Phase 3: action markers.
+- [x] Phase 3: add action marker buttons, marker JSON persistence, and live Raw/Clean marker lines.
 - [ ] Phase 4: historical session viewer.
 - [ ] Phase 5: dual-track comparison and export.
 
@@ -95,7 +95,8 @@ Firmware build/size is not required unless firmware files change.
 - Current HR uses physiologically plausible RR intervals from 300 ms to 2000 ms and a recent-RR median.
 - Current clipping handling treats a window as clipped when at least 80 percent of ECG samples carry `ADC_CLIPPING`.
 - Session recording clears a small raw chunk prebuffer when it starts waiting for the first post-countdown ECG sample, then flushes that prebuffer into `raw.bin` when the first new sample is observed. This avoids retroactively including pre-countdown bytes while reducing the chance of dropping the trigger packet.
+- Live markers are currently shown as vertical lines on Raw and Clean ECG plots. Marker text labels are persisted in `markers.json` and can be rendered by the historical viewer in Phase 4.
 
 ## Result
 
-In progress. Phase 1 is committed. Phase 2 is implemented pending validation and commit.
+In progress. Phase 1 and Phase 2 are committed. Phase 3 is implemented pending validation and commit.

@@ -8,7 +8,7 @@ import time
 from .analysis import EcgAnalysisResult, analyze_recent_ecg, get_ecg_analysis_info
 from .attitude import ComplementaryAttitudeFilter, Orientation
 from .buffers import ImuSample
-from .protocol import FLAG_LO_MINUS, FLAG_LO_PLUS
+from .protocol import ECG_SAMPLE_RATE_HZ, FLAG_LO_MINUS, FLAG_LO_PLUS
 from .serial_io import PcDataStores, SerialPacketReader, list_serial_ports
 from .sessions import ExperimentSessionRecorder, PLACEMENT_PRESETS, WIRE_MAPS, RecordingState
 from .status import ConnectionSnapshot, ConnectionState, connection_state_text
@@ -137,6 +137,8 @@ class MainWindow:
         self.record_prebuffer_bytes = 0
         self.record_prebuffer_limit_bytes = 64 * 1024
         self.record_prebuffer_lock = Lock()
+        self.raw_marker_items: list[object] = []
+        self.clean_marker_items: list[object] = []
         self.ecg_worker = EcgAnalysisWorker(self.stores)
         self.attitude_worker = AttitudeWorker(self.stores)
         self.ecg_worker.start()
@@ -203,6 +205,13 @@ class MainWindow:
         self.cancel_countdown_button = QtWidgets.QPushButton("取消倒计时")
         self.record_status_label = QtWidgets.QLabel("未记录")
         self.record_sample_label = QtWidgets.QLabel("记录样本 0")
+        self.swallow_marker_button = QtWidgets.QPushButton("吞咽")
+        self.cough_marker_button = QtWidgets.QPushButton("咳嗽")
+        self.talk_marker_button = QtWidgets.QPushButton("说话")
+        self.turn_marker_button = QtWidgets.QPushButton("转头")
+        self.custom_marker_edit = QtWidgets.QLineEdit()
+        self.custom_marker_edit.setPlaceholderText("自定义标记")
+        self.custom_marker_button = QtWidgets.QPushButton("添加标记")
         record_layout.addWidget(QtWidgets.QLabel("记录名称"), 0, 0)
         record_layout.addWidget(self.record_name_edit, 0, 1)
         record_layout.addWidget(QtWidgets.QLabel("电极点位"), 0, 2)
@@ -220,6 +229,12 @@ class MainWindow:
         record_layout.addWidget(self.cancel_countdown_button, 3, 2)
         record_layout.addWidget(self.record_status_label, 3, 3)
         record_layout.addWidget(self.record_sample_label, 4, 0, 1, 4)
+        record_layout.addWidget(self.swallow_marker_button, 5, 0)
+        record_layout.addWidget(self.cough_marker_button, 5, 1)
+        record_layout.addWidget(self.talk_marker_button, 5, 2)
+        record_layout.addWidget(self.turn_marker_button, 5, 3)
+        record_layout.addWidget(self.custom_marker_edit, 6, 0, 1, 3)
+        record_layout.addWidget(self.custom_marker_button, 6, 3)
         layout.addWidget(record_group)
 
         status_layout = QtWidgets.QGridLayout()
@@ -302,6 +317,11 @@ class MainWindow:
         self.start_record_button.clicked.connect(self.start_recording)
         self.stop_record_button.clicked.connect(self.stop_recording)
         self.cancel_countdown_button.clicked.connect(self.cancel_countdown)
+        self.swallow_marker_button.clicked.connect(lambda: self.add_marker("swallow", "吞咽"))
+        self.cough_marker_button.clicked.connect(lambda: self.add_marker("cough", "咳嗽"))
+        self.talk_marker_button.clicked.connect(lambda: self.add_marker("talk", "说话"))
+        self.turn_marker_button.clicked.connect(lambda: self.add_marker("turn", "转头"))
+        self.custom_marker_button.clicked.connect(self.add_custom_marker)
 
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.update_view)
@@ -383,6 +403,7 @@ class MainWindow:
             x = [(sample.timestamp_us - t0) / 1_000_000.0 for sample in recent]
             y = [sample.raw_adc for sample in recent]
             self.raw_curve.setData(x, y)
+        self._update_marker_lines(recent)
 
         analysis = self.ecg_worker.latest()
         if analysis is not None and analysis.cleaned:
@@ -516,6 +537,27 @@ class MainWindow:
     def _selected_placement(self) -> object:
         return self.placement_combo.currentData()
 
+    def add_custom_marker(self) -> None:
+        label = self.custom_marker_edit.text().strip()
+        self.add_marker("custom", label or "自定义")
+        self.custom_marker_edit.clear()
+
+    def add_marker(self, marker_type: str, label: str) -> None:
+        if self.session_recorder is None or self.recording_state is not RecordingState.RECORDING:
+            self.record_status_label.setText("只能在记录中添加标记")
+            return
+        latest = self._latest_ecg_sample()
+        if latest is None:
+            self.record_status_label.setText("暂无 ECG 样本，无法添加标记")
+            return
+        marker = self.session_recorder.add_marker(
+            label=label,
+            marker_type=marker_type,
+            sample_index=getattr(latest, "sample_index"),
+            device_timestamp_us=getattr(latest, "timestamp_us"),
+        )
+        self.record_status_label.setText(f"已添加标记：{marker.label} @ {marker.sample_index}")
+
     def _arm_recording_wait(self) -> None:
         with self.record_prebuffer_lock:
             self.record_prebuffer.clear()
@@ -553,7 +595,25 @@ class MainWindow:
 
     def stop_recording(self) -> None:
         if self.session_recorder is None:
+            marker_enabled = False
+            for button in (
+                self.swallow_marker_button,
+                self.cough_marker_button,
+                self.talk_marker_button,
+                self.turn_marker_button,
+                self.custom_marker_button,
+            ):
+                button.setEnabled(marker_enabled)
             return
+        marker_enabled = self.recording_state is RecordingState.RECORDING
+        for button in (
+            self.swallow_marker_button,
+            self.cough_marker_button,
+            self.talk_marker_button,
+            self.turn_marker_button,
+            self.custom_marker_button,
+        ):
+            button.setEnabled(marker_enabled)
         if self.recording_state in (RecordingState.COUNTDOWN, RecordingState.WAITING_FIRST_VALID_SAMPLE):
             self._finish_recording(status="interrupted", reason="用户停止，尚未写入有效 ECG 数据")
             return
@@ -623,6 +683,32 @@ class MainWindow:
             seconds = self.session_recorder.sample_count / 500.0
             self.record_status_label.setText(f"正在记录：{seconds:0>8.1f} 秒")
             self.record_sample_label.setText(f"记录样本 {self.session_recorder.sample_count}")
+
+    def _update_marker_lines(self, recent: list[object]) -> None:
+        for item in self.raw_marker_items:
+            self.raw_plot.removeItem(item)
+        for item in self.clean_marker_items:
+            self.clean_plot.removeItem(item)
+        self.raw_marker_items.clear()
+        self.clean_marker_items.clear()
+        if self.session_recorder is None or not recent:
+            return
+
+        start_timestamp_us = getattr(recent[0], "timestamp_us")
+        end_timestamp_us = getattr(recent[-1], "timestamp_us")
+        start_sample_index = getattr(recent[0], "sample_index")
+        end_sample_index = getattr(recent[-1], "sample_index")
+        for marker in self.session_recorder.markers:
+            if start_timestamp_us <= marker.device_timestamp_us <= end_timestamp_us:
+                raw_x = (marker.device_timestamp_us - start_timestamp_us) / 1_000_000.0
+                line = self.pg.InfiniteLine(pos=raw_x, angle=90, pen=self.pg.mkPen("#f9a825", width=1))
+                self.raw_plot.addItem(line)
+                self.raw_marker_items.append(line)
+            if start_sample_index <= marker.sample_index <= end_sample_index:
+                clean_x = (marker.sample_index - start_sample_index) / float(ECG_SAMPLE_RATE_HZ)
+                line = self.pg.InfiniteLine(pos=clean_x, angle=90, pen=self.pg.mkPen("#f9a825", width=1))
+                self.clean_plot.addItem(line)
+                self.clean_marker_items.append(line)
 
     def _update_imu(self) -> None:
         orientation, sample = self.attitude_worker.latest()
