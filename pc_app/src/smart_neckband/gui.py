@@ -10,15 +10,23 @@ from .analysis import EcgAnalysisResult, analyze_recent_ecg, get_ecg_analysis_in
 from .attitude import ComplementaryAttitudeFilter, Orientation
 from .buffers import ImuSample
 from .history import (
+    ComparisonTrack,
+    ComparisonViewport,
     HistoryEcgData,
     analyze_history_ecg,
-    comparison_summary,
+    clamp_viewport,
+    default_compare_csv_name,
     downsample_xy,
     list_session_records,
     load_session_analysis_summary,
     load_session_ecg_samples,
     load_session_markers,
-    write_json_export,
+    session_duration_seconds,
+    visible_markers,
+    visible_r_peak_indices,
+    visible_values,
+    write_compare_csv,
+    y_range_for,
 )
 from .protocol import ECG_SAMPLE_RATE_HZ, FLAG_LO_MINUS, FLAG_LO_PLUS
 from .serial_io import PcDataStores, SerialPacketReader, list_serial_ports
@@ -155,9 +163,11 @@ class MainWindow:
         self.history_ecg_data: HistoryEcgData | None = None
         self.history_markers: tuple[object, ...] = ()
         self.history_marker_items: list[object] = []
-        self.compare_a: tuple[object, HistoryEcgData, tuple[object, ...]] | None = None
-        self.compare_b: tuple[object, HistoryEcgData, tuple[object, ...]] | None = None
-        self.compare_marker_items: list[object] = []
+        self.compare_a: ComparisonTrack | None = None
+        self.compare_b: ComparisonTrack | None = None
+        self.compare_viewport = ComparisonViewport(0.0, 10.0)
+        self.compare_marker_items_a: list[object] = []
+        self.compare_marker_items_b: list[object] = []
         self.ecg_worker = EcgAnalysisWorker(self.stores)
         self.attitude_worker = AttitudeWorker(self.stores)
         self.ecg_worker.start()
@@ -307,7 +317,14 @@ class MainWindow:
         self.compare_load_button.clicked.connect(self.load_compare_sessions)
         self.compare_mode_combo.currentIndexChanged.connect(self.update_compare_plot)
         self.compare_y_mode_combo.currentIndexChanged.connect(self.update_compare_plot)
-        self.compare_export_json_button.clicked.connect(self.export_compare_json)
+        self.compare_duration_combo.currentIndexChanged.connect(self.update_compare_duration)
+        self.compare_scrollbar.valueChanged.connect(self.update_compare_scrollbar)
+        self.compare_show_rpeaks_checkbox.stateChanged.connect(self.update_compare_plot)
+        self.compare_show_markers_checkbox.stateChanged.connect(self.update_compare_plot)
+        self.compare_marker_jump_combo.currentIndexChanged.connect(self.jump_compare_marker_type)
+        self.compare_prev_marker_button.clicked.connect(lambda: self.jump_compare_marker(-1))
+        self.compare_next_marker_button.clicked.connect(lambda: self.jump_compare_marker(1))
+        self.compare_export_csv_button.clicked.connect(self.export_compare_csv)
         self.compare_export_png_button.clicked.connect(self.export_compare_png)
 
         self.timer = QtCore.QTimer()
@@ -417,6 +434,7 @@ class MainWindow:
     def _build_compare_tab(self) -> object:
         QtWidgets = self.QtWidgets
         layout_widget = QtWidgets.QWidget()
+        self.compare_tab_widget = layout_widget
         layout = QtWidgets.QVBoxLayout(layout_widget)
 
         top = QtWidgets.QGridLayout()
@@ -425,33 +443,89 @@ class MainWindow:
         self.compare_refresh_button = QtWidgets.QPushButton("刷新记录")
         self.compare_load_button = QtWidgets.QPushButton("加载对比")
         self.compare_mode_combo = QtWidgets.QComboBox()
-        self.compare_mode_combo.addItem("Raw", "raw")
-        self.compare_mode_combo.addItem("Clean", "clean")
+        self.compare_mode_combo.addItem("原始 ECG", "raw")
+        self.compare_mode_combo.addItem("清洗后 ECG", "clean")
         self.compare_y_mode_combo = QtWidgets.QComboBox()
-        self.compare_y_mode_combo.addItem("原始幅值", "raw")
-        self.compare_y_mode_combo.addItem("零均值", "zero_mean")
-        self.compare_export_json_button = QtWidgets.QPushButton("导出 JSON")
-        self.compare_export_png_button = QtWidgets.QPushButton("导出 PNG")
-        top.addWidget(QtWidgets.QLabel("A"), 0, 0)
-        top.addWidget(self.compare_a_combo, 0, 1, 1, 5)
-        top.addWidget(QtWidgets.QLabel("B"), 1, 0)
-        top.addWidget(self.compare_b_combo, 1, 1, 1, 5)
+        self.compare_y_mode_combo.addItem("分别自动缩放", "auto")
+        self.compare_y_mode_combo.addItem("相同幅值范围", "same")
+        self.compare_y_mode_combo.addItem("归一化显示", "normalized")
+        self.compare_duration_combo = QtWidgets.QComboBox()
+        self.compare_duration_combo.addItem("5 秒", 5.0)
+        self.compare_duration_combo.addItem("10 秒", 10.0)
+        self.compare_duration_combo.addItem("20 秒", 20.0)
+        self.compare_duration_combo.addItem("30 秒", 30.0)
+        self.compare_duration_combo.addItem("完整记录", None)
+        self.compare_duration_combo.setCurrentIndex(1)
+        self.compare_show_rpeaks_checkbox = QtWidgets.QCheckBox("显示 R 峰")
+        self.compare_show_rpeaks_checkbox.setChecked(True)
+        self.compare_show_markers_checkbox = QtWidgets.QCheckBox("显示动作标记")
+        self.compare_show_markers_checkbox.setChecked(True)
+        self.compare_marker_jump_combo = QtWidgets.QComboBox()
+        self.compare_marker_jump_combo.addItem("动作位置：完整记录", "all")
+        self.compare_marker_jump_combo.addItem("吞咽", "swallow")
+        self.compare_marker_jump_combo.addItem("咳嗽", "cough")
+        self.compare_marker_jump_combo.addItem("说话", "talk")
+        self.compare_marker_jump_combo.addItem("转头", "turn")
+        self.compare_marker_jump_combo.addItem("自定义标记", "custom")
+        self.compare_prev_marker_button = QtWidgets.QPushButton("上一个标记")
+        self.compare_next_marker_button = QtWidgets.QPushButton("下一个标记")
+        self.compare_export_csv_button = QtWidgets.QPushButton("导出分析 CSV")
+        self.compare_export_png_button = QtWidgets.QPushButton("导出当前视图 PNG")
+        top.addWidget(QtWidgets.QLabel("记录 A"), 0, 0)
+        top.addWidget(self.compare_a_combo, 0, 1, 1, 7)
+        top.addWidget(QtWidgets.QLabel("记录 B"), 1, 0)
+        top.addWidget(self.compare_b_combo, 1, 1, 1, 7)
         top.addWidget(self.compare_refresh_button, 2, 0)
         top.addWidget(self.compare_load_button, 2, 1)
-        top.addWidget(self.compare_mode_combo, 2, 2)
-        top.addWidget(self.compare_y_mode_combo, 2, 3)
-        top.addWidget(self.compare_export_json_button, 2, 4)
-        top.addWidget(self.compare_export_png_button, 2, 5)
+        top.addWidget(QtWidgets.QLabel("显示数据"), 2, 2)
+        top.addWidget(self.compare_mode_combo, 2, 3)
+        top.addWidget(QtWidgets.QLabel("纵轴模式"), 2, 4)
+        top.addWidget(self.compare_y_mode_combo, 2, 5)
+        top.addWidget(QtWidgets.QLabel("显示时长"), 2, 6)
+        top.addWidget(self.compare_duration_combo, 2, 7)
+        top.addWidget(self.compare_show_rpeaks_checkbox, 3, 0)
+        top.addWidget(self.compare_show_markers_checkbox, 3, 1)
+        top.addWidget(self.compare_marker_jump_combo, 3, 2, 1, 3)
+        top.addWidget(self.compare_prev_marker_button, 3, 5)
+        top.addWidget(self.compare_next_marker_button, 3, 6)
+        top.addWidget(self.compare_export_csv_button, 4, 0)
+        top.addWidget(self.compare_export_png_button, 4, 1, 1, 2)
         layout.addLayout(top)
 
         self.compare_status_label = QtWidgets.QLabel("未加载对比")
         self.compare_status_label.setWordWrap(True)
         layout.addWidget(self.compare_status_label)
 
-        self.compare_plot = self.pg.PlotWidget(title="A/B ECG 对比")
-        self.compare_curve_a = self.compare_plot.plot(pen=self.pg.mkPen("#1769aa", width=1))
-        self.compare_curve_b = self.compare_plot.plot(pen=self.pg.mkPen("#d81b60", width=1))
-        layout.addWidget(self.compare_plot, 1)
+        self.compare_range_label = QtWidgets.QLabel("当前范围：--")
+        layout.addWidget(self.compare_range_label)
+        self.compare_normalized_note = QtWidgets.QLabel("归一化模式仅用于比较波形形态，不能比较真实信号振幅。")
+        self.compare_normalized_note.setVisible(False)
+        layout.addWidget(self.compare_normalized_note)
+
+        self.compare_plot_a = self.pg.PlotWidget(title="记录 A")
+        self.compare_plot_b = self.pg.PlotWidget(title="记录 B")
+        self.compare_plot_a.setMouseEnabled(x=True, y=False)
+        self.compare_plot_b.setMouseEnabled(x=True, y=False)
+        self.compare_plot_b.setXLink(self.compare_plot_a)
+        self.compare_curve_a = self.compare_plot_a.plot(pen=self.pg.mkPen("#1769aa", width=1))
+        self.compare_curve_b = self.compare_plot_b.plot(pen=self.pg.mkPen("#d81b60", width=1))
+        self.compare_peak_scatter_a = self.pg.ScatterPlotItem(
+            pen=self.pg.mkPen("#c62828"),
+            brush=self.pg.mkBrush("#c62828"),
+            size=7,
+        )
+        self.compare_peak_scatter_b = self.pg.ScatterPlotItem(
+            pen=self.pg.mkPen("#c62828"),
+            brush=self.pg.mkBrush("#c62828"),
+            size=7,
+        )
+        self.compare_plot_a.addItem(self.compare_peak_scatter_a)
+        self.compare_plot_b.addItem(self.compare_peak_scatter_b)
+        layout.addWidget(self.compare_plot_a, 1)
+        layout.addWidget(self.compare_plot_b, 1)
+
+        self.compare_scrollbar = QtWidgets.QScrollBar(self.QtCore.Qt.Horizontal)
+        layout.addWidget(self.compare_scrollbar)
         return layout_widget
 
     def show(self) -> None:
@@ -951,96 +1025,281 @@ class MainWindow:
         if record_a is None or record_b is None:
             return
         try:
-            self.compare_a = self._load_compare_track(record_a)
-            self.compare_b = self._load_compare_track(record_b)
+            self.compare_a = self._load_compare_track("A", record_a)
+            self.compare_b = self._load_compare_track("B", record_b)
         except Exception as exc:
             self.compare_status_label.setText(f"加载失败：{exc}")
             return
+        self.compare_viewport = self._clamped_compare_viewport(ComparisonViewport(0.0, self._selected_compare_duration()))
         self.compare_status_label.setText(
             f"A {record_a.metadata.display_name} / B {record_b.metadata.display_name}"
         )
         self.update_compare_plot()
 
-    def _load_compare_track(self, record: object) -> tuple[object, HistoryEcgData, tuple[object, ...]]:
+    def _load_compare_track(self, label: str, record: object) -> ComparisonTrack:
         markers = load_session_markers(record.session_dir)
         samples = load_session_ecg_samples(record.session_dir)
         data = analyze_history_ecg(samples)
-        return record, data, markers
+        return ComparisonTrack(label, record, data, markers)
 
-    def update_compare_plot(self) -> None:
+    def _selected_compare_duration(self) -> float | None:
+        value = self.compare_duration_combo.currentData()
+        return None if value is None else float(value)
+
+    def _max_compare_duration(self) -> float:
+        durations = []
+        if self.compare_a is not None:
+            durations.append(session_duration_seconds(self.compare_a.data))
+        if self.compare_b is not None:
+            durations.append(session_duration_seconds(self.compare_b.data))
+        return max(durations) if durations else 0.0
+
+    def _clamped_compare_viewport(self, viewport: ComparisonViewport) -> ComparisonViewport:
+        return clamp_viewport(viewport, max_duration_seconds=self._max_compare_duration())
+
+    def update_compare_duration(self) -> None:
+        self.compare_viewport = self._clamped_compare_viewport(
+            ComparisonViewport(self.compare_viewport.start_seconds, self._selected_compare_duration())
+        )
+        self.update_compare_plot()
+
+    def update_compare_scrollbar(self, value: int) -> None:
+        if self.compare_a is None or self.compare_b is None:
+            return
+        self.compare_viewport = self._clamped_compare_viewport(
+            ComparisonViewport(value / 1000.0, self.compare_viewport.duration_seconds)
+        )
+        self.update_compare_plot(update_scrollbar=False)
+
+    def update_compare_plot(self, update_scrollbar: bool = True) -> None:
         if self.compare_a is None or self.compare_b is None:
             return
         mode = self.compare_mode_combo.currentData()
         y_axis_mode = self.compare_y_mode_combo.currentData()
-        self._plot_compare_track(self.compare_a, self.compare_curve_a, mode, y_axis_mode)
-        self._plot_compare_track(self.compare_b, self.compare_curve_b, mode, y_axis_mode)
+        self.compare_viewport = self._clamped_compare_viewport(self.compare_viewport)
+        x_a, y_a, slice_a = visible_values(
+            self.compare_a.data,
+            mode=str(mode),
+            viewport=self.compare_viewport,
+            y_axis_mode=str(y_axis_mode),
+        )
+        x_b, y_b, slice_b = visible_values(
+            self.compare_b.data,
+            mode=str(mode),
+            viewport=self.compare_viewport,
+            y_axis_mode=str(y_axis_mode),
+        )
+        self.compare_curve_a.setData(x_a, y_a)
+        self.compare_curve_b.setData(x_b, y_b)
+        self._update_compare_titles(str(mode))
+        self._update_compare_y_ranges(y_a, y_b, str(y_axis_mode))
+        self._update_compare_rpeaks(self.compare_a, self.compare_peak_scatter_a, x_a, y_a, slice_a)
+        self._update_compare_rpeaks(self.compare_b, self.compare_peak_scatter_b, x_b, y_b, slice_b)
+        self._update_compare_markers(
+            self.compare_a,
+            self.compare_plot_a,
+            self.compare_marker_items_a,
+            slice_a,
+            "#1769aa",
+        )
+        self._update_compare_markers(
+            self.compare_b,
+            self.compare_plot_b,
+            self.compare_marker_items_b,
+            slice_b,
+            "#d81b60",
+        )
+        self._update_compare_range_label(slice_a, slice_b)
+        if update_scrollbar:
+            self._update_compare_scrollbar_control()
+        end_seconds = self._compare_view_end_seconds()
+        self.compare_plot_a.setXRange(self.compare_viewport.start_seconds, end_seconds, padding=0.0)
+        self.compare_plot_b.setXRange(self.compare_viewport.start_seconds, end_seconds, padding=0.0)
 
-        for item in self.compare_marker_items:
-            self.compare_plot.removeItem(item)
-        self.compare_marker_items.clear()
-        self._plot_compare_markers(self.compare_a, "#1769aa")
-        self._plot_compare_markers(self.compare_b, "#d81b60")
+    def _compare_view_end_seconds(self) -> float:
+        if self.compare_viewport.duration_seconds is None:
+            return self._max_compare_duration()
+        return self.compare_viewport.start_seconds + self.compare_viewport.duration_seconds
 
-    def _plot_compare_track(
+    def _update_compare_scrollbar_control(self) -> None:
+        max_duration = self._max_compare_duration()
+        duration = self.compare_viewport.duration_seconds
+        maximum = 0 if duration is None else max(0, int(round((max_duration - duration) * 1000.0)))
+        self.compare_scrollbar.blockSignals(True)
+        self.compare_scrollbar.setRange(0, maximum)
+        self.compare_scrollbar.setSingleStep(500)
+        self.compare_scrollbar.setPageStep(max(1, int(round((duration or max_duration) * 1000.0))))
+        self.compare_scrollbar.setValue(int(round(self.compare_viewport.start_seconds * 1000.0)))
+        self.compare_scrollbar.blockSignals(False)
+
+    def _update_compare_titles(self, mode: str) -> None:
+        if self.compare_a is None or self.compare_b is None:
+            return
+        mode_text = "清洗后 ECG" if mode == "clean" else "原始 ECG"
+        for plot, track in ((self.compare_plot_a, self.compare_a), (self.compare_plot_b, self.compare_b)):
+            metadata = track.record.metadata
+            plot.setTitle(f"记录 {track.label} · {metadata.placement_name} · {mode_text}")
+
+    def _update_compare_y_ranges(self, y_a: list[float], y_b: list[float], y_axis_mode: str) -> None:
+        self.compare_normalized_note.setVisible(y_axis_mode == "normalized")
+        if y_axis_mode == "same":
+            combined_range = y_range_for(y_a + y_b)
+            if combined_range is not None:
+                self.compare_plot_a.setYRange(*combined_range, padding=0.0)
+                self.compare_plot_b.setYRange(*combined_range, padding=0.0)
+            return
+        if y_axis_mode == "normalized":
+            self.compare_plot_a.setYRange(-1.1, 1.1, padding=0.0)
+            self.compare_plot_b.setYRange(-1.1, 1.1, padding=0.0)
+            return
+        range_a = y_range_for(y_a)
+        range_b = y_range_for(y_b)
+        if range_a is not None:
+            self.compare_plot_a.setYRange(*range_a, padding=0.0)
+        if range_b is not None:
+            self.compare_plot_b.setYRange(*range_b, padding=0.0)
+
+    def _update_compare_rpeaks(
         self,
-        track: tuple[object, HistoryEcgData, tuple[object, ...]],
-        curve: object,
-        mode: str,
-        y_axis_mode: str,
+        track: ComparisonTrack,
+        scatter: object,
+        x_values: list[float],
+        y_values: list[float],
+        sample_slice: slice,
     ) -> None:
-        _record, data, _markers = track
-        values = data.clean_values if mode == "clean" else data.raw_values
-        if not data.samples or not values:
-            curve.setData([], [])
+        if not self.compare_show_rpeaks_checkbox.isChecked():
+            scatter.setData([])
             return
-        first_sample_index = data.samples[0].sample_index
-        x_values = [
-            (sample.sample_index - first_sample_index) / float(ECG_SAMPLE_RATE_HZ)
-            for sample in data.samples[: len(values)]
-        ]
-        y_values = list(values)
-        if y_axis_mode == "zero_mean" and y_values:
-            mean_value = sum(y_values) / len(y_values)
-            y_values = [value - mean_value for value in y_values]
-        x_plot, y_plot = downsample_xy(x_values, y_values, max_points=12_000)
-        curve.setData(x_plot, y_plot)
+        start = sample_slice.start or 0
+        spots = []
+        for index in visible_r_peak_indices(track.data, sample_slice):
+            local_index = index - start
+            if 0 <= local_index < len(x_values) and 0 <= local_index < len(y_values):
+                spots.append({"pos": (x_values[local_index], y_values[local_index])})
+        scatter.setData(spots)
 
-    def _plot_compare_markers(self, track: tuple[object, HistoryEcgData, tuple[object, ...]], color: str) -> None:
-        _record, data, markers = track
-        if not data.samples:
+    def _update_compare_markers(
+        self,
+        track: ComparisonTrack,
+        plot: object,
+        marker_items: list[object],
+        sample_slice: slice,
+        color: str,
+    ) -> None:
+        for item in marker_items:
+            plot.removeItem(item)
+        marker_items.clear()
+        if not self.compare_show_markers_checkbox.isChecked():
             return
-        first_sample_index = data.samples[0].sample_index
-        last_sample_index = data.samples[-1].sample_index
-        for marker in markers:
-            if first_sample_index <= marker.sample_index <= last_sample_index:
-                x_pos = (marker.sample_index - first_sample_index) / float(ECG_SAMPLE_RATE_HZ)
-                line = self.pg.InfiniteLine(pos=x_pos, angle=90, pen=self.pg.mkPen(color, width=1))
-                self.compare_plot.addItem(line)
-                self.compare_marker_items.append(line)
+        for offset, marker in enumerate(visible_markers(track, sample_slice)):
+            if not track.data.samples:
+                continue
+            x_pos = (marker.sample_index - track.data.samples[0].sample_index) / float(ECG_SAMPLE_RATE_HZ)
+            pen = self.pg.mkPen(color, width=1, style=self.QtCore.Qt.DashLine)
+            line = self.pg.InfiniteLine(pos=x_pos, angle=90, pen=pen)
+            line.setToolTip(f"{marker.label} {x_pos:.2f} 秒")
+            plot.addItem(line)
+            marker_items.append(line)
+            label = self.pg.TextItem(marker.label, color=color, anchor=(0.5, 0.0 if offset % 2 else 1.0))
+            label.setPos(x_pos, 0.0)
+            label.setToolTip(f"{marker.label} {x_pos:.2f} 秒")
+            plot.addItem(label)
+            marker_items.append(label)
 
-    def export_compare_json(self) -> None:
+    def _update_compare_range_label(self, slice_a: slice, slice_b: slice) -> None:
+        start = self.compare_viewport.start_seconds
+        end = self._compare_view_end_seconds()
+        duration_label = "完整记录" if self.compare_viewport.duration_seconds is None else f"{self.compare_viewport.duration_seconds:.0f} 秒"
+        samples_a = max(0, (slice_a.stop or 0) - (slice_a.start or 0))
+        samples_b = max(0, (slice_b.stop or 0) - (slice_b.start or 0))
+        duration_a = session_duration_seconds(self.compare_a.data) if self.compare_a is not None else 0.0
+        duration_b = session_duration_seconds(self.compare_b.data) if self.compare_b is not None else 0.0
+        peaks_a = len(visible_r_peak_indices(self.compare_a.data, slice_a)) if self.compare_a is not None else 0
+        peaks_b = len(visible_r_peak_indices(self.compare_b.data, slice_b)) if self.compare_b is not None else 0
+        self.compare_range_label.setText(
+            f"当前范围：{start:.1f} ～ {end:.1f} 秒，显示时长 {duration_label} | "
+            f"A 样本 {samples_a}，R 峰 {peaks_a}，总长 {duration_a:.2f} 秒 | "
+            f"B 样本 {samples_b}，R 峰 {peaks_b}，总长 {duration_b:.2f} 秒 | "
+            "拖动滚动条浏览记录，滚轮仅缩放时间轴"
+        )
+
+    def jump_compare_marker_type(self) -> None:
+        marker_type = self.compare_marker_jump_combo.currentData()
+        if marker_type == "all":
+            self.compare_viewport = self._clamped_compare_viewport(
+                ComparisonViewport(0.0, self.compare_viewport.duration_seconds)
+            )
+            self.update_compare_plot()
+
+    def jump_compare_marker(self, direction: int) -> None:
+        if self.compare_a is None or self.compare_b is None:
+            return
+        marker_type = self.compare_marker_jump_combo.currentData()
+        marker_times = self._compare_marker_times(None if marker_type == "all" else str(marker_type))
+        if not marker_times:
+            self.compare_status_label.setText("当前记录没有匹配的动作标记")
+            return
+        duration = self.compare_viewport.duration_seconds or min(10.0, self._max_compare_duration())
+        center = self.compare_viewport.start_seconds + duration / 2.0
+        if direction > 0:
+            candidates = [value for value in marker_times if value > center]
+            target = candidates[0] if candidates else marker_times[0]
+        else:
+            candidates = [value for value in marker_times if value < center]
+            target = candidates[-1] if candidates else marker_times[-1]
+        self.compare_viewport = self._clamped_compare_viewport(
+            ComparisonViewport(max(0.0, target - duration / 2.0), duration)
+        )
+        self.update_compare_plot()
+
+    def _compare_marker_times(self, marker_type: str | None) -> list[float]:
+        times: list[float] = []
+        for track in (self.compare_a, self.compare_b):
+            if track is None or not track.data.samples:
+                continue
+            first_sample_index = track.data.samples[0].sample_index
+            for marker in track.markers:
+                if marker_type is None or marker.type == marker_type:
+                    times.append((marker.sample_index - first_sample_index) / float(ECG_SAMPLE_RATE_HZ))
+        return sorted(set(times))
+
+    def export_compare_csv(self) -> None:
         if self.compare_a is None or self.compare_b is None:
             self.compare_status_label.setText("请先加载 A/B 对比")
             return
-        record_a, data_a, markers_a = self.compare_a
-        record_b, data_b, markers_b = self.compare_b
-        summary = comparison_summary(
-            record_a=record_a,
-            data_a=data_a,
-            markers_a=markers_a,
-            record_b=record_b,
-            data_b=data_b,
-            markers_b=markers_b,
-            mode=str(self.compare_mode_combo.currentData()),
-            y_axis_mode=str(self.compare_y_mode_combo.currentData()),
+        choice, accepted = self.QtWidgets.QInputDialog.getItem(
+            self.window,
+            "导出范围",
+            "导出范围",
+            ("当前可见范围", "完整记录"),
+            0,
+            False,
         )
-        export_path = Path("data") / "exports" / f"compare_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        try:
-            write_json_export(export_path, summary)
-        except Exception as exc:
-            self.compare_status_label.setText(f"JSON 导出失败：{exc}")
+        if not accepted:
             return
-        self.compare_status_label.setText(f"JSON 已导出：{export_path}")
+        export_full = choice == "完整记录"
+        export_path = Path("data") / "exports" / default_compare_csv_name(
+            self.compare_a.record,
+            self.compare_b.record,
+        )
+        self.compare_status_label.setText("正在写入 CSV……")
+
+        def worker() -> None:
+            try:
+                write_compare_csv(
+                    export_path,
+                    track_a=self.compare_a,
+                    track_b=self.compare_b,
+                    viewport=self.compare_viewport,
+                    export_full=export_full,
+                )
+            except Exception as exc:
+                message = str(exc)
+                self.QtCore.QTimer.singleShot(0, lambda: self.compare_status_label.setText(f"CSV 导出失败：{message}"))
+                return
+            self.QtCore.QTimer.singleShot(0, lambda: self.compare_status_label.setText(f"CSV 已导出：{export_path}"))
+
+        Thread(target=worker, name="CompareCsvExport", daemon=True).start()
 
     def export_compare_png(self) -> None:
         if self.compare_a is None or self.compare_b is None:
@@ -1049,10 +1308,7 @@ class MainWindow:
         export_path = Path("data") / "exports" / f"compare_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
         export_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            from pyqtgraph.exporters import ImageExporter
-
-            exporter = ImageExporter(self.compare_plot.plotItem)
-            exporter.export(str(export_path))
+            self.compare_tab_widget.grab().save(str(export_path))
         except Exception as exc:
             self.compare_status_label.setText(f"PNG 导出失败：{exc}")
             return
