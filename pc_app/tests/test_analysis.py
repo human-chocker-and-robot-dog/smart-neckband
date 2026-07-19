@@ -4,7 +4,7 @@ import warnings
 
 import numpy as np
 
-from smart_neckband.analysis import analyze_recent_ecg
+from smart_neckband.analysis import analyze_recent_ecg, get_ecg_analysis_info
 from smart_neckband.buffers import EcgSample
 from smart_neckband.protocol import ECG_SAMPLE_RATE_HZ, FLAG_ADC_CLIPPING
 
@@ -71,3 +71,17 @@ def test_analysis_uses_stable_rr_median_for_heart_rate(monkeypatch) -> None:
 
     assert result.latest_rr_ms == 500.0
     assert result.heart_rate_bpm == 60.0
+
+
+def test_ecg_analysis_info_describes_current_algorithm() -> None:
+    info = get_ecg_analysis_info()
+
+    assert info.library_name == "NeuroKit2"
+    assert info.sampling_rate_hz == ECG_SAMPLE_RATE_HZ
+    assert "nk.ecg_clean" in info.clean_method
+    assert "nk.ecg_peaks" in info.peak_method
+    assert "nk.ecg_quality" in info.quality_method
+    assert info.analysis_window_seconds == 10.0
+    assert info.overlap_seconds == 9.5
+    assert info.rr_valid_range_ms == (300.0, 2000.0)
+    assert info.resampling == "不重采样"

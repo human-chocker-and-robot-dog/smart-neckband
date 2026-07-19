@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from threading import Event, Thread
+from threading import Event, Lock, Thread
+import time
 
 from .buffers import EcgRingBuffer, ImuRingBuffer, StatusRingBuffer
 from .protocol import (
@@ -39,6 +40,18 @@ class PcDataStores:
             imu=ImuRingBuffer(),
             status=StatusRingBuffer(),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class SerialRuntimeStatus:
+    port: str
+    started_at_monotonic_s: float | None
+    serial_open: bool
+    packet_count: int
+    ecg_packet_count: int
+    last_packet_monotonic_s: float | None
+    last_ecg_sample_index: int | None
+    last_error: Exception | None
 
 
 def list_serial_ports() -> list[SerialPortInfo]:
@@ -85,9 +98,16 @@ class SerialPacketReader:
         self.publisher = publisher or NullPublisher()
         self.raw_log_path = Path(raw_log_path) if raw_log_path is not None else None
         self._stop = Event()
+        self._runtime_lock = Lock()
         self._thread: Thread | None = None
         self._recorder: RawBinaryRecorder | None = None
         self._last_error: Exception | None = None
+        self._started_at_monotonic_s: float | None = None
+        self._serial_open = False
+        self._packet_count = 0
+        self._ecg_packet_count = 0
+        self._last_packet_monotonic_s: float | None = None
+        self._last_ecg_sample_index: int | None = None
 
     @property
     def stats(self) -> ParserStats:
@@ -97,10 +117,32 @@ class SerialPacketReader:
     def last_error(self) -> Exception | None:
         return self._last_error
 
+    @property
+    def runtime_status(self) -> SerialRuntimeStatus:
+        with self._runtime_lock:
+            return SerialRuntimeStatus(
+                port=self.port,
+                started_at_monotonic_s=self._started_at_monotonic_s,
+                serial_open=self._serial_open,
+                packet_count=self._packet_count,
+                ecg_packet_count=self._ecg_packet_count,
+                last_packet_monotonic_s=self._last_packet_monotonic_s,
+                last_ecg_sample_index=self._last_ecg_sample_index,
+                last_error=self._last_error,
+            )
+
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop.clear()
+        with self._runtime_lock:
+            self._last_error = None
+            self._started_at_monotonic_s = time.monotonic()
+            self._serial_open = False
+            self._packet_count = 0
+            self._ecg_packet_count = 0
+            self._last_packet_monotonic_s = None
+            self._last_ecg_sample_index = None
         self._thread = Thread(target=self._run, name=f"SerialPacketReader-{self.port}", daemon=True)
         self._thread.start()
 
@@ -125,6 +167,8 @@ class SerialPacketReader:
 
         try:
             with serial.Serial(self.port, self.baudrate, timeout=0.1) as serial_port:
+                with self._runtime_lock:
+                    self._serial_open = True
                 while not self._stop.is_set():
                     chunk = serial_port.read(4096)
                     if not chunk:
@@ -134,8 +178,11 @@ class SerialPacketReader:
                     for packet in self.parser.feed(chunk):
                         self._dispatch(packet)
         except Exception as exc:  # pragma: no cover - hardware/OS path
-            self._last_error = exc
+            with self._runtime_lock:
+                self._last_error = exc
         finally:
+            with self._runtime_lock:
+                self._serial_open = False
             if self._recorder is not None:
                 self._recorder.close()
                 self._recorder = None
@@ -144,8 +191,14 @@ class SerialPacketReader:
         payload = packet.payload
         if isinstance(payload, EcgPayload):
             self.stores.ecg.append_batch(packet.header, payload)
+            with self._runtime_lock:
+                self._ecg_packet_count += 1
+                self._last_ecg_sample_index = payload.first_sample_index + max(0, len(payload.samples) - 1)
         elif isinstance(payload, ImuPayload):
             self.stores.imu.append_batch(packet.header, payload)
         elif isinstance(payload, DeviceStatusPayload):
             self.stores.status.append(packet.header, payload)
+        with self._runtime_lock:
+            self._packet_count += 1
+            self._last_packet_monotonic_s = time.monotonic()
         self.publisher.publish_packet(packet)

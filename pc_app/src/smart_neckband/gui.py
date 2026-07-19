@@ -4,11 +4,12 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 import time
 
-from .analysis import EcgAnalysisResult, analyze_recent_ecg
+from .analysis import EcgAnalysisResult, analyze_recent_ecg, get_ecg_analysis_info
 from .attitude import ComplementaryAttitudeFilter, Orientation
 from .buffers import ImuSample
 from .protocol import FLAG_LO_MINUS, FLAG_LO_PLUS
 from .serial_io import PcDataStores, SerialPacketReader, list_serial_ports
+from .status import ConnectionSnapshot, ConnectionState, connection_state_text
 
 
 class EcgAnalysisWorker:
@@ -132,17 +133,17 @@ class MainWindow:
         self.attitude_worker.start()
 
         self.window = QtWidgets.QMainWindow()
-        self.window.setWindowTitle("SmartCollar V0")
+        self.window.setWindowTitle("AI 智能颈环 V0 上位机")
         self.window.resize(1280, 820)
 
         central = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(central)
         toolbar = QtWidgets.QHBoxLayout()
         self.port_combo = QtWidgets.QComboBox()
-        self.refresh_button = QtWidgets.QPushButton("Refresh")
-        self.connect_button = QtWidgets.QPushButton("Connect")
-        self.disconnect_button = QtWidgets.QPushButton("Disconnect")
-        self.calibrate_button = QtWidgets.QPushButton("Calibrate Flat")
+        self.refresh_button = QtWidgets.QPushButton("刷新串口")
+        self.connect_button = QtWidgets.QPushButton("连接设备")
+        self.disconnect_button = QtWidgets.QPushButton("断开连接")
+        self.calibrate_button = QtWidgets.QPushButton("平放校准")
         toolbar.addWidget(self.port_combo, 2)
         toolbar.addWidget(self.refresh_button)
         toolbar.addWidget(self.connect_button)
@@ -150,13 +151,32 @@ class MainWindow:
         toolbar.addWidget(self.calibrate_button)
         layout.addLayout(toolbar)
 
+        connection_group = QtWidgets.QGroupBox("连接状态")
+        connection_layout = QtWidgets.QGridLayout(connection_group)
+        self.connection_label = QtWidgets.QLabel("未连接")
+        self.port_status_label = QtWidgets.QLabel("串口 --")
+        self.packet_status_label = QtWidgets.QLabel("包 0 / ECG 包 0")
+        self.ecg_rate_label = QtWidgets.QLabel("实测 ECG -- Hz")
+        self.last_packet_label = QtWidgets.QLabel("最后一包 --")
+        for index, widget in enumerate(
+            (
+                self.connection_label,
+                self.port_status_label,
+                self.packet_status_label,
+                self.ecg_rate_label,
+                self.last_packet_label,
+            )
+        ):
+            connection_layout.addWidget(widget, index // 3, index % 3)
+        layout.addWidget(connection_group)
+
         status_layout = QtWidgets.QGridLayout()
-        self.hr_label = QtWidgets.QLabel("HR --")
-        self.rr_label = QtWidgets.QLabel("RR --")
-        self.sqi_label = QtWidgets.QLabel("SQI --")
-        self.lead_label = QtWidgets.QLabel("LEAD --")
-        self.loss_label = QtWidgets.QLabel("LOSS 0")
-        self.crc_label = QtWidgets.QLabel("CRC 0")
+        self.hr_label = QtWidgets.QLabel("心率（HR）--")
+        self.rr_label = QtWidgets.QLabel("RR 间期 --")
+        self.sqi_label = QtWidgets.QLabel("信号质量（SQI）--")
+        self.lead_label = QtWidgets.QLabel("导联 --")
+        self.loss_label = QtWidgets.QLabel("丢包 0")
+        self.crc_label = QtWidgets.QLabel("CRC 错误 0")
         for column, widget in enumerate(
             (self.hr_label, self.rr_label, self.sqi_label, self.lead_label, self.loss_label, self.crc_label)
         ):
@@ -165,8 +185,8 @@ class MainWindow:
 
         splitter = QtWidgets.QSplitter()
         splitter.setOrientation(QtCore.Qt.Vertical)
-        self.raw_plot = pg.PlotWidget(title="Raw ECG - last 10 s")
-        self.clean_plot = pg.PlotWidget(title="Clean ECG - last 10 s")
+        self.raw_plot = pg.PlotWidget(title="原始 ECG（Raw）- 最近 10 秒")
+        self.clean_plot = pg.PlotWidget(title="清洗后 ECG（Clean）- 最近 10 秒")
         self.raw_curve = self.raw_plot.plot(pen=pg.mkPen("#1769aa", width=1))
         self.clean_curve = self.clean_plot.plot(pen=pg.mkPen("#2e7d32", width=1))
         self.peak_scatter = pg.ScatterPlotItem(pen=pg.mkPen("#c62828"), brush=pg.mkBrush("#c62828"), size=8)
@@ -209,8 +229,18 @@ class MainWindow:
             self.gl_widget.addItem(self.gl_body)
             lower.addWidget(self.gl_widget, 2)
         except Exception:
-            lower.addWidget(QtWidgets.QLabel("3D view requires pyqtgraph OpenGL support."), 2)
+            lower.addWidget(QtWidgets.QLabel("3D 姿态视图需要 pyqtgraph OpenGL 支持。"), 2)
         layout.addLayout(lower, 2)
+
+        analysis_group = QtWidgets.QGroupBox("当前 ECG 分析方式")
+        analysis_layout = QtWidgets.QGridLayout(analysis_group)
+        self.analysis_info_labels: list[object] = []
+        for row, text in enumerate(self._analysis_info_lines()):
+            label = QtWidgets.QLabel(text)
+            label.setWordWrap(True)
+            self.analysis_info_labels.append(label)
+            analysis_layout.addWidget(label, row // 2, row % 2)
+        layout.addWidget(analysis_group)
 
         self.window.setCentralWidget(central)
         self.refresh_button.clicked.connect(self.refresh_ports)
@@ -251,16 +281,36 @@ class MainWindow:
         raw_path = Path("data") / f"smartcollar_v0_{time.strftime('%Y%m%d_%H%M%S')}.bin"
         self.reader = SerialPacketReader(port=port, stores=self.stores, raw_log_path=raw_path)
         self.reader.start()
+        self.connection_label.setText(f"正在连接 {port}……")
 
     def disconnect_serial(self) -> None:
         if self.reader is not None:
             self.reader.stop()
             self.reader = None
+        self.connection_label.setText("未连接")
 
     def update_view(self) -> None:
         self._update_ecg()
         self._update_status_labels()
+        self._update_connection_status()
         self._update_imu()
+
+    def _analysis_info_lines(self) -> tuple[str, ...]:
+        info = get_ecg_analysis_info()
+        return (
+            f"分析库：{info.library_name} {info.library_version}",
+            f"NumPy：{info.numpy_version}",
+            f"ECG 采样率：{info.sampling_rate_hz} Hz",
+            f"清洗方法：{info.clean_method}",
+            f"R 峰检测方法：{info.peak_method}",
+            f"信号质量方法：{info.quality_method}",
+            f"分析窗口：{info.analysis_window_seconds:.0f} 秒，刷新间隔约 {info.analysis_window_seconds - info.overlap_seconds:.1f} 秒",
+            f"心率计算：{info.hr_method}",
+            f"RR 合法范围：{info.rr_valid_range_ms[0]:.0f}-{info.rr_valid_range_ms[1]:.0f} ms",
+            f"Clipping 判定：{info.clipping_rule}",
+            f"重采样：{info.resampling}",
+            f"工频处理：{info.powerline_handling}",
+        )
 
     def _update_ecg(self) -> None:
         samples = self.stores.ecg.snapshot()
@@ -282,20 +332,22 @@ class MainWindow:
             ]
             self.peak_scatter.setData(spots)
             self.hr_label.setText(
-                f"HR {analysis.heart_rate_bpm:.1f}" if analysis.heart_rate_bpm is not None else "HR --"
+                f"心率（HR）{analysis.heart_rate_bpm:.1f}" if analysis.heart_rate_bpm is not None else "心率（HR）--"
             )
             self.rr_label.setText(
-                f"RR {analysis.latest_rr_ms:.0f} ms" if analysis.latest_rr_ms is not None else "RR --"
+                f"RR 间期 {analysis.latest_rr_ms:.0f} ms" if analysis.latest_rr_ms is not None else "RR 间期 --"
             )
             self.sqi_label.setText(
-                f"SQI {analysis.signal_quality:.2f}" if analysis.signal_quality is not None else f"SQI {analysis.message}"
+                f"信号质量（SQI）{analysis.signal_quality:.2f}"
+                if analysis.signal_quality is not None
+                else f"信号质量（SQI）{analysis.message}"
             )
 
     def _update_status_labels(self) -> None:
         latest_status = self.stores.status.latest()
         if latest_status is not None:
             flags = latest_status.payload.lead_off_flags
-            lead_text = "LEAD OK" if flags == 0 else "LEAD OFF"
+            lead_text = "导联正常" if flags == 0 else "导联脱落"
             if flags & FLAG_LO_MINUS:
                 lead_text += " LO-"
             if flags & FLAG_LO_PLUS:
@@ -303,8 +355,81 @@ class MainWindow:
             self.lead_label.setText(lead_text)
         stats = self.reader.stats if self.reader is not None else None
         if stats is not None:
-            self.loss_label.setText(f"LOSS {stats.packets_lost}")
-            self.crc_label.setText(f"CRC {stats.crc_errors}")
+            self.loss_label.setText(f"丢包 {stats.packets_lost}")
+            self.crc_label.setText(f"CRC 错误 {stats.crc_errors}")
+
+    def _connection_snapshot(self) -> ConnectionSnapshot:
+        if self.reader is None:
+            return ConnectionSnapshot(
+                state=ConnectionState.DISCONNECTED,
+                port=None,
+                serial_open=False,
+                packet_count=0,
+                ecg_packet_count=0,
+                seconds_since_last_packet=None,
+                measured_ecg_rate_hz=None,
+                crc_errors=0,
+                packets_lost=0,
+            )
+
+        runtime = self.reader.runtime_status
+        stats = self.reader.stats
+        now = time.monotonic()
+        last_age = (
+            now - runtime.last_packet_monotonic_s
+            if runtime.last_packet_monotonic_s is not None
+            else None
+        )
+        measured_rate = None
+        if runtime.started_at_monotonic_s is not None and runtime.ecg_packet_count > 0:
+            elapsed = max(0.001, now - runtime.started_at_monotonic_s)
+            measured_rate = (runtime.ecg_packet_count * 20.0) / elapsed
+
+        if runtime.last_error is not None:
+            state = ConnectionState.ERROR
+        elif not runtime.serial_open:
+            state = ConnectionState.CONNECTING
+        elif runtime.packet_count == 0:
+            state = ConnectionState.CONNECTED_WAITING_DATA
+        elif last_age is not None and last_age > 2.0:
+            state = ConnectionState.STALE
+        else:
+            state = ConnectionState.RECEIVING
+
+        return ConnectionSnapshot(
+            state=state,
+            port=runtime.port,
+            serial_open=runtime.serial_open,
+            packet_count=runtime.packet_count,
+            ecg_packet_count=runtime.ecg_packet_count,
+            seconds_since_last_packet=last_age,
+            measured_ecg_rate_hz=measured_rate,
+            crc_errors=stats.crc_errors,
+            packets_lost=stats.packets_lost,
+            error_text=str(runtime.last_error) if runtime.last_error is not None else None,
+        )
+
+    def _update_connection_status(self) -> None:
+        snapshot = self._connection_snapshot()
+        self.connection_label.setText(connection_state_text(snapshot))
+        self.port_status_label.setText(
+            f"串口 {snapshot.port or '--'}：{'已打开' if snapshot.serial_open else '未打开'}"
+        )
+        self.packet_status_label.setText(
+            f"接收包 {snapshot.packet_count} / ECG 包 {snapshot.ecg_packet_count}"
+        )
+        self.ecg_rate_label.setText(
+            f"实测 ECG {snapshot.measured_ecg_rate_hz:.0f} Hz"
+            if snapshot.measured_ecg_rate_hz is not None
+            else "实测 ECG -- Hz"
+        )
+        self.last_packet_label.setText(
+            f"最后一包 {snapshot.seconds_since_last_packet:.1f} 秒前"
+            if snapshot.seconds_since_last_packet is not None
+            else "最后一包 --"
+        )
+        self.connect_button.setEnabled(self.reader is None or snapshot.state is ConnectionState.ERROR)
+        self.disconnect_button.setEnabled(self.reader is not None)
 
     def _update_imu(self) -> None:
         orientation, sample = self.attitude_worker.latest()

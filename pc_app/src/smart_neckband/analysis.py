@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib import metadata
 import statistics
 import time
 import warnings
@@ -19,6 +20,50 @@ class EcgAnalysisResult:
     latest_rr_ms: float | None
     signal_quality: float | None
     message: str
+
+
+@dataclass(frozen=True, slots=True)
+class EcgAnalysisInfo:
+    library_name: str
+    library_version: str
+    numpy_version: str
+    sampling_rate_hz: int
+    clean_method: str
+    peak_method: str
+    quality_method: str
+    analysis_window_seconds: float
+    overlap_seconds: float
+    hr_method: str
+    rr_valid_range_ms: tuple[float, float]
+    clipping_rule: str
+    resampling: str
+    powerline_handling: str
+
+
+def _package_version(package_name: str) -> str:
+    try:
+        return metadata.version(package_name)
+    except metadata.PackageNotFoundError:
+        return "未安装"
+
+
+def get_ecg_analysis_info() -> EcgAnalysisInfo:
+    return EcgAnalysisInfo(
+        library_name="NeuroKit2",
+        library_version=_package_version("neurokit2"),
+        numpy_version=_package_version("numpy"),
+        sampling_rate_hz=ECG_SAMPLE_RATE_HZ,
+        clean_method="nk.ecg_clean，method 使用 NeuroKit2 默认值",
+        peak_method="nk.ecg_peaks，method 使用 NeuroKit2 默认值",
+        quality_method="nk.ecg_quality，method 使用 NeuroKit2 默认值；无 finite SQI 时不显示数值",
+        analysis_window_seconds=10.0,
+        overlap_seconds=9.5,
+        hr_method="300-2000 ms 合法 RR；最近最多 5 个 RR 的中位数",
+        rr_valid_range_ms=(300.0, 2000.0),
+        clipping_rule="最近分析窗口中 >=80% ECG 样本带 ADC_CLIPPING 标志时判定为 ECG clipped",
+        resampling="不重采样",
+        powerline_handling="未显式配置 50 Hz 工频处理；使用 NeuroKit2 默认清洗流程",
+    )
 
 
 def _rr_intervals_ms(peaks: tuple[int, ...]) -> tuple[float, ...]:
