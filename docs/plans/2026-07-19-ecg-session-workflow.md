@@ -89,6 +89,7 @@ Firmware build/size is not required unless firmware files change.
 - [x] Phase 5: add A/B session comparison, Raw/Clean mode, zero-mean y-axis mode, marker alignment lines, JSON summary export, PNG export, and export tests.
 - [x] Layout refinement: move IMU attitude, 3D view, flat calibration, and ECG analysis configuration from the live page into a dedicated diagnostics page so Raw/Clean ECG plots keep the main live-page space.
 - [x] Comparison refinement: replace single-plot overlay with synchronized upper/lower ECG tracks, default 10-second viewport, duration selector, horizontal scrollbar, R-peak and marker toggles, marker jump controls, current-view PNG export, and analysis CSV export.
+- [x] Viewer performance refinement: load and analyze historical sessions in background threads with a session cache, and convert the history page to the same fixed-window ECG viewer style used by the comparison page.
 
 ## Discoveries
 
@@ -102,7 +103,8 @@ Firmware build/size is not required unless firmware files change.
 - Dual-track comparison reuses the historical loader and aligns each track to its own session start in seconds. Marker alignment is visualized as colored vertical lines per track.
 - The live page now prioritizes connection state, recording controls, HR/RR/SQI/lead/loss/CRC status, and Raw/Clean ECG. IMU orientation and ECG algorithm details live on the diagnostics page.
 - Comparison CSV export uses UTF-8 with BOM and writes one row per ECG sample for track A and track B. It includes raw ADC, clean ECG, R-peak flags, RR/instant HR when derivable from peaks, lead-off aggregate state, marker type/label, placement metadata, wire map, and the ECG analysis method fields. `display_hr_bpm` and `sqi` remain blank because the current offline comparison loader does not reconstruct GUI-time smoothed HR or per-sample/window SQI.
+- First history/comparison load now runs raw parsing and NeuroKit2 analysis off the GUI thread. Loaded sessions are cached by session directory so later switching reuses the parsed/analyzed data instead of rerunning the full path.
 
 ## Result
 
-Implemented through Phase 5. Live-page layout refinement and comparison CSV/readability refinement are implemented and validated.
+Implemented through Phase 5. Live-page layout, comparison CSV/readability, async loading, and history viewer refinements are implemented and validated.

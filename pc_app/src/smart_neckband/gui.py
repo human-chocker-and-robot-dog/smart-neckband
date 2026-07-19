@@ -157,12 +157,19 @@ class MainWindow:
         self.record_prebuffer_bytes = 0
         self.record_prebuffer_limit_bytes = 64 * 1024
         self.record_prebuffer_lock = Lock()
+        self.gui_callbacks: deque[object] = deque()
+        self.gui_callbacks_lock = Lock()
         self.raw_marker_items: list[object] = []
         self.clean_marker_items: list[object] = []
         self.history_records: tuple[object, ...] = ()
+        self.session_load_cache: dict[Path, tuple[HistoryEcgData, tuple[object, ...], dict[str, object]]] = {}
+        self.history_record: object | None = None
         self.history_ecg_data: HistoryEcgData | None = None
         self.history_markers: tuple[object, ...] = ()
         self.history_marker_items: list[object] = []
+        self.history_viewport = ComparisonViewport(0.0, 10.0)
+        self.history_loading = False
+        self.compare_loading = False
         self.compare_a: ComparisonTrack | None = None
         self.compare_b: ComparisonTrack | None = None
         self.compare_viewport = ComparisonViewport(0.0, 10.0)
@@ -313,6 +320,10 @@ class MainWindow:
         self.history_refresh_button.clicked.connect(self.refresh_history_sessions)
         self.history_load_button.clicked.connect(self.load_selected_history_session)
         self.history_mode_combo.currentIndexChanged.connect(self.update_history_plot)
+        self.history_duration_combo.currentIndexChanged.connect(self.update_history_duration)
+        self.history_scrollbar.valueChanged.connect(self.update_history_scrollbar)
+        self.history_show_rpeaks_checkbox.stateChanged.connect(self.update_history_plot)
+        self.history_show_markers_checkbox.stateChanged.connect(self.update_history_plot)
         self.compare_refresh_button.clicked.connect(self.refresh_history_sessions)
         self.compare_load_button.clicked.connect(self.load_compare_sessions)
         self.compare_mode_combo.currentIndexChanged.connect(self.update_compare_plot)
@@ -403,20 +414,36 @@ class MainWindow:
         self.history_refresh_button = QtWidgets.QPushButton("刷新记录")
         self.history_load_button = QtWidgets.QPushButton("加载记录")
         self.history_mode_combo = QtWidgets.QComboBox()
-        self.history_mode_combo.addItem("Raw", "raw")
-        self.history_mode_combo.addItem("Clean", "clean")
+        self.history_mode_combo.addItem("原始 ECG", "raw")
+        self.history_mode_combo.addItem("清洗后 ECG", "clean")
+        self.history_duration_combo = QtWidgets.QComboBox()
+        self.history_duration_combo.addItem("5 秒", 5.0)
+        self.history_duration_combo.addItem("10 秒", 10.0)
+        self.history_duration_combo.addItem("20 秒", 20.0)
+        self.history_duration_combo.addItem("30 秒", 30.0)
+        self.history_duration_combo.addItem("完整记录", None)
+        self.history_duration_combo.setCurrentIndex(1)
+        self.history_show_rpeaks_checkbox = QtWidgets.QCheckBox("显示 R 峰")
+        self.history_show_rpeaks_checkbox.setChecked(True)
+        self.history_show_markers_checkbox = QtWidgets.QCheckBox("显示动作标记")
+        self.history_show_markers_checkbox.setChecked(True)
         toolbar.addWidget(self.history_session_combo, 3)
         toolbar.addWidget(self.history_refresh_button)
         toolbar.addWidget(self.history_load_button)
         toolbar.addWidget(self.history_mode_combo)
+        toolbar.addWidget(self.history_duration_combo)
+        toolbar.addWidget(self.history_show_rpeaks_checkbox)
+        toolbar.addWidget(self.history_show_markers_checkbox)
         layout.addLayout(toolbar)
 
         self.history_status_label = QtWidgets.QLabel("未加载历史记录")
+        self.history_range_label = QtWidgets.QLabel("当前范围：--")
         self.history_metadata_label = QtWidgets.QLabel("")
         self.history_metadata_label.setWordWrap(True)
         self.history_analysis_label = QtWidgets.QLabel("")
         self.history_analysis_label.setWordWrap(True)
         layout.addWidget(self.history_status_label)
+        layout.addWidget(self.history_range_label)
         layout.addWidget(self.history_metadata_label)
         layout.addWidget(self.history_analysis_label)
 
@@ -429,6 +456,8 @@ class MainWindow:
         )
         self.history_plot.addItem(self.history_peak_scatter)
         layout.addWidget(self.history_plot, 1)
+        self.history_scrollbar = QtWidgets.QScrollBar(self.QtCore.Qt.Horizontal)
+        layout.addWidget(self.history_scrollbar)
         return layout_widget
 
     def _build_compare_tab(self) -> object:
@@ -572,11 +601,24 @@ class MainWindow:
         self.connection_label.setText("未连接")
 
     def update_view(self) -> None:
+        self._drain_gui_callbacks()
         self._update_ecg()
         self._update_status_labels()
         self._update_connection_status()
         self._update_recording_state()
         self._update_imu()
+
+    def _post_gui(self, callback: object) -> None:
+        with self.gui_callbacks_lock:
+            self.gui_callbacks.append(callback)
+
+    def _drain_gui_callbacks(self) -> None:
+        callbacks: list[object] = []
+        with self.gui_callbacks_lock:
+            while self.gui_callbacks:
+                callbacks.append(self.gui_callbacks.popleft())
+        for callback in callbacks:
+            callback()
 
     def _analysis_info_lines(self) -> tuple[str, ...]:
         info = get_ecg_analysis_info()
@@ -935,74 +977,137 @@ class MainWindow:
         if self.compare_b_combo.count() > 1:
             self.compare_b_combo.setCurrentIndex(1)
 
+    def _load_session_async(self, record: object, on_loaded: object, on_error: object) -> None:
+        cached = self.session_load_cache.get(record.session_dir)
+        if cached is not None:
+            on_loaded(*cached)
+            return
+
+        def worker() -> None:
+            try:
+                result = self._load_session_sync(record)
+            except Exception as exc:
+                message = str(exc)
+                self._post_gui(lambda: on_error(message))
+                return
+            self._post_gui(lambda: on_loaded(*result))
+
+        Thread(target=worker, name=f"SessionLoad-{record.metadata.session_id}", daemon=True).start()
+
+    def _load_session_sync(self, record: object) -> tuple[HistoryEcgData, tuple[object, ...], dict[str, object]]:
+        cached = self.session_load_cache.get(record.session_dir)
+        if cached is not None:
+            return cached
+        markers = load_session_markers(record.session_dir)
+        analysis_summary = load_session_analysis_summary(record.session_dir)
+        samples = load_session_ecg_samples(record.session_dir)
+        ecg_data = analyze_history_ecg(samples)
+        result = (ecg_data, markers, analysis_summary)
+        self.session_load_cache[record.session_dir] = result
+        return result
+
     def load_selected_history_session(self) -> None:
         record = self.history_session_combo.currentData()
         if record is None:
             return
-        try:
-            markers = load_session_markers(record.session_dir)
-            analysis_summary = load_session_analysis_summary(record.session_dir)
-            samples = load_session_ecg_samples(record.session_dir)
-            ecg_data = analyze_history_ecg(samples)
-        except Exception as exc:
-            self.history_status_label.setText(f"加载失败：{exc}")
+        if self.history_loading:
             return
+        self.history_loading = True
+        self.history_load_button.setEnabled(False)
+        self.history_status_label.setText("正在后台加载历史记录……")
 
-        self.history_markers = markers
-        self.history_ecg_data = ecg_data
-        metadata = record.metadata
-        duration_s = metadata.sample_count / float(ECG_SAMPLE_RATE_HZ) if metadata.sample_count else 0.0
-        self.history_status_label.setText(
-            f"已加载：{metadata.display_name}，{len(samples)} 点，约 {duration_s:.1f} 秒，分析 {ecg_data.message}"
-        )
-        self.history_metadata_label.setText(
-            " | ".join(
-                (
-                    f"点位 {metadata.placement_id} {metadata.placement_name}",
-                    f"线序 {metadata.wire_map}",
-                    f"电极 {metadata.electrode_type or '--'}",
-                    f"状态 {metadata.status}",
-                    f"端口 {metadata.port or '--'}",
-                    f"备注 {metadata.notes or '--'}",
+        def on_loaded(ecg_data: HistoryEcgData, markers: tuple[object, ...], analysis_summary: dict[str, object]) -> None:
+            self.history_loading = False
+            self.history_load_button.setEnabled(True)
+            self.history_record = record
+            self.history_markers = markers
+            self.history_ecg_data = ecg_data
+            metadata = record.metadata
+            duration_s = session_duration_seconds(ecg_data)
+            self.history_viewport = self._clamped_history_viewport(
+                ComparisonViewport(0.0, self._selected_history_duration())
+            )
+            self.history_status_label.setText(
+                f"已加载：{metadata.display_name}，{len(ecg_data.samples)} 点，约 {duration_s:.1f} 秒，分析 {ecg_data.message}"
+            )
+            self.history_metadata_label.setText(
+                " | ".join(
+                    (
+                        f"点位 {metadata.placement_id} {metadata.placement_name}",
+                        f"线序 {metadata.wire_map}",
+                        f"电极 {metadata.electrode_type or '--'}",
+                        f"状态 {metadata.status}",
+                        f"端口 {metadata.port or '--'}",
+                        f"备注 {metadata.notes or '--'}",
+                    )
                 )
             )
-        )
-        self.history_analysis_label.setText(
-            " | ".join(
-                (
-                    f"markers {len(markers)}",
-                    f"analysis_completed {analysis_summary.get('analysis_completed', False)}",
-                    f"library {analysis_summary.get('analysis_library', '--')} "
-                    f"{analysis_summary.get('analysis_library_version', '')}",
+            self.history_analysis_label.setText(
+                " | ".join(
+                    (
+                        f"markers {len(markers)}",
+                        f"analysis_completed {analysis_summary.get('analysis_completed', False)}",
+                        f"library {analysis_summary.get('analysis_library', '--')} "
+                        f"{analysis_summary.get('analysis_library_version', '')}",
+                    )
                 )
             )
+            self.update_history_plot()
+
+        def on_error(message: str) -> None:
+            self.history_loading = False
+            self.history_load_button.setEnabled(True)
+            self.history_status_label.setText(f"加载失败：{message}")
+
+        self._load_session_async(record, on_loaded, on_error)
+
+    def _selected_history_duration(self) -> float | None:
+        value = self.history_duration_combo.currentData()
+        return None if value is None else float(value)
+
+    def _clamped_history_viewport(self, viewport: ComparisonViewport) -> ComparisonViewport:
+        if self.history_ecg_data is None:
+            return viewport
+        return clamp_viewport(viewport, max_duration_seconds=session_duration_seconds(self.history_ecg_data))
+
+    def update_history_duration(self, _value: object = None) -> None:
+        self.history_viewport = self._clamped_history_viewport(
+            ComparisonViewport(self.history_viewport.start_seconds, self._selected_history_duration())
         )
         self.update_history_plot()
 
-    def update_history_plot(self) -> None:
+    def update_history_scrollbar(self, value: int) -> None:
+        if self.history_ecg_data is None:
+            return
+        self.history_viewport = self._clamped_history_viewport(
+            ComparisonViewport(value / 1000.0, self.history_viewport.duration_seconds)
+        )
+        self.update_history_plot(update_scrollbar=False)
+
+    def update_history_plot(self, _value: object = None, *, update_scrollbar: bool = True) -> None:
         if self.history_ecg_data is None:
             return
         data = self.history_ecg_data
         mode = self.history_mode_combo.currentData()
-        values = data.clean_values if mode == "clean" else data.raw_values
-        if not data.samples or not values:
+        x_values, y_values, sample_slice = visible_values(
+            data,
+            mode=str(mode),
+            viewport=self.history_viewport,
+            y_axis_mode="auto",
+        )
+        if not data.samples or not y_values:
             self.history_curve.setData([], [])
             self.history_peak_scatter.setData([])
             return
-
-        first_sample_index = data.samples[0].sample_index
-        x_values = [
-            (sample.sample_index - first_sample_index) / float(ECG_SAMPLE_RATE_HZ)
-            for sample in data.samples[: len(values)]
-        ]
-        x_plot, y_plot = downsample_xy(x_values, values, max_points=12_000)
+        x_plot, y_plot = downsample_xy(x_values, y_values, max_points=12_000)
         self.history_curve.setData(x_plot, y_plot)
 
-        if mode == "clean" and data.r_peak_indices:
+        if self.history_show_rpeaks_checkbox.isChecked() and mode == "clean" and data.r_peak_indices:
+            start = sample_slice.start or 0
             spots = [
-                {"pos": (x_values[index], values[index])}
-                for index in data.r_peak_indices
-                if 0 <= index < len(values)
+                {"pos": (x_values[index - start], y_values[index - start])}
+                for index in visible_r_peak_indices(data, sample_slice)
+                if 0 <= index - start < len(y_values)
             ]
             self.history_peak_scatter.setData(spots)
         else:
@@ -1011,35 +1116,113 @@ class MainWindow:
         for item in self.history_marker_items:
             self.history_plot.removeItem(item)
         self.history_marker_items.clear()
-        last_sample_index = data.samples[-1].sample_index
-        for marker in self.history_markers:
-            if first_sample_index <= marker.sample_index <= last_sample_index:
-                x_pos = (marker.sample_index - first_sample_index) / float(ECG_SAMPLE_RATE_HZ)
-                line = self.pg.InfiniteLine(pos=x_pos, angle=90, pen=self.pg.mkPen("#f9a825", width=1))
+        if self.history_show_markers_checkbox.isChecked() and self.history_record is not None:
+            track = ComparisonTrack("历史", self.history_record, data, self.history_markers)
+            for offset, marker in enumerate(visible_markers(track, sample_slice)):
+                x_pos = (marker.sample_index - data.samples[0].sample_index) / float(ECG_SAMPLE_RATE_HZ)
+                line = self.pg.InfiniteLine(
+                    pos=x_pos,
+                    angle=90,
+                    pen=self.pg.mkPen("#f9a825", width=1, style=self.QtCore.Qt.DashLine),
+                )
+                line.setToolTip(f"{marker.label} {x_pos:.2f} 秒")
                 self.history_plot.addItem(line)
                 self.history_marker_items.append(line)
+                label = self.pg.TextItem(marker.label, color="#f9a825", anchor=(0.5, 0.0 if offset % 2 else 1.0))
+                label.setPos(x_pos, 0.0)
+                label.setToolTip(f"{marker.label} {x_pos:.2f} 秒")
+                self.history_plot.addItem(label)
+                self.history_marker_items.append(label)
+        y_range = y_range_for(y_values)
+        if y_range is not None:
+            self.history_plot.setYRange(*y_range, padding=0.0)
+        end_seconds = self._history_view_end_seconds()
+        self.history_plot.setXRange(self.history_viewport.start_seconds, end_seconds, padding=0.0)
+        self._update_history_range_label(sample_slice)
+        if update_scrollbar:
+            self._update_history_scrollbar_control()
+
+    def _history_view_end_seconds(self) -> float:
+        if self.history_viewport.duration_seconds is None:
+            return session_duration_seconds(self.history_ecg_data) if self.history_ecg_data is not None else 0.0
+        return self.history_viewport.start_seconds + self.history_viewport.duration_seconds
+
+    def _update_history_range_label(self, sample_slice: slice) -> None:
+        if self.history_ecg_data is None:
+            return
+        start = self.history_viewport.start_seconds
+        end = self._history_view_end_seconds()
+        duration_label = "完整记录" if self.history_viewport.duration_seconds is None else f"{self.history_viewport.duration_seconds:.0f} 秒"
+        sample_count = max(0, (sample_slice.stop or 0) - (sample_slice.start or 0))
+        peak_count = len(visible_r_peak_indices(self.history_ecg_data, sample_slice))
+        total_duration = session_duration_seconds(self.history_ecg_data)
+        self.history_range_label.setText(
+            f"当前范围：{start:.1f} ～ {end:.1f} 秒，显示时长 {duration_label} | "
+            f"样本 {sample_count}，R 峰 {peak_count}，总长 {total_duration:.2f} 秒"
+        )
+
+    def _update_history_scrollbar_control(self) -> None:
+        if self.history_ecg_data is None:
+            return
+        max_duration = session_duration_seconds(self.history_ecg_data)
+        duration = self.history_viewport.duration_seconds
+        maximum = 0 if duration is None else max(0, int(round((max_duration - duration) * 1000.0)))
+        self.history_scrollbar.blockSignals(True)
+        self.history_scrollbar.setRange(0, maximum)
+        self.history_scrollbar.setSingleStep(500)
+        self.history_scrollbar.setPageStep(max(1, int(round((duration or max_duration) * 1000.0))))
+        self.history_scrollbar.setValue(int(round(self.history_viewport.start_seconds * 1000.0)))
+        self.history_scrollbar.blockSignals(False)
 
     def load_compare_sessions(self) -> None:
         record_a = self.compare_a_combo.currentData()
         record_b = self.compare_b_combo.currentData()
         if record_a is None or record_b is None:
             return
-        try:
-            self.compare_a = self._load_compare_track("A", record_a)
-            self.compare_b = self._load_compare_track("B", record_b)
-        except Exception as exc:
-            self.compare_status_label.setText(f"加载失败：{exc}")
+        if self.compare_loading:
             return
+        self.compare_loading = True
+        self.compare_load_button.setEnabled(False)
+        self.compare_status_label.setText("正在后台加载对比记录……")
+
+        def worker() -> None:
+            try:
+                data_a, markers_a, _summary_a = self._load_session_sync(record_a)
+                data_b, markers_b, _summary_b = self._load_session_sync(record_b)
+            except Exception as exc:
+                message = str(exc)
+                self._post_gui(lambda: self._finish_compare_load_error(message))
+                return
+            track_a = ComparisonTrack("A", record_a, data_a, markers_a)
+            track_b = ComparisonTrack("B", record_b, data_b, markers_b)
+            self._post_gui(lambda: self._finish_compare_load(record_a, record_b, track_a, track_b))
+
+        Thread(target=worker, name="CompareSessionLoad", daemon=True).start()
+
+    def _finish_compare_load(
+        self,
+        record_a: object,
+        record_b: object,
+        track_a: ComparisonTrack,
+        track_b: ComparisonTrack,
+    ) -> None:
+        self.compare_loading = False
+        self.compare_load_button.setEnabled(True)
+        self.compare_a = track_a
+        self.compare_b = track_b
         self.compare_viewport = self._clamped_compare_viewport(ComparisonViewport(0.0, self._selected_compare_duration()))
         self.compare_status_label.setText(
             f"A {record_a.metadata.display_name} / B {record_b.metadata.display_name}"
         )
         self.update_compare_plot()
 
+    def _finish_compare_load_error(self, message: str) -> None:
+        self.compare_loading = False
+        self.compare_load_button.setEnabled(True)
+        self.compare_status_label.setText(f"加载失败：{message}")
+
     def _load_compare_track(self, label: str, record: object) -> ComparisonTrack:
-        markers = load_session_markers(record.session_dir)
-        samples = load_session_ecg_samples(record.session_dir)
-        data = analyze_history_ecg(samples)
+        data, markers, _summary = self._load_session_sync(record)
         return ComparisonTrack(label, record, data, markers)
 
     def _selected_compare_duration(self) -> float | None:
@@ -1057,7 +1240,7 @@ class MainWindow:
     def _clamped_compare_viewport(self, viewport: ComparisonViewport) -> ComparisonViewport:
         return clamp_viewport(viewport, max_duration_seconds=self._max_compare_duration())
 
-    def update_compare_duration(self) -> None:
+    def update_compare_duration(self, _value: object = None) -> None:
         self.compare_viewport = self._clamped_compare_viewport(
             ComparisonViewport(self.compare_viewport.start_seconds, self._selected_compare_duration())
         )
@@ -1071,7 +1254,7 @@ class MainWindow:
         )
         self.update_compare_plot(update_scrollbar=False)
 
-    def update_compare_plot(self, update_scrollbar: bool = True) -> None:
+    def update_compare_plot(self, _value: object = None, *, update_scrollbar: bool = True) -> None:
         if self.compare_a is None or self.compare_b is None:
             return
         mode = self.compare_mode_combo.currentData()
