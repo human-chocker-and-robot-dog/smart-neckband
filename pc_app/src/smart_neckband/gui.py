@@ -8,6 +8,15 @@ import time
 from .analysis import EcgAnalysisResult, analyze_recent_ecg, get_ecg_analysis_info
 from .attitude import ComplementaryAttitudeFilter, Orientation
 from .buffers import ImuSample
+from .history import (
+    HistoryEcgData,
+    analyze_history_ecg,
+    downsample_xy,
+    list_session_records,
+    load_session_analysis_summary,
+    load_session_ecg_samples,
+    load_session_markers,
+)
 from .protocol import ECG_SAMPLE_RATE_HZ, FLAG_LO_MINUS, FLAG_LO_PLUS
 from .serial_io import PcDataStores, SerialPacketReader, list_serial_ports
 from .sessions import ExperimentSessionRecorder, PLACEMENT_PRESETS, WIRE_MAPS, RecordingState
@@ -139,6 +148,10 @@ class MainWindow:
         self.record_prebuffer_lock = Lock()
         self.raw_marker_items: list[object] = []
         self.clean_marker_items: list[object] = []
+        self.history_records: tuple[object, ...] = ()
+        self.history_ecg_data: HistoryEcgData | None = None
+        self.history_markers: tuple[object, ...] = ()
+        self.history_marker_items: list[object] = []
         self.ecg_worker = EcgAnalysisWorker(self.stores)
         self.attitude_worker = AttitudeWorker(self.stores)
         self.ecg_worker.start()
@@ -148,8 +161,9 @@ class MainWindow:
         self.window.setWindowTitle("AI 智能颈环 V0 上位机")
         self.window.resize(1280, 820)
 
-        central = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(central)
+        tabs = QtWidgets.QTabWidget()
+        live_tab = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(live_tab)
         toolbar = QtWidgets.QHBoxLayout()
         self.port_combo = QtWidgets.QComboBox()
         self.refresh_button = QtWidgets.QPushButton("刷新串口")
@@ -309,7 +323,10 @@ class MainWindow:
             analysis_layout.addWidget(label, row // 2, row % 2)
         layout.addWidget(analysis_group)
 
-        self.window.setCentralWidget(central)
+        history_tab = self._build_history_tab()
+        tabs.addTab(live_tab, "实时")
+        tabs.addTab(history_tab, "历史记录")
+        self.window.setCentralWidget(tabs)
         self.refresh_button.clicked.connect(self.refresh_ports)
         self.connect_button.clicked.connect(self.connect_serial)
         self.disconnect_button.clicked.connect(self.disconnect_serial)
@@ -322,11 +339,53 @@ class MainWindow:
         self.talk_marker_button.clicked.connect(lambda: self.add_marker("talk", "说话"))
         self.turn_marker_button.clicked.connect(lambda: self.add_marker("turn", "转头"))
         self.custom_marker_button.clicked.connect(self.add_custom_marker)
+        self.history_refresh_button.clicked.connect(self.refresh_history_sessions)
+        self.history_load_button.clicked.connect(self.load_selected_history_session)
+        self.history_mode_combo.currentIndexChanged.connect(self.update_history_plot)
 
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.update_view)
         self.timer.start(100)
         self.refresh_ports()
+        self.refresh_history_sessions()
+
+    def _build_history_tab(self) -> object:
+        QtWidgets = self.QtWidgets
+        layout_widget = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(layout_widget)
+
+        toolbar = QtWidgets.QHBoxLayout()
+        self.history_session_combo = QtWidgets.QComboBox()
+        self.history_refresh_button = QtWidgets.QPushButton("刷新记录")
+        self.history_load_button = QtWidgets.QPushButton("加载记录")
+        self.history_mode_combo = QtWidgets.QComboBox()
+        self.history_mode_combo.addItem("Raw", "raw")
+        self.history_mode_combo.addItem("Clean", "clean")
+        toolbar.addWidget(self.history_session_combo, 3)
+        toolbar.addWidget(self.history_refresh_button)
+        toolbar.addWidget(self.history_load_button)
+        toolbar.addWidget(self.history_mode_combo)
+        layout.addLayout(toolbar)
+
+        self.history_status_label = QtWidgets.QLabel("未加载历史记录")
+        self.history_metadata_label = QtWidgets.QLabel("")
+        self.history_metadata_label.setWordWrap(True)
+        self.history_analysis_label = QtWidgets.QLabel("")
+        self.history_analysis_label.setWordWrap(True)
+        layout.addWidget(self.history_status_label)
+        layout.addWidget(self.history_metadata_label)
+        layout.addWidget(self.history_analysis_label)
+
+        self.history_plot = self.pg.PlotWidget(title="历史 ECG")
+        self.history_curve = self.history_plot.plot(pen=self.pg.mkPen("#1769aa", width=1))
+        self.history_peak_scatter = self.pg.ScatterPlotItem(
+            pen=self.pg.mkPen("#c62828"),
+            brush=self.pg.mkBrush("#c62828"),
+            size=7,
+        )
+        self.history_plot.addItem(self.history_peak_scatter)
+        layout.addWidget(self.history_plot, 1)
+        return layout_widget
 
     def show(self) -> None:
         self.window.show()
@@ -709,6 +768,108 @@ class MainWindow:
                 line = self.pg.InfiniteLine(pos=clean_x, angle=90, pen=self.pg.mkPen("#f9a825", width=1))
                 self.clean_plot.addItem(line)
                 self.clean_marker_items.append(line)
+
+    def refresh_history_sessions(self) -> None:
+        self.history_session_combo.clear()
+        records = list_session_records(Path("data") / "sessions")
+        self.history_records = records
+        if not records:
+            self.history_session_combo.addItem("暂无历史记录", None)
+            self.history_status_label.setText("暂无历史记录")
+            return
+        for record in records:
+            metadata = record.metadata
+            label = (
+                f"{metadata.started_at or metadata.ended_at or metadata.session_id} | "
+                f"{metadata.display_name} | {metadata.placement_id} {metadata.placement_name} | "
+                f"{metadata.sample_count} 点"
+            )
+            self.history_session_combo.addItem(label, record)
+        self.history_status_label.setText(f"找到 {len(records)} 条历史记录")
+
+    def load_selected_history_session(self) -> None:
+        record = self.history_session_combo.currentData()
+        if record is None:
+            return
+        try:
+            markers = load_session_markers(record.session_dir)
+            analysis_summary = load_session_analysis_summary(record.session_dir)
+            samples = load_session_ecg_samples(record.session_dir)
+            ecg_data = analyze_history_ecg(samples)
+        except Exception as exc:
+            self.history_status_label.setText(f"加载失败：{exc}")
+            return
+
+        self.history_markers = markers
+        self.history_ecg_data = ecg_data
+        metadata = record.metadata
+        duration_s = metadata.sample_count / float(ECG_SAMPLE_RATE_HZ) if metadata.sample_count else 0.0
+        self.history_status_label.setText(
+            f"已加载：{metadata.display_name}，{len(samples)} 点，约 {duration_s:.1f} 秒，分析 {ecg_data.message}"
+        )
+        self.history_metadata_label.setText(
+            " | ".join(
+                (
+                    f"点位 {metadata.placement_id} {metadata.placement_name}",
+                    f"线序 {metadata.wire_map}",
+                    f"电极 {metadata.electrode_type or '--'}",
+                    f"状态 {metadata.status}",
+                    f"端口 {metadata.port or '--'}",
+                    f"备注 {metadata.notes or '--'}",
+                )
+            )
+        )
+        self.history_analysis_label.setText(
+            " | ".join(
+                (
+                    f"markers {len(markers)}",
+                    f"analysis_completed {analysis_summary.get('analysis_completed', False)}",
+                    f"library {analysis_summary.get('analysis_library', '--')} "
+                    f"{analysis_summary.get('analysis_library_version', '')}",
+                )
+            )
+        )
+        self.update_history_plot()
+
+    def update_history_plot(self) -> None:
+        if self.history_ecg_data is None:
+            return
+        data = self.history_ecg_data
+        mode = self.history_mode_combo.currentData()
+        values = data.clean_values if mode == "clean" else data.raw_values
+        if not data.samples or not values:
+            self.history_curve.setData([], [])
+            self.history_peak_scatter.setData([])
+            return
+
+        first_sample_index = data.samples[0].sample_index
+        x_values = [
+            (sample.sample_index - first_sample_index) / float(ECG_SAMPLE_RATE_HZ)
+            for sample in data.samples[: len(values)]
+        ]
+        x_plot, y_plot = downsample_xy(x_values, values, max_points=12_000)
+        self.history_curve.setData(x_plot, y_plot)
+
+        if mode == "clean" and data.r_peak_indices:
+            spots = [
+                {"pos": (x_values[index], values[index])}
+                for index in data.r_peak_indices
+                if 0 <= index < len(values)
+            ]
+            self.history_peak_scatter.setData(spots)
+        else:
+            self.history_peak_scatter.setData([])
+
+        for item in self.history_marker_items:
+            self.history_plot.removeItem(item)
+        self.history_marker_items.clear()
+        last_sample_index = data.samples[-1].sample_index
+        for marker in self.history_markers:
+            if first_sample_index <= marker.sample_index <= last_sample_index:
+                x_pos = (marker.sample_index - first_sample_index) / float(ECG_SAMPLE_RATE_HZ)
+                line = self.pg.InfiniteLine(pos=x_pos, angle=90, pen=self.pg.mkPen("#f9a825", width=1))
+                self.history_plot.addItem(line)
+                self.history_marker_items.append(line)
 
     def _update_imu(self) -> None:
         orientation, sample = self.attitude_worker.latest()
