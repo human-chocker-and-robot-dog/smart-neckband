@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Event, Lock, Thread
 import time
+from typing import Callable
 
 from .buffers import EcgRingBuffer, ImuRingBuffer, StatusRingBuffer
 from .protocol import (
@@ -90,6 +91,7 @@ class SerialPacketReader:
         stores: PcDataStores | None = None,
         raw_log_path: str | Path | None = None,
         publisher: DataPublisher | None = None,
+        raw_chunk_callback: Callable[[bytes], None] | None = None,
     ) -> None:
         self.port = port
         self.baudrate = baudrate
@@ -97,6 +99,7 @@ class SerialPacketReader:
         self.parser = PacketParser()
         self.publisher = publisher or NullPublisher()
         self.raw_log_path = Path(raw_log_path) if raw_log_path is not None else None
+        self.raw_chunk_callback = raw_chunk_callback
         self._stop = Event()
         self._runtime_lock = Lock()
         self._thread: Thread | None = None
@@ -175,6 +178,8 @@ class SerialPacketReader:
                         continue
                     if self._recorder is not None:
                         self._recorder.write(chunk)
+                    if self.raw_chunk_callback is not None:
+                        self.raw_chunk_callback(chunk)
                     for packet in self.parser.feed(chunk):
                         self._dispatch(packet)
         except Exception as exc:  # pragma: no cover - hardware/OS path

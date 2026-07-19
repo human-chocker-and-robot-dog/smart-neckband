@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from pathlib import Path
 from threading import Event, Lock, Thread
 import time
@@ -9,6 +10,7 @@ from .attitude import ComplementaryAttitudeFilter, Orientation
 from .buffers import ImuSample
 from .protocol import FLAG_LO_MINUS, FLAG_LO_PLUS
 from .serial_io import PcDataStores, SerialPacketReader, list_serial_ports
+from .sessions import ExperimentSessionRecorder, PLACEMENT_PRESETS, WIRE_MAPS, RecordingState
 from .status import ConnectionSnapshot, ConnectionState, connection_state_text
 
 
@@ -127,6 +129,14 @@ class MainWindow:
         self.pg = pg
         self.stores = PcDataStores.create()
         self.reader: SerialPacketReader | None = None
+        self.session_recorder: ExperimentSessionRecorder | None = None
+        self.recording_state = RecordingState.IDLE
+        self.countdown_deadline_s: float | None = None
+        self.waiting_after_sample_index: int | None = None
+        self.record_prebuffer: deque[bytes] = deque()
+        self.record_prebuffer_bytes = 0
+        self.record_prebuffer_limit_bytes = 64 * 1024
+        self.record_prebuffer_lock = Lock()
         self.ecg_worker = EcgAnalysisWorker(self.stores)
         self.attitude_worker = AttitudeWorker(self.stores)
         self.ecg_worker.start()
@@ -169,6 +179,48 @@ class MainWindow:
         ):
             connection_layout.addWidget(widget, index // 3, index % 3)
         layout.addWidget(connection_group)
+
+        record_group = QtWidgets.QGroupBox("实验记录")
+        record_layout = QtWidgets.QGridLayout(record_group)
+        self.record_name_edit = QtWidgets.QLineEdit()
+        self.record_name_edit.setPlaceholderText("例如：锁骨内侧第一次")
+        self.placement_combo = QtWidgets.QComboBox()
+        for preset in PLACEMENT_PRESETS:
+            self.placement_combo.addItem(f"{preset.placement_id} {preset.placement_name}", preset)
+        self.wire_combo = QtWidgets.QComboBox()
+        for value, label in WIRE_MAPS:
+            self.wire_combo.addItem(label, value)
+        self.electrode_edit = QtWidgets.QLineEdit("AgAgCl 湿电极")
+        self.notes_edit = QtWidgets.QLineEdit()
+        self.notes_edit.setPlaceholderText("备注")
+        self.delay_combo = QtWidgets.QComboBox()
+        self.delay_combo.addItem("立即开始", 0)
+        self.delay_combo.addItem("3 秒后开始", 3)
+        self.delay_combo.addItem("5 秒后开始", 5)
+        self.delay_combo.setCurrentIndex(1)
+        self.start_record_button = QtWidgets.QPushButton("开始记录")
+        self.stop_record_button = QtWidgets.QPushButton("停止记录")
+        self.cancel_countdown_button = QtWidgets.QPushButton("取消倒计时")
+        self.record_status_label = QtWidgets.QLabel("未记录")
+        self.record_sample_label = QtWidgets.QLabel("记录样本 0")
+        record_layout.addWidget(QtWidgets.QLabel("记录名称"), 0, 0)
+        record_layout.addWidget(self.record_name_edit, 0, 1)
+        record_layout.addWidget(QtWidgets.QLabel("电极点位"), 0, 2)
+        record_layout.addWidget(self.placement_combo, 0, 3)
+        record_layout.addWidget(QtWidgets.QLabel("线序"), 1, 0)
+        record_layout.addWidget(self.wire_combo, 1, 1)
+        record_layout.addWidget(QtWidgets.QLabel("电极类型"), 1, 2)
+        record_layout.addWidget(self.electrode_edit, 1, 3)
+        record_layout.addWidget(QtWidgets.QLabel("备注"), 2, 0)
+        record_layout.addWidget(self.notes_edit, 2, 1)
+        record_layout.addWidget(QtWidgets.QLabel("开始延时"), 2, 2)
+        record_layout.addWidget(self.delay_combo, 2, 3)
+        record_layout.addWidget(self.start_record_button, 3, 0)
+        record_layout.addWidget(self.stop_record_button, 3, 1)
+        record_layout.addWidget(self.cancel_countdown_button, 3, 2)
+        record_layout.addWidget(self.record_status_label, 3, 3)
+        record_layout.addWidget(self.record_sample_label, 4, 0, 1, 4)
+        layout.addWidget(record_group)
 
         status_layout = QtWidgets.QGridLayout()
         self.hr_label = QtWidgets.QLabel("心率（HR）--")
@@ -247,6 +299,9 @@ class MainWindow:
         self.connect_button.clicked.connect(self.connect_serial)
         self.disconnect_button.clicked.connect(self.disconnect_serial)
         self.calibrate_button.clicked.connect(self.attitude_worker.calibrate_flat)
+        self.start_record_button.clicked.connect(self.start_recording)
+        self.stop_record_button.clicked.connect(self.stop_recording)
+        self.cancel_countdown_button.clicked.connect(self.cancel_countdown)
 
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.update_view)
@@ -279,11 +334,18 @@ class MainWindow:
             return
         self.disconnect_serial()
         raw_path = Path("data") / f"smartcollar_v0_{time.strftime('%Y%m%d_%H%M%S')}.bin"
-        self.reader = SerialPacketReader(port=port, stores=self.stores, raw_log_path=raw_path)
+        self.reader = SerialPacketReader(
+            port=port,
+            stores=self.stores,
+            raw_log_path=raw_path,
+            raw_chunk_callback=self._record_raw_chunk,
+        )
         self.reader.start()
         self.connection_label.setText(f"正在连接 {port}……")
 
     def disconnect_serial(self) -> None:
+        if self.session_recorder is not None:
+            self._finish_recording(status="interrupted", reason="连接断开")
         if self.reader is not None:
             self.reader.stop()
             self.reader = None
@@ -293,6 +355,7 @@ class MainWindow:
         self._update_ecg()
         self._update_status_labels()
         self._update_connection_status()
+        self._update_recording_state()
         self._update_imu()
 
     def _analysis_info_lines(self) -> tuple[str, ...]:
@@ -430,6 +493,136 @@ class MainWindow:
         )
         self.connect_button.setEnabled(self.reader is None or snapshot.state is ConnectionState.ERROR)
         self.disconnect_button.setEnabled(self.reader is not None)
+
+    def _latest_ecg_sample(self) -> object | None:
+        samples = self.stores.ecg.snapshot()
+        return samples[-1] if samples else None
+
+    def _record_raw_chunk(self, chunk: bytes) -> None:
+        recorder = self.session_recorder
+        if recorder is None:
+            return
+        with self.record_prebuffer_lock:
+            if self.recording_state is RecordingState.RECORDING:
+                recorder.write_raw(chunk)
+                return
+            if self.recording_state is RecordingState.WAITING_FIRST_VALID_SAMPLE:
+                self.record_prebuffer.append(chunk)
+                self.record_prebuffer_bytes += len(chunk)
+                while self.record_prebuffer_bytes > self.record_prebuffer_limit_bytes and self.record_prebuffer:
+                    removed = self.record_prebuffer.popleft()
+                    self.record_prebuffer_bytes -= len(removed)
+
+    def _selected_placement(self) -> object:
+        return self.placement_combo.currentData()
+
+    def _arm_recording_wait(self) -> None:
+        with self.record_prebuffer_lock:
+            self.record_prebuffer.clear()
+            self.record_prebuffer_bytes = 0
+        self.recording_state = RecordingState.WAITING_FIRST_VALID_SAMPLE
+        self.record_status_label.setText("正在等待第一份有效 ECG 数据")
+
+    def start_recording(self) -> None:
+        if self.session_recorder is not None:
+            return
+        snapshot = self._connection_snapshot()
+        if snapshot.state is not ConnectionState.RECEIVING:
+            self.record_status_label.setText("请先连接设备并确认正在接收 ECG")
+            return
+        latest = self._latest_ecg_sample()
+        self.waiting_after_sample_index = getattr(latest, "sample_index", None)
+        port = snapshot.port or ""
+        placement = self._selected_placement()
+        self.session_recorder = ExperimentSessionRecorder(
+            base_dir=Path("data") / "sessions",
+            display_name=self.record_name_edit.text(),
+            placement=placement,
+            wire_map=str(self.wire_combo.currentData()),
+            electrode_type=self.electrode_edit.text(),
+            notes=self.notes_edit.text(),
+            port=port,
+        )
+        delay_seconds = int(self.delay_combo.currentData())
+        if delay_seconds > 0:
+            self.recording_state = RecordingState.COUNTDOWN
+            self.countdown_deadline_s = time.monotonic() + delay_seconds
+            self.record_status_label.setText(f"{delay_seconds} 秒后开始记录")
+        else:
+            self._arm_recording_wait()
+
+    def stop_recording(self) -> None:
+        if self.session_recorder is None:
+            return
+        if self.recording_state in (RecordingState.COUNTDOWN, RecordingState.WAITING_FIRST_VALID_SAMPLE):
+            self._finish_recording(status="interrupted", reason="用户停止，尚未写入有效 ECG 数据")
+            return
+        self._finish_recording(status="completed", reason=None)
+
+    def cancel_countdown(self) -> None:
+        if self.recording_state is RecordingState.COUNTDOWN and self.session_recorder is not None:
+            self._finish_recording(status="interrupted", reason="用户取消倒计时")
+
+    def _finish_recording(self, *, status: str, reason: str | None) -> None:
+        recorder = self.session_recorder
+        if recorder is None:
+            return
+        self.recording_state = RecordingState.SAVING
+        self.record_status_label.setText("正在保存")
+        latest = self._latest_ecg_sample()
+        if latest is not None:
+            recorder.update_latest_sample(getattr(latest, "sample_index"))
+        try:
+            final_dir = recorder.finish(status=status, interrupted_reason=reason)
+        except Exception as exc:
+            self.recording_state = RecordingState.ERROR
+            self.record_status_label.setText(f"保存失败：{exc}")
+            self.session_recorder = None
+            return
+        self.session_recorder = None
+        self.countdown_deadline_s = None
+        self.waiting_after_sample_index = None
+        with self.record_prebuffer_lock:
+            self.record_prebuffer.clear()
+            self.record_prebuffer_bytes = 0
+        self.recording_state = RecordingState.SAVED if status == "completed" else RecordingState.INTERRUPTED
+        self.record_status_label.setText(f"保存完成：{final_dir}")
+
+    def _update_recording_state(self) -> None:
+        self.stop_record_button.setEnabled(self.session_recorder is not None)
+        self.cancel_countdown_button.setEnabled(self.recording_state is RecordingState.COUNTDOWN)
+        self.start_record_button.setEnabled(self.session_recorder is None)
+        if self.session_recorder is None:
+            return
+
+        if self.recording_state is RecordingState.COUNTDOWN:
+            if self.countdown_deadline_s is None:
+                return
+            remaining = max(0, int(self.countdown_deadline_s - time.monotonic()) + 1)
+            if remaining > 0:
+                self.record_status_label.setText(f"{remaining} 秒后开始记录")
+                return
+            self._arm_recording_wait()
+
+        latest = self._latest_ecg_sample()
+        if latest is None:
+            return
+        latest_index = getattr(latest, "sample_index")
+        if self.recording_state is RecordingState.WAITING_FIRST_VALID_SAMPLE:
+            if self.waiting_after_sample_index is None or latest_index > self.waiting_after_sample_index:
+                with self.record_prebuffer_lock:
+                    self.session_recorder.start_at_sample(latest_index)
+                    for chunk in self.record_prebuffer:
+                        self.session_recorder.write_raw(chunk)
+                    self.record_prebuffer.clear()
+                    self.record_prebuffer_bytes = 0
+                    self.recording_state = RecordingState.RECORDING
+
+        if self.recording_state is RecordingState.RECORDING:
+            self.session_recorder.update_latest_sample(latest_index)
+            seconds = self.session_recorder.sample_count / 500.0
+            self.record_status_label.setText(f"正在记录：{seconds:0>8.1f} 秒")
+            self.record_sample_label.setText(f"记录样本 {self.session_recorder.sample_count}")
 
     def _update_imu(self) -> None:
         orientation, sample = self.attitude_worker.latest()
