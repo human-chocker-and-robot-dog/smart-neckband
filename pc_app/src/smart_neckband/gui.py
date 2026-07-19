@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
+from datetime import datetime
 from pathlib import Path
 from threading import Event, Lock, Thread
 import time
@@ -11,11 +12,13 @@ from .buffers import ImuSample
 from .history import (
     HistoryEcgData,
     analyze_history_ecg,
+    comparison_summary,
     downsample_xy,
     list_session_records,
     load_session_analysis_summary,
     load_session_ecg_samples,
     load_session_markers,
+    write_json_export,
 )
 from .protocol import ECG_SAMPLE_RATE_HZ, FLAG_LO_MINUS, FLAG_LO_PLUS
 from .serial_io import PcDataStores, SerialPacketReader, list_serial_ports
@@ -152,6 +155,9 @@ class MainWindow:
         self.history_ecg_data: HistoryEcgData | None = None
         self.history_markers: tuple[object, ...] = ()
         self.history_marker_items: list[object] = []
+        self.compare_a: tuple[object, HistoryEcgData, tuple[object, ...]] | None = None
+        self.compare_b: tuple[object, HistoryEcgData, tuple[object, ...]] | None = None
+        self.compare_marker_items: list[object] = []
         self.ecg_worker = EcgAnalysisWorker(self.stores)
         self.attitude_worker = AttitudeWorker(self.stores)
         self.ecg_worker.start()
@@ -324,8 +330,10 @@ class MainWindow:
         layout.addWidget(analysis_group)
 
         history_tab = self._build_history_tab()
+        compare_tab = self._build_compare_tab()
         tabs.addTab(live_tab, "实时")
         tabs.addTab(history_tab, "历史记录")
+        tabs.addTab(compare_tab, "双轨对比")
         self.window.setCentralWidget(tabs)
         self.refresh_button.clicked.connect(self.refresh_ports)
         self.connect_button.clicked.connect(self.connect_serial)
@@ -342,6 +350,12 @@ class MainWindow:
         self.history_refresh_button.clicked.connect(self.refresh_history_sessions)
         self.history_load_button.clicked.connect(self.load_selected_history_session)
         self.history_mode_combo.currentIndexChanged.connect(self.update_history_plot)
+        self.compare_refresh_button.clicked.connect(self.refresh_history_sessions)
+        self.compare_load_button.clicked.connect(self.load_compare_sessions)
+        self.compare_mode_combo.currentIndexChanged.connect(self.update_compare_plot)
+        self.compare_y_mode_combo.currentIndexChanged.connect(self.update_compare_plot)
+        self.compare_export_json_button.clicked.connect(self.export_compare_json)
+        self.compare_export_png_button.clicked.connect(self.export_compare_png)
 
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.update_view)
@@ -385,6 +399,46 @@ class MainWindow:
         )
         self.history_plot.addItem(self.history_peak_scatter)
         layout.addWidget(self.history_plot, 1)
+        return layout_widget
+
+    def _build_compare_tab(self) -> object:
+        QtWidgets = self.QtWidgets
+        layout_widget = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(layout_widget)
+
+        top = QtWidgets.QGridLayout()
+        self.compare_a_combo = QtWidgets.QComboBox()
+        self.compare_b_combo = QtWidgets.QComboBox()
+        self.compare_refresh_button = QtWidgets.QPushButton("刷新记录")
+        self.compare_load_button = QtWidgets.QPushButton("加载对比")
+        self.compare_mode_combo = QtWidgets.QComboBox()
+        self.compare_mode_combo.addItem("Raw", "raw")
+        self.compare_mode_combo.addItem("Clean", "clean")
+        self.compare_y_mode_combo = QtWidgets.QComboBox()
+        self.compare_y_mode_combo.addItem("原始幅值", "raw")
+        self.compare_y_mode_combo.addItem("零均值", "zero_mean")
+        self.compare_export_json_button = QtWidgets.QPushButton("导出 JSON")
+        self.compare_export_png_button = QtWidgets.QPushButton("导出 PNG")
+        top.addWidget(QtWidgets.QLabel("A"), 0, 0)
+        top.addWidget(self.compare_a_combo, 0, 1, 1, 5)
+        top.addWidget(QtWidgets.QLabel("B"), 1, 0)
+        top.addWidget(self.compare_b_combo, 1, 1, 1, 5)
+        top.addWidget(self.compare_refresh_button, 2, 0)
+        top.addWidget(self.compare_load_button, 2, 1)
+        top.addWidget(self.compare_mode_combo, 2, 2)
+        top.addWidget(self.compare_y_mode_combo, 2, 3)
+        top.addWidget(self.compare_export_json_button, 2, 4)
+        top.addWidget(self.compare_export_png_button, 2, 5)
+        layout.addLayout(top)
+
+        self.compare_status_label = QtWidgets.QLabel("未加载对比")
+        self.compare_status_label.setWordWrap(True)
+        layout.addWidget(self.compare_status_label)
+
+        self.compare_plot = self.pg.PlotWidget(title="A/B ECG 对比")
+        self.compare_curve_a = self.compare_plot.plot(pen=self.pg.mkPen("#1769aa", width=1))
+        self.compare_curve_b = self.compare_plot.plot(pen=self.pg.mkPen("#d81b60", width=1))
+        layout.addWidget(self.compare_plot, 1)
         return layout_widget
 
     def show(self) -> None:
@@ -775,6 +829,10 @@ class MainWindow:
         self.history_records = records
         if not records:
             self.history_session_combo.addItem("暂无历史记录", None)
+            self.compare_a_combo.clear()
+            self.compare_b_combo.clear()
+            self.compare_a_combo.addItem("暂无历史记录", None)
+            self.compare_b_combo.addItem("暂无历史记录", None)
             self.history_status_label.setText("暂无历史记录")
             return
         for record in records:
@@ -785,7 +843,19 @@ class MainWindow:
                 f"{metadata.sample_count} 点"
             )
             self.history_session_combo.addItem(label, record)
+        self._fill_compare_session_combos(records)
         self.history_status_label.setText(f"找到 {len(records)} 条历史记录")
+
+    def _fill_compare_session_combos(self, records: tuple[object, ...]) -> None:
+        self.compare_a_combo.clear()
+        self.compare_b_combo.clear()
+        for record in records:
+            metadata = record.metadata
+            label = f"{metadata.display_name} | {metadata.placement_id} {metadata.placement_name} | {metadata.session_id}"
+            self.compare_a_combo.addItem(label, record)
+            self.compare_b_combo.addItem(label, record)
+        if self.compare_b_combo.count() > 1:
+            self.compare_b_combo.setCurrentIndex(1)
 
     def load_selected_history_session(self) -> None:
         record = self.history_session_combo.currentData()
@@ -870,6 +940,119 @@ class MainWindow:
                 line = self.pg.InfiniteLine(pos=x_pos, angle=90, pen=self.pg.mkPen("#f9a825", width=1))
                 self.history_plot.addItem(line)
                 self.history_marker_items.append(line)
+
+    def load_compare_sessions(self) -> None:
+        record_a = self.compare_a_combo.currentData()
+        record_b = self.compare_b_combo.currentData()
+        if record_a is None or record_b is None:
+            return
+        try:
+            self.compare_a = self._load_compare_track(record_a)
+            self.compare_b = self._load_compare_track(record_b)
+        except Exception as exc:
+            self.compare_status_label.setText(f"加载失败：{exc}")
+            return
+        self.compare_status_label.setText(
+            f"A {record_a.metadata.display_name} / B {record_b.metadata.display_name}"
+        )
+        self.update_compare_plot()
+
+    def _load_compare_track(self, record: object) -> tuple[object, HistoryEcgData, tuple[object, ...]]:
+        markers = load_session_markers(record.session_dir)
+        samples = load_session_ecg_samples(record.session_dir)
+        data = analyze_history_ecg(samples)
+        return record, data, markers
+
+    def update_compare_plot(self) -> None:
+        if self.compare_a is None or self.compare_b is None:
+            return
+        mode = self.compare_mode_combo.currentData()
+        y_axis_mode = self.compare_y_mode_combo.currentData()
+        self._plot_compare_track(self.compare_a, self.compare_curve_a, mode, y_axis_mode)
+        self._plot_compare_track(self.compare_b, self.compare_curve_b, mode, y_axis_mode)
+
+        for item in self.compare_marker_items:
+            self.compare_plot.removeItem(item)
+        self.compare_marker_items.clear()
+        self._plot_compare_markers(self.compare_a, "#1769aa")
+        self._plot_compare_markers(self.compare_b, "#d81b60")
+
+    def _plot_compare_track(
+        self,
+        track: tuple[object, HistoryEcgData, tuple[object, ...]],
+        curve: object,
+        mode: str,
+        y_axis_mode: str,
+    ) -> None:
+        _record, data, _markers = track
+        values = data.clean_values if mode == "clean" else data.raw_values
+        if not data.samples or not values:
+            curve.setData([], [])
+            return
+        first_sample_index = data.samples[0].sample_index
+        x_values = [
+            (sample.sample_index - first_sample_index) / float(ECG_SAMPLE_RATE_HZ)
+            for sample in data.samples[: len(values)]
+        ]
+        y_values = list(values)
+        if y_axis_mode == "zero_mean" and y_values:
+            mean_value = sum(y_values) / len(y_values)
+            y_values = [value - mean_value for value in y_values]
+        x_plot, y_plot = downsample_xy(x_values, y_values, max_points=12_000)
+        curve.setData(x_plot, y_plot)
+
+    def _plot_compare_markers(self, track: tuple[object, HistoryEcgData, tuple[object, ...]], color: str) -> None:
+        _record, data, markers = track
+        if not data.samples:
+            return
+        first_sample_index = data.samples[0].sample_index
+        last_sample_index = data.samples[-1].sample_index
+        for marker in markers:
+            if first_sample_index <= marker.sample_index <= last_sample_index:
+                x_pos = (marker.sample_index - first_sample_index) / float(ECG_SAMPLE_RATE_HZ)
+                line = self.pg.InfiniteLine(pos=x_pos, angle=90, pen=self.pg.mkPen(color, width=1))
+                self.compare_plot.addItem(line)
+                self.compare_marker_items.append(line)
+
+    def export_compare_json(self) -> None:
+        if self.compare_a is None or self.compare_b is None:
+            self.compare_status_label.setText("请先加载 A/B 对比")
+            return
+        record_a, data_a, markers_a = self.compare_a
+        record_b, data_b, markers_b = self.compare_b
+        summary = comparison_summary(
+            record_a=record_a,
+            data_a=data_a,
+            markers_a=markers_a,
+            record_b=record_b,
+            data_b=data_b,
+            markers_b=markers_b,
+            mode=str(self.compare_mode_combo.currentData()),
+            y_axis_mode=str(self.compare_y_mode_combo.currentData()),
+        )
+        export_path = Path("data") / "exports" / f"compare_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        try:
+            write_json_export(export_path, summary)
+        except Exception as exc:
+            self.compare_status_label.setText(f"JSON 导出失败：{exc}")
+            return
+        self.compare_status_label.setText(f"JSON 已导出：{export_path}")
+
+    def export_compare_png(self) -> None:
+        if self.compare_a is None or self.compare_b is None:
+            self.compare_status_label.setText("请先加载 A/B 对比")
+            return
+        export_path = Path("data") / "exports" / f"compare_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        export_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            from pyqtgraph.exporters import ImageExporter
+
+            exporter = ImageExporter(self.compare_plot.plotItem)
+            exporter.export(str(export_path))
+        except Exception as exc:
+            self.compare_status_label.setText(f"PNG 导出失败：{exc}")
+            return
+        self.compare_status_label.setText(f"PNG 已导出：{export_path}")
 
     def _update_imu(self) -> None:
         orientation, sample = self.attitude_worker.latest()

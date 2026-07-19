@@ -2,10 +2,12 @@ from datetime import datetime
 
 from smart_neckband.history import (
     analyze_history_ecg,
+    comparison_summary,
     downsample_xy,
     list_session_records,
     load_session_ecg_samples,
     load_session_markers,
+    write_json_export,
 )
 from smart_neckband.protocol import ECG_SAMPLE_COUNT, encode_ecg_packet
 from smart_neckband.sessions import PLACEMENT_PRESETS, ExperimentSessionRecorder
@@ -72,3 +74,26 @@ def test_downsample_xy_limits_points() -> None:
     assert len(x_values) == 10
     assert x_values[1] == 10
     assert y_values[-1] == 90
+
+
+def test_comparison_summary_and_export(tmp_path) -> None:
+    session_dir = _write_session(tmp_path)
+    record = list_session_records(tmp_path)[0]
+    data = analyze_history_ecg(load_session_ecg_samples(session_dir))
+    markers = load_session_markers(session_dir)
+
+    summary = comparison_summary(
+        record_a=record,
+        data_a=data,
+        markers_a=markers,
+        record_b=record,
+        data_b=data,
+        markers_b=markers,
+        mode="raw",
+        y_axis_mode="zero_mean",
+    )
+    export_path = write_json_export(tmp_path / "exports" / "compare.json", summary)
+
+    assert summary["track_a"]["display_name"] == "历史测试"
+    assert summary["track_a"]["markers"][0]["seconds_from_session_start"] == 0.004
+    assert export_path.exists()

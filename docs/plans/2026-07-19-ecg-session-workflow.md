@@ -86,7 +86,7 @@ Firmware build/size is not required unless firmware files change.
 - [x] Phase 2: add session metadata model, delayed recording controls, raw session capture, interrupted-save behavior, and session directory creation.
 - [x] Phase 3: add action marker buttons, marker JSON persistence, and live Raw/Clean marker lines.
 - [x] Phase 4: add historical session scanner, raw.bin ECG loader, static Raw/Clean ECG viewer, metadata summary, analysis summary, marker display, and loader tests.
-- [ ] Phase 5: dual-track comparison and export.
+- [x] Phase 5: add A/B session comparison, Raw/Clean mode, zero-mean y-axis mode, marker alignment lines, JSON summary export, PNG export, and export tests.
 
 ## Discoveries
 
@@ -97,7 +97,8 @@ Firmware build/size is not required unless firmware files change.
 - Session recording clears a small raw chunk prebuffer when it starts waiting for the first post-countdown ECG sample, then flushes that prebuffer into `raw.bin` when the first new sample is observed. This avoids retroactively including pre-countdown bytes while reducing the chance of dropping the trigger packet.
 - Live markers are currently shown as vertical lines on Raw and Clean ECG plots. Marker text labels are persisted in `markers.json` and can be rendered by the historical viewer in Phase 4.
 - Historical ECG loading reuses the same V0 binary `PacketParser`, ignores IMU/status packets for the ECG viewer, and downsamples plot points for display only. The saved `raw.bin` is not modified.
+- Dual-track comparison reuses the historical loader and aligns each track to its own session start in seconds. Marker alignment is visualized as colored vertical lines per track.
 
 ## Result
 
-In progress. Phase 1, Phase 2, and Phase 3 are committed. Phase 4 is implemented pending validation and commit.
+Implemented through Phase 5 pending final validation and commit.

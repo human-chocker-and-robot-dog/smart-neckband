@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 import json
 from pathlib import Path
 from typing import Iterable
@@ -141,3 +142,63 @@ def downsample_xy(
         return x_list, y_list
     step = max(1, len(x_list) // max_points)
     return x_list[::step], y_list[::step]
+
+
+def comparison_summary(
+    *,
+    record_a: SessionRecord,
+    data_a: HistoryEcgData,
+    markers_a: tuple[SessionMarker, ...],
+    record_b: SessionRecord,
+    data_b: HistoryEcgData,
+    markers_b: tuple[SessionMarker, ...],
+    mode: str,
+    y_axis_mode: str,
+) -> dict[str, object]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "mode": mode,
+        "y_axis_mode": y_axis_mode,
+        "track_a": _track_summary(record_a, data_a, markers_a),
+        "track_b": _track_summary(record_b, data_b, markers_b),
+    }
+
+
+def write_json_export(path: Path, data: dict[str, object]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def _track_summary(
+    record: SessionRecord,
+    data: HistoryEcgData,
+    markers: tuple[SessionMarker, ...],
+) -> dict[str, object]:
+    metadata = record.metadata
+    sample_count = len(data.samples)
+    return {
+        "session_id": metadata.session_id,
+        "display_name": metadata.display_name,
+        "placement_id": metadata.placement_id,
+        "placement_name": metadata.placement_name,
+        "wire_map": metadata.wire_map,
+        "sample_count": sample_count,
+        "duration_s": sample_count / float(ECG_SAMPLE_RATE_HZ) if sample_count else 0.0,
+        "analysis_message": data.message,
+        "markers": [
+            {
+                "id": marker.id,
+                "label": marker.label,
+                "type": marker.type,
+                "sample_index": marker.sample_index,
+                "seconds_from_session_start": (
+                    (marker.sample_index - data.samples[0].sample_index) / float(ECG_SAMPLE_RATE_HZ)
+                    if data.samples
+                    else None
+                ),
+            }
+            for marker in markers
+        ],
+    }
