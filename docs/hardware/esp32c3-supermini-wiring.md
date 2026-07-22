@@ -81,7 +81,9 @@ esptool.py --chip esp32c3 -p COM21 flash_id
 .\tools\project.ps1 size -Target esp32c3
 ```
 
-PC GUI 中选择 `BLE`，扫描项目服务 UUID 后连接。经典 ESP32 仍可选择串口，通过 Windows 的 SPP COM 口工作。仓库目前仍默认 `esp32`；只有完成实板、传感器和 BLE 连续流验收后才切换默认目标。
+先运行 `.\tools\project.ps1 pc-setup` 安装项目以及包含 Bleak 的 GUI/串口依赖。PC GUI 中选择 `BLE`，扫描 `CollarC3-XXXX` 后连接；首次连接由上位机发起 LE Secure Connections Just Works 配对并保存绑定，不需要六位配对码，以后可复用绑定自动连接。不要优先在 Windows“添加设备”页面手工配对；如果那里残留旧的 `ESP32` 记录，应先在 Windows 中移除旧设备，再由上位机连接。经典 ESP32 仍可选择串口，通过 Windows 的 SPP COM 口工作。仓库目前仍默认 `esp32`；只有完成实板、传感器和 BLE 连续流验收后才切换默认目标。
+
+Just Works 配对仍会加密 GATT 链路并保存 Bond，但首次配对不具备数字比较/口令带来的 MITM 身份校验。后续可在 OLED 可用后改成显示动态配对码的认证模式。
 
 ## 2026-07-23 烧录记录
 

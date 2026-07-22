@@ -177,8 +177,9 @@ class BlePacketReader:
             if not client.is_connected:
                 raise RuntimeError(f"failed to connect to BLE device {self.address}")
 
-            # The firmware requires LE Secure Connections. On Windows this may
-            # display the passkey UI; a previously bonded device returns quickly.
+            # The firmware uses LE Secure Connections Just Works + bonding.
+            # The first connection completes pairing without a numeric passkey;
+            # a previously bonded device returns quickly.
             pair = getattr(client, "pair", None)
             if pair is not None:
                 paired = await pair()

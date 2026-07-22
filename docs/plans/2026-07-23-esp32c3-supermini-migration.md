@@ -228,6 +228,7 @@
 - ESP-IDF v6.0.2 的 `ble_uart` 已按 ATT MTU 自动切片；新增应用分片头会重复造轮子并改变传输语义，因此实现采用裸 V0 字节流。为了从部分包后恢复，PacketParser 在 CRC 失败时只丢弃首字节并重新搜索 magic。
 - 2026-07-23 软件验证通过：ESP32-C3 镜像 `0x84280` 字节，2 MiB 应用分区剩余 74%；经典 ESP32 镜像 `0xa0a50` 字节，剩余 69%；PC 测试 45 项全部通过。
 - 2026-07-23 COM21 烧录握手确认实板为 ESP32-C3 AZ QFN32 revision v1.1、单核 160 MHz、内置 XMC 4 MB Flash、USB Serial/JTAG；bootloader、分区表和 541,312 字节应用镜像均写入并通过哈希校验。未运行 monitor，不能据此推断应用、I2C、ADC、LO 或 BLE 已正常运行。
+- 首次 Windows 连接暴露了 DisplayOnly MITM 配对的可用性问题：动态六位码只打印到串口，用户无法从上位机完成配对。当前 bring-up 策略改为 Secure Connections Just Works + bonding，由 Bleak 发起首次配对；链路保持加密，但首次配对没有 MITM 身份校验，正式版计划在 OLED 上显示动态配对码后恢复认证配对。
 
 ## References
 

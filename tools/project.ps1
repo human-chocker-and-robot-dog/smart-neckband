@@ -271,7 +271,9 @@ switch ($Action) {
                 Invoke-Native -FilePath "py" -Arguments $venvArgs -Description "Python virtual environment creation"
             }
 
-            Invoke-Native -FilePath $venvPython -Arguments @("-m", "pip", "install", "pytest>=8") -Description "pytest installation"
+            Invoke-Native -FilePath $venvPython -Arguments @(
+                "-m", "pip", "install", "-e", ".[dev,gui,serial]"
+            ) -Description "PC application and BLE GUI dependency installation"
         }
         finally {
             Pop-Location

@@ -14,6 +14,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "host/ble_hs.h"
 #include "nvs_flash.h"
 #include "protocol_v0.h"
 
@@ -156,6 +157,20 @@ static void on_ble_rx(const uint8_t *data, size_t length)
     }
 }
 
+static void configure_just_works_bonding(void)
+{
+    /* ble_uart encrypted mode defaults to DisplayOnly + MITM and prints a
+     * random passkey only to the serial log. This board has no guaranteed
+     * display during bring-up, so keep Secure Connections, encryption, and
+     * bonding while allowing the PC application to complete Just Works.
+     * This must run after install() sets the defaults and before open()
+     * starts the NimBLE host task. */
+    ble_hs_cfg.sm_io_cap = BLE_HS_IO_NO_INPUT_OUTPUT;
+    ble_hs_cfg.sm_sc = 1;
+    ble_hs_cfg.sm_bonding = 1;
+    ble_hs_cfg.sm_mitm = 0;
+}
+
 esp_err_t v0_transport_start(void)
 {
     if (s_tx_queue == NULL) {
@@ -194,6 +209,8 @@ esp_err_t v0_transport_start(void)
         return ESP_FAIL;
     }
 
+    configure_just_works_bonding();
+
     const int open_rc = ble_uart_open();
     if (open_rc != BLE_UART_OK) {
         ESP_LOGE(TAG, "BLE UART open failed rc=%d", open_rc);
@@ -211,7 +228,8 @@ esp_err_t v0_transport_start(void)
     }
 
     ESP_LOGI(TAG,
-             "BLE GATT transport advertising as %s; V0 bytes use ATT MTU fragmentation",
+             "BLE GATT transport advertising as %s; pairing=SC Just Works + bonding; "
+             "V0 bytes use ATT MTU fragmentation",
              device_name);
     return ESP_OK;
 }
