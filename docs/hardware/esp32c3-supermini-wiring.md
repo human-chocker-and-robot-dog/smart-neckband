@@ -2,7 +2,7 @@
 
 ## 当前结论
 
-固件已经支持经典 ESP32 和 ESP32-C3 两个独立构建目标。下面的 C3 引脚是第一版候选映射，已经通过编译期约束和 ESP-IDF 构建，但尚未在用户手中的 SuperMini 实板上核验。因此在完成芯片、Flash、USB、丝印和板载负载确认前，它不是最终量产接线表。
+固件已经支持经典 ESP32 和 ESP32-C3 两个独立构建目标，并已成功烧录到用户的 ESP32-C3 SuperMini。芯片、4 MB Flash 和原生 USB 已由烧录工具确认；下面的 C3 外设引脚仍是第一版候选映射，尚未完成丝印、板载负载和传感器台架核验，因此还不是最终量产接线表。
 
 ## 旧板与新板对照
 
@@ -50,14 +50,16 @@
 
 插拔一次开发板，在设备管理器中记录新增的 COM/USB 设备、VID/PID 和驱动名称。原生 USB Serial/JTAG 与 CH340/CP210x 等外置 USB 转串口不能混为一谈。
 
+当前这台电脑在 2026-07-23 识别到的 ESP32-C3 SuperMini 台架端口是 `COM21`，并已写入忽略提交的 `config/local.ps1`。COM 号可能随 USB 插口、驱动或设备变化，烧录前仍应核对一次。
+
 ### 3. 只读查芯片和 Flash
 
 在明确端口后，可运行以下只读命令；它们不烧录、不擦除 Flash：
 
 ```powershell
 . 'C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1'
-esptool.py --chip esp32c3 -p COMx chip_id
-esptool.py --chip esp32c3 -p COMx flash_id
+esptool.py --chip esp32c3 -p COM21 chip_id
+esptool.py --chip esp32c3 -p COM21 flash_id
 ```
 
 必须记录芯片确为 ESP32-C3、MAC、Flash 厂商和实际容量。只有实测 Flash 为 4 MB，才能直接复用当前 4 MB 分区配置。
@@ -81,6 +83,19 @@ esptool.py --chip esp32c3 -p COMx flash_id
 
 PC GUI 中选择 `BLE`，扫描项目服务 UUID 后连接。经典 ESP32 仍可选择串口，通过 Windows 的 SPP COM 口工作。仓库目前仍默认 `esp32`；只有完成实板、传感器和 BLE 连续流验收后才切换默认目标。
 
+## 2026-07-23 烧录记录
+
+- 端口：`COM21`
+- 烧录目标：`esp32c3`
+- 芯片：ESP32-C3 AZ，QFN32，revision v1.1
+- 能力：Wi-Fi、Bluetooth 5 LE、单核 160 MHz
+- Flash：内置 XMC 4 MB
+- USB：USB Serial/JTAG
+- 应用镜像：541,312 字节，写入地址 `0x10000`
+- bootloader、分区表和应用镜像：写入后哈希校验全部通过
+- 复位：烧录结束后通过 RTS 硬复位
+- 串口 monitor：未运行，因此尚未确认应用启动日志、I2C 地址、ADC、LO 状态或 BLE 广播
+
 ## 当前验证状态
 
 | 项目 | 状态 |
@@ -88,7 +103,8 @@ PC GUI 中选择 `BLE`，扫描项目服务 UUID 后连接。经典 ESP32 仍可
 | ESP32-C3 编译与尺寸检查 | 已通过 |
 | 经典 ESP32 回归编译与尺寸检查 | 已通过 |
 | PC BLE 字节流/分段解析测试 | 已通过自动化测试 |
-| 用户手中 SuperMini 型号、Flash、USB | 未核验 |
+| 芯片型号、Flash、USB | 已由 COM21 烧录握手确认 |
+| 克隆板丝印和板载 GPIO 负载 | 未核验 |
 | GPIO0/3/6/7/10 实板可用性 | 未核验 |
 | ADC、LO、I2C、500 Hz 台架运行 | 未核验 |
 | Windows BLE 10 分钟连续流 | 未核验 |

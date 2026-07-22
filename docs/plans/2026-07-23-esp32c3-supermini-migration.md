@@ -11,7 +11,7 @@
 - 保留经典 ESP32 的可构建配置，便于对照、回归和回退；
 - 形成可核验的旧板/新板接线表，而不是仅凭“ESP32-C3 SuperMini”商品名假定克隆板完全一致。
 
-本计划是实施时持续更新的 ExecPlan。软件迁移和自动化验证已经完成；实板身份、烧录、台架与 BLE 连续流验证仍等待用户提供硬件并明确许可。
+本计划是实施时持续更新的 ExecPlan。软件迁移、自动化验证和 COM21 烧录已经完成；外设引脚台架与 BLE 连续流验证仍等待后续明确许可。
 
 ## Initial state
 
@@ -46,7 +46,7 @@
 ### Excluded
 
 - 修改 V0 原始 ECG 数据语义、在固件中滤波或做医疗诊断；
-- 在本计划阶段烧录、擦除 Flash、打开串口 monitor 或连接人体电极；
+- 未经用户明确许可烧录、擦除 Flash、打开串口 monitor 或连接人体电极；2026-07-23 用户已单独授权并完成一次 C3 烧录，但未授权 monitor 或人体连接；
 - 首轮移植中加入 Wi-Fi 传输、OTA、BLE Audio 或手机应用；
 - 未确认实板 Flash 容量前改变分区布局；
 - 未取得电池供电无线实测日志前声称人体连接已验证。
@@ -213,6 +213,7 @@
 - [x] 创建本 ExecPlan。
 - [ ] Gate A：确认用户手中 SuperMini 的实板版本、Flash 和 USB。
 - [x] Gate B：完成双 target 构建、传输抽象、PC 测试和 size 检查。
+- [x] 经用户明确许可，将当前 C3 镜像通过 COM21 烧录并完成三段镜像哈希校验。
 - [ ] Gate C：完成无人体电极的传感器台架验证。
 - [ ] Gate D：完成 Windows BLE 端到端连续流验证。
 - [ ] Gate E：把 ESP32-C3 SuperMini 设为仓库默认硬件目标。
@@ -226,6 +227,7 @@
 - 当前 PC 端解析、记录、分析和上传层已经以原始字节流为入口，新增 BLE ByteSource 后复用了大部分逻辑；V0 布局不变，只增强 PacketParser 的 CRC 失败后重同步策略。
 - ESP-IDF v6.0.2 的 `ble_uart` 已按 ATT MTU 自动切片；新增应用分片头会重复造轮子并改变传输语义，因此实现采用裸 V0 字节流。为了从部分包后恢复，PacketParser 在 CRC 失败时只丢弃首字节并重新搜索 magic。
 - 2026-07-23 软件验证通过：ESP32-C3 镜像 `0x84280` 字节，2 MiB 应用分区剩余 74%；经典 ESP32 镜像 `0xa0a50` 字节，剩余 69%；PC 测试 45 项全部通过。
+- 2026-07-23 COM21 烧录握手确认实板为 ESP32-C3 AZ QFN32 revision v1.1、单核 160 MHz、内置 XMC 4 MB Flash、USB Serial/JTAG；bootloader、分区表和 541,312 字节应用镜像均写入并通过哈希校验。未运行 monitor，不能据此推断应用、I2C、ADC、LO 或 BLE 已正常运行。
 
 ## References
 
@@ -240,4 +242,4 @@
 
 ## Result
 
-软件迁移已实现：双 target/profile、集中式板型引脚、通用 transport、ESP32-C3 NimBLE GATT、PC Bleak 接收、GUI 选择和协议/接线文档均已落地，Gate B 已通过。未烧录、未打开 monitor，也未对 ESP32-C3 SuperMini 实板做任何验证；Gate A、C、D、E 仍未通过，候选引脚表必须经实板核验后才能成为最终接线依据。
+软件迁移已实现：双 target/profile、集中式板型引脚、通用 transport、ESP32-C3 NimBLE GATT、PC Bleak 接收、GUI 选择和协议/接线文档均已落地，Gate B 已通过。当前镜像已成功烧录到 COM21 上的 ESP32-C3 SuperMini，并确认芯片、4 MB Flash 与原生 USB；未打开 monitor，外设 GPIO、ADC、LO、I2C、500 Hz 采样和 BLE 仍未做运行验证。Gate A 仍缺克隆板/引脚证据，Gate C、D、E 也未通过，候选引脚表必须经台架核验后才能成为最终接线依据。

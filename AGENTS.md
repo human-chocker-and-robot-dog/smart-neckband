@@ -186,7 +186,7 @@ For this Windows setup, the fastest reliable ESP-IDF command shape is to load th
 
 Known local facts from the Hello World baseline exploration:
 
-- The currently used ESP32 bench port is `COM18`; keep it in ignored `config/local.ps1` as `$ProjectSerialPort = "COM18"`.
+- The currently used ESP32-C3 SuperMini bench port is `COM21`; keep it in ignored `config/local.ps1` as `$ProjectSerialPort = "COM21"`. The classic ESP32 was previously observed on `COM18`, but that historical port must not be assumed for the C3.
 - The installed IDF root is `C:\Espressif\v6.0.2\esp-idf`.
 - The installer profile uses `C:\Espressif\tools\python\v6.0.2\venv` and reports `ESP-IDF v6.0.2`.
 - Directly dot-sourcing `C:\Espressif\v6.0.2\esp-idf\export.ps1` can fail on this machine because it expects a missing user Python environment under `C:\Users\XWen1024\.espressif\python_env\...`.
@@ -198,7 +198,7 @@ Known local facts from the Hello World baseline exploration:
 
 ### 12.2 Hardware smoke-test monitor
 
-`flash` verifies that bootloader, partition table, and app images were written and hash-checked, but it does not prove that application logs reached the serial console. When the user explicitly asks for runtime verification or explicitly permits monitor use, open a bounded monitor session on `COM18` long enough to capture boot output such as `Hello world!`, chip revision, flash size, and restart messages.
+`flash` verifies that bootloader, partition table, and app images were written and hash-checked, but it does not prove that application logs reached the serial console. When the user explicitly asks for runtime verification or explicitly permits monitor use, use the port in ignored `config/local.ps1` (currently `COM21` for the ESP32-C3 SuperMini) and open a bounded monitor session long enough to capture boot output, chip revision, flash size, board pin mapping, and restart messages.
 
 Do not leave `idf.py monitor` running indefinitely. If a background terminal/session is available, use it for monitor output and stop it promptly after the expected evidence is captured. If only blocking shell execution is available, use a short explicit timeout and report whether the monitor output was captured, timed out, or was not run.
 
