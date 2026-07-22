@@ -11,9 +11,9 @@
 - 保留经典 ESP32 的可构建配置，便于对照、回归和回退；
 - 形成可核验的旧板/新板接线表，而不是仅凭“ESP32-C3 SuperMini”商品名假定克隆板完全一致。
 
-本计划是实施时持续更新的 ExecPlan。当前阶段只完成方案与基线调查，不改固件、不烧录、不打开串口监视。
+本计划是实施时持续更新的 ExecPlan。软件迁移和自动化验证已经完成；实板身份、烧录、台架与 BLE 连续流验证仍等待用户提供硬件并明确许可。
 
-## Current state
+## Initial state
 
 - 当前分支基线来自 `feat/v0-foundation`，计划文档在独立 `docs/esp32c3-supermini-migration-plan` 分支编写。
 - `firmware/sdkconfig.defaults` 固定 `CONFIG_IDF_TARGET="esp32"`、4 MB Flash 和 Classic BT SPP。
@@ -95,7 +95,7 @@
 
 - 把采样率、缓冲区和协议常量保留为公共配置。
 - 新增两个集中式板型配置：经典 ESP32 和 ESP32-C3 SuperMini；由构建 target/profile 选择，业务源文件不得硬编码 GPIO。
-- `sdkconfig.defaults` 拆为公共 defaults 与 target 专属 defaults，默认 profile 改为 `esp32c3`，同时保留可显式构建的 `esp32` profile。
+- `sdkconfig.defaults` 拆为公共 defaults 与 target 专属 defaults；在 Gate A–D 完成前默认 profile 保持 `esp32`，同时可显式构建 `esp32c3` profile。
 - `tools/project.ps1` 的 `set-target` 不再写死 `esp32`，而是从明确的板型/target 参数或本地配置读取；doctor 同时检查 target、Flash、工具链和串口配置。
 - 切换 target 会重建生成目录和 sdkconfig；实施时先确认没有用户手工配置需要保留，生成文件不提交。
 
@@ -119,15 +119,15 @@
 - 使用 ESP-NimBLE 实现单连接 GATT peripheral；NimBLE 相对节省单核 C3 的内存和代码体积。
 - 定义一个项目专用 service，至少包含设备到 PC 的 notify characteristic；PC 到设备的 write characteristic 只为后续控制/HR/SQI 回写预留，首轮不扩展业务协议。
 - 连接后协商较大 ATT MTU 和 Data Length Extension，但不能把 Windows 成功协商 MTU ≥ 71 当作唯一可用路径。
-- BLE transport 为完整的 V0 包增加轻量分片封装；默认 20 字节 ATT 应用载荷下也能传输 68 字节 ECG 包。PC 端先按帧序号/分片序号重组出原始 V0 字节，再交给现有 PacketParser，因此 V0 golden vectors 不变。
-- 分片层必须检测丢片、乱序、重复、超时和断线残留；重连时清空旧 TX/RX 分片状态，并把异常计入 transport counters。
+- 采用 ESP-IDF v6.0.2 自带的 `ble_uart` 公共组件。组件按协商后的 ATT 载荷自动切分完整的 V0 字节流，不再增加第二层应用分片头；PC 端把任意 notification chunk 直接送入增量 `PacketParser`，因此 V0 golden vectors 不变。
+- notification 边界不等于 V0 包边界。解析器用 magic、长度和 CRC 从截断或损坏字节流恢复；连接与重连时清理旧 TX 队列，异常继续计入 transport counters。
 - 用 notification 而不是 indication 传实时数据，以免确认链路阻塞采样；可靠性由包序号、CRC、分片检测和状态计数观察。
 
 ### 7. PC 端增加 BLE ByteSource，保留串口回退
 
 - 抽取接收字节源接口，让 SerialPacketReader 和新的 BlePacketReader 复用 PacketParser、RawBinaryRecorder、buffers、publisher 和分析线程。
 - Windows BLE 后端优先采用 Bleak；扫描用固定 service UUID/设备标识，不只按可变设备名匹配。
-- GUI 明确显示连接类型（BLE 或 SPP/USB 串口）、设备地址/标识、MTU/分片状态和 transport errors。
+- GUI 明确显示连接类型（BLE 或 SPP/USB 串口）和设备地址/标识；MTU 由 BLE UART/操作系统协商，解析器不依赖 GUI 暴露 MTU。
 - 单元测试用合成 notifications 覆盖完整包、20 字节分片、跨包粘连、丢片、乱序、重连和 CRC 错误，不依赖真实蓝牙硬件。
 
 ### 8. USB 只作无人体电极的台架调试
@@ -143,8 +143,8 @@
 3. **落地板级引脚配置**：新增 C3 SuperMini 集中式板型头文件，按确认后的 GPIO 更新 ADC/lead-off/I2C；补充编译期校验，禁止使用 GPIO2/8/9、GPIO5 ADC2 和 GPIO18/19 USB。
 4. **完成无无线的传感器台架构建**：先暂用 USB 日志/空 transport，验证 GPTimer、ADC oneshot、I2C 扫描、MPU6050、OLED 和状态计数能在 C3 构建运行，不把 BLE 问题混入采样排障。
 5. **抽象 transport**：让 packet/OLED/app 依赖中性接口；经典 ESP32 SPP profile 回归构建并保持原行为。
-6. **实现 C3 NimBLE GATT 后端**：加入服务、通知队列、背压、分片、重连清理和统计；保留完整 V0 包字节。
-7. **实现 PC BLE 接收**：加入 Bleak、设备发现、订阅、分片重组和通用 ByteSource；GUI/CLI 可选择 BLE，同时保留 SPP/串口。
+6. **实现 C3 NimBLE GATT 后端**：加入 BLE UART 服务、通知队列、背压、ATT 自动切片、重连清理和统计；保留完整 V0 包字节。
+7. **实现 PC BLE 接收**：加入 Bleak、设备发现、订阅和通用 ByteSource；notification chunks 直接进入增量解析器，GUI 可选择 BLE，同时保留 SPP/串口。
 8. **自动化验证**：运行 C/Python golden vectors、C3 build/size、经典 ESP32 回归 build/size、PC tests；检查 diff 只包含计划范围文件。
 9. **经许可的硬件验证**：在没有人体电极的台架上烧录 C3，执行有界 monitor，验证 I2C/ADC/LO/500 Hz/BLE；再做不少于 10 分钟的无线连续流测试。
 10. **文档、默认目标和交付**：把确认后的接线表、板型照片来源、BLE UUID/分片格式、构建命令、Windows 配对/连接方法、安全限制和验收结果写入文档；C3 通过门禁后再改为默认目标。
@@ -157,10 +157,11 @@
 
 ```powershell
 . 'C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1'
-.\tools\project.ps1 doctor
-.\tools\project.ps1 set-target
-.\tools\project.ps1 build
-.\tools\project.ps1 size
+.\tools\project.ps1 doctor -Target esp32c3
+.\tools\project.ps1 build -Target esp32c3
+.\tools\project.ps1 size -Target esp32c3
+.\tools\project.ps1 build -Target esp32
+.\tools\project.ps1 size -Target esp32
 .\tools\project.ps1 pc-test
 ```
 
@@ -169,7 +170,7 @@
 - C3 build 日志明确显示 `esp32c3`，不得误报 ESP32-S3；
 - 经典 ESP32 回归 profile 仍能 build/size；
 - C 与 Python 的 V0 golden vectors 逐字节不变；
-- BLE 分片/重组测试覆盖 20 字节载荷和较大 MTU 两条路径；
+- BLE 字节流测试覆盖 20 字节 notification chunks、跨通知包和截断流恢复；
 - 固件镜像适配实测 Flash 与分区，未确认 4 MB 时停止；
 - `git diff --check`、`git status --short --branch` 和 diff 审查通过。
 
@@ -211,7 +212,7 @@
 - [x] 给出待实板核验的旧板到 C3 建议引脚映射。
 - [x] 创建本 ExecPlan。
 - [ ] Gate A：确认用户手中 SuperMini 的实板版本、Flash 和 USB。
-- [ ] Gate B：完成双 target 构建和传输抽象。
+- [x] Gate B：完成双 target 构建、传输抽象、PC 测试和 size 检查。
 - [ ] Gate C：完成无人体电极的传感器台架验证。
 - [ ] Gate D：完成 Windows BLE 端到端连续流验证。
 - [ ] Gate E：把 ESP32-C3 SuperMini 设为仓库默认硬件目标。
@@ -222,7 +223,9 @@
 - 最大 V0 包为 68 字节，大于默认 BLE notification 的 20 字节 ATT 应用载荷；需要可靠的 transport 分片回退，而不能只写一个 GATT characteristic 就认为迁移完成。
 - C3 的 GPIO5 虽是 ADC2_CH0，但 ESP-IDF v6.0.2 文档明确指出 C3 ADC2 oneshot 不稳定且默认不支持，因此 ECG 应留在 GPIO0–4 的 ADC1。
 - 官方资料确认 C3 的启动绑带脚是 GPIO2、8、9，原生 USB 是 GPIO18/19；部分第三方 SuperMini 网页对“安全脚/JTAG/ADC2”的描述互相矛盾，不能作为唯一接线依据。
-- 当前 PC 端解析、记录、分析和上传层已经以原始字节流为入口，新增 BLE ByteSource 后可以复用大部分逻辑，不需要改 V0 PacketParser。
+- 当前 PC 端解析、记录、分析和上传层已经以原始字节流为入口，新增 BLE ByteSource 后复用了大部分逻辑；V0 布局不变，只增强 PacketParser 的 CRC 失败后重同步策略。
+- ESP-IDF v6.0.2 的 `ble_uart` 已按 ATT MTU 自动切片；新增应用分片头会重复造轮子并改变传输语义，因此实现采用裸 V0 字节流。为了从部分包后恢复，PacketParser 在 CRC 失败时只丢弃首字节并重新搜索 magic。
+- 2026-07-23 软件验证通过：ESP32-C3 镜像 `0x84280` 字节，2 MiB 应用分区剩余 74%；经典 ESP32 镜像 `0xa0a50` 字节，剩余 69%；PC 测试 45 项全部通过。
 
 ## References
 
@@ -237,4 +240,4 @@
 
 ## Result
 
-已形成从硬件身份确认、引脚迁移、双 target 构建、采样验证、SPP 到 BLE 架构迁移、PC 接收适配到安全验收的完整执行计划。当前未修改固件、未烧录、未打开 monitor，也未对 ESP32-C3 SuperMini 实板做任何验证；建议引脚表仍需通过 Gate A 后才能作为最终接线依据。
+软件迁移已实现：双 target/profile、集中式板型引脚、通用 transport、ESP32-C3 NimBLE GATT、PC Bleak 接收、GUI 选择和协议/接线文档均已落地，Gate B 已通过。未烧录、未打开 monitor，也未对 ESP32-C3 SuperMini 实板做任何验证；Gate A、C、D、E 仍未通过，候选引脚表必须经实板核验后才能成为最终接线依据。

@@ -16,7 +16,7 @@
 #include "protocol_v0.h"
 #include "sample_ring.h"
 #include "sensors.h"
-#include "spp_transport.h"
+#include "transport.h"
 
 static const char *TAG = "v0_oled";
 
@@ -194,7 +194,7 @@ static uint8_t max3(uint8_t a, uint8_t b, uint8_t c)
 }
 
 static uint32_t status_error_count(const v0_sensor_status_t *sensor,
-                                   const v0_spp_transport_status_t *transport)
+                                   const v0_transport_status_t *transport)
 {
     return sensor->missed_timer_notifications +
            sensor->adc_error_count +
@@ -208,9 +208,9 @@ static uint32_t status_error_count(const v0_sensor_status_t *sensor,
 static void draw_page(bool second_page)
 {
     v0_sensor_status_t sensor = {0};
-    v0_spp_transport_status_t transport = {0};
+    v0_transport_status_t transport = {0};
     v0_sensors_get_status(&sensor);
-    v0_spp_transport_get_status(&transport);
+    v0_transport_get_status(&transport);
 
     char line1[24] = {0};
     char line2[24] = {0};

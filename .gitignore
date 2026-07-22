@@ -1,7 +1,11 @@
 # ESP-IDF build and generated configuration
 firmware/build/
+firmware/build-*/
 firmware/sdkconfig
+firmware/sdkconfig.esp32
+firmware/sdkconfig.esp32c3
 firmware/sdkconfig.old
+firmware/sdkconfig.*.old
 firmware/managed_components/
 
 # Local machine configuration

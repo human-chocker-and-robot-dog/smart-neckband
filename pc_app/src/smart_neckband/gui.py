@@ -8,6 +8,7 @@ import time
 
 from .analysis import EcgAnalysisResult, analyze_recent_ecg, get_ecg_analysis_info
 from .attitude import ComplementaryAttitudeFilter, Orientation
+from .ble_io import BlePacketReader, list_ble_devices
 from .buffers import ImuSample
 from .history import (
     ComparisonTrack,
@@ -148,7 +149,7 @@ class MainWindow:
         self.QtWidgets = QtWidgets
         self.pg = pg
         self.stores = PcDataStores.create()
-        self.reader: SerialPacketReader | None = None
+        self.reader: SerialPacketReader | BlePacketReader | None = None
         self.session_recorder: ExperimentSessionRecorder | None = None
         self.recording_state = RecordingState.IDLE
         self.countdown_deadline_s: float | None = None
@@ -188,10 +189,14 @@ class MainWindow:
         live_tab = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(live_tab)
         toolbar = QtWidgets.QHBoxLayout()
+        self.transport_combo = QtWidgets.QComboBox()
+        self.transport_combo.addItem("串口 / Bluetooth Classic SPP", "serial")
+        self.transport_combo.addItem("ESP32-C3 BLE", "ble")
         self.port_combo = QtWidgets.QComboBox()
-        self.refresh_button = QtWidgets.QPushButton("刷新串口")
+        self.refresh_button = QtWidgets.QPushButton("刷新设备")
         self.connect_button = QtWidgets.QPushButton("连接设备")
         self.disconnect_button = QtWidgets.QPushButton("断开连接")
+        toolbar.addWidget(self.transport_combo)
         toolbar.addWidget(self.port_combo, 2)
         toolbar.addWidget(self.refresh_button)
         toolbar.addWidget(self.connect_button)
@@ -306,7 +311,8 @@ class MainWindow:
         tabs.addTab(compare_tab, "双轨对比")
         self.window.setCentralWidget(tabs)
         self.refresh_button.clicked.connect(self.refresh_ports)
-        self.connect_button.clicked.connect(self.connect_serial)
+        self.transport_combo.currentIndexChanged.connect(self.refresh_ports)
+        self.connect_button.clicked.connect(self.connect_device)
         self.disconnect_button.clicked.connect(self.disconnect_serial)
         self.calibrate_button.clicked.connect(self.attitude_worker.calibrate_flat)
         self.start_record_button.clicked.connect(self.start_recording)
@@ -567,6 +573,18 @@ class MainWindow:
 
     def refresh_ports(self) -> None:
         self.port_combo.clear()
+        if self.transport_combo.currentData() == "ble":
+            try:
+                devices = list_ble_devices()
+            except RuntimeError as exc:
+                self.port_combo.addItem(str(exc), "")
+                return
+            for device in devices:
+                self.port_combo.addItem(f"{device.name} - {device.address}", device.address)
+            if not devices:
+                self.port_combo.addItem("未发现 BLE 设备", "")
+            return
+
         try:
             ports = list_serial_ports()
         except RuntimeError as exc:
@@ -577,20 +595,28 @@ class MainWindow:
             suffix = " BT OUT" if port.is_bluetooth_outgoing else " BT" if port.is_bluetooth_candidate else ""
             self.port_combo.addItem(f"{port.device} - {port.description}{suffix}", port.device)
 
-    def connect_serial(self) -> None:
-        port = self.port_combo.currentData()
-        if not port:
+    def connect_device(self) -> None:
+        endpoint = self.port_combo.currentData()
+        if not endpoint:
             return
         self.disconnect_serial()
         raw_path = Path("data") / f"smartcollar_v0_{time.strftime('%Y%m%d_%H%M%S')}.bin"
-        self.reader = SerialPacketReader(
-            port=port,
-            stores=self.stores,
-            raw_log_path=raw_path,
-            raw_chunk_callback=self._record_raw_chunk,
-        )
+        if self.transport_combo.currentData() == "ble":
+            self.reader = BlePacketReader(
+                address=endpoint,
+                stores=self.stores,
+                raw_log_path=raw_path,
+                raw_chunk_callback=self._record_raw_chunk,
+            )
+        else:
+            self.reader = SerialPacketReader(
+                port=endpoint,
+                stores=self.stores,
+                raw_log_path=raw_path,
+                raw_chunk_callback=self._record_raw_chunk,
+            )
         self.reader.start()
-        self.connection_label.setText(f"正在连接 {port}……")
+        self.connection_label.setText(f"正在连接 {endpoint}……")
 
     def disconnect_serial(self) -> None:
         if self.session_recorder is not None:
@@ -738,8 +764,9 @@ class MainWindow:
     def _update_connection_status(self) -> None:
         snapshot = self._connection_snapshot()
         self.connection_label.setText(connection_state_text(snapshot))
+        link_name = "BLE" if self.transport_combo.currentData() == "ble" else "串口"
         self.port_status_label.setText(
-            f"串口 {snapshot.port or '--'}：{'已打开' if snapshot.serial_open else '未打开'}"
+            f"{link_name} {snapshot.port or '--'}：{'已连接' if snapshot.serial_open else '未连接'}"
         )
         self.packet_status_label.setText(
             f"接收包 {snapshot.packet_count} / ECG 包 {snapshot.ecg_packet_count}"
@@ -826,6 +853,11 @@ class MainWindow:
             electrode_type=self.electrode_edit.text(),
             notes=self.notes_edit.text(),
             port=port,
+            connection_type=(
+                "Bluetooth LE GATT"
+                if self.transport_combo.currentData() == "ble"
+                else "Bluetooth Classic SPP / serial"
+            ),
         )
         delay_seconds = int(self.delay_combo.currentData())
         if delay_seconds > 0:
@@ -1516,7 +1548,7 @@ def main() -> int:
     try:
         from PySide6 import QtWidgets
     except ImportError as exc:
-        raise SystemExit("Install the gui optional dependencies: pyserial PySide6 pyqtgraph neurokit2 numpy") from exc
+        raise SystemExit("Install the gui optional dependencies: bleak pyserial PySide6 pyqtgraph neurokit2 numpy") from exc
 
     app = QtWidgets.QApplication([])
     window = MainWindow()

@@ -1,4 +1,4 @@
-#include "spp_transport.h"
+#include "transport.h"
 
 #include <stdbool.h>
 #include <inttypes.h>
@@ -187,7 +187,7 @@ static void start_discovery_watchdog(void)
                     "v0_bt_disc",
                     4096U,
                     NULL,
-                    BOARD_SPP_TX_TASK_PRIORITY,
+                    BOARD_TRANSPORT_TX_TASK_PRIORITY,
                     &s_discovery_task_handle) != pdPASS) {
         ESP_LOGW(TAG, "failed to start BT discovery watchdog");
     }
@@ -237,7 +237,7 @@ static void configure_discovery_identity(void)
 
 static void set_discoverable_mode(void)
 {
-    esp_err_t err = esp_bt_gap_set_device_name(BOARD_SPP_DEVICE_NAME);
+    esp_err_t err = esp_bt_gap_set_device_name(BOARD_WIRELESS_DEVICE_NAME);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "set BT device name failed: %s", esp_err_to_name(err));
         return;
@@ -246,7 +246,7 @@ static void set_discoverable_mode(void)
     configure_discovery_identity();
 
     request_scan_mode("spp_start");
-    ESP_LOGI(TAG, "BT discoverable/connectable as %s", BOARD_SPP_DEVICE_NAME);
+    ESP_LOGI(TAG, "BT discoverable/connectable as %s", BOARD_WIRELESS_DEVICE_NAME);
     start_discovery_watchdog();
 }
 
@@ -509,10 +509,10 @@ static void tx_task(void *arg)
     }
 }
 
-esp_err_t v0_spp_transport_start(void)
+esp_err_t v0_transport_start(void)
 {
     if (s_tx_queue == NULL) {
-        s_tx_queue = xQueueCreate(BOARD_SPP_TX_QUEUE_DEPTH, sizeof(v0_spp_tx_item_t));
+        s_tx_queue = xQueueCreate(BOARD_TRANSPORT_TX_QUEUE_DEPTH, sizeof(v0_spp_tx_item_t));
         if (s_tx_queue == NULL) {
             return ESP_ERR_NO_MEM;
         }
@@ -521,9 +521,9 @@ esp_err_t v0_spp_transport_start(void)
     if (s_tx_task_handle == NULL) {
         if (xTaskCreate(tx_task,
                         "v0_spp_tx",
-                        BOARD_SPP_TX_TASK_STACK_BYTES,
+                        BOARD_TRANSPORT_TX_TASK_STACK_BYTES,
                         NULL,
-                        BOARD_SPP_TX_TASK_PRIORITY,
+                        BOARD_TRANSPORT_TX_TASK_PRIORITY,
                         &s_tx_task_handle) != pdPASS) {
             return ESP_ERR_NO_MEM;
         }
@@ -535,11 +535,11 @@ esp_err_t v0_spp_transport_start(void)
         return err;
     }
 
-    ESP_LOGI(TAG, "Bluetooth Classic SPP acceptor starting as %s", BOARD_SPP_DEVICE_NAME);
+    ESP_LOGI(TAG, "Bluetooth Classic SPP acceptor starting as %s", BOARD_WIRELESS_DEVICE_NAME);
     return ESP_OK;
 }
 
-bool v0_spp_transport_enqueue(const uint8_t *data, size_t length)
+bool v0_transport_enqueue(const uint8_t *data, size_t length)
 {
     if (data == NULL || length == 0U || length > PROTOCOL_V0_MAX_PACKET_SIZE || s_tx_queue == NULL) {
         return false;
@@ -572,7 +572,7 @@ bool v0_spp_transport_enqueue(const uint8_t *data, size_t length)
     return false;
 }
 
-void v0_spp_transport_get_status(v0_spp_transport_status_t *out_status)
+void v0_transport_get_status(v0_transport_status_t *out_status)
 {
     if (out_status == NULL) {
         return;
@@ -582,7 +582,7 @@ void v0_spp_transport_get_status(v0_spp_transport_status_t *out_status)
     out_status->congested = s_congested;
     const UBaseType_t queued = s_tx_queue == NULL ? 0U : uxQueueMessagesWaiting(s_tx_queue);
     out_status->queue_usage_percent =
-        (uint8_t)((queued * 100U) / BOARD_SPP_TX_QUEUE_DEPTH);
+        (uint8_t)((queued * 100U) / BOARD_TRANSPORT_TX_QUEUE_DEPTH);
 
     portENTER_CRITICAL(&s_status_mux);
     out_status->queue_overflow_count = s_queue_overflow_count;

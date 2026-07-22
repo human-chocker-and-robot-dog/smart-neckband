@@ -473,13 +473,18 @@ class PacketParser:
                 break
 
             raw = bytes(self._buffer[:total_length])
-            del self._buffer[:total_length]
             received_crc = CRC_STRUCT.unpack(raw[-CRC_STRUCT.size :])[0]
             calculated_crc = crc16_ccitt_false(raw[:-CRC_STRUCT.size])
             if received_crc != calculated_crc:
                 self.stats.crc_errors += 1
+                # Keep the remaining bytes so a valid magic sequence embedded
+                # after a truncated BLE notification can be found immediately.
+                # Dropping the whole apparent packet would also discard the
+                # prefix of the next valid packet.
+                del self._buffer[0]
                 continue
 
+            del self._buffer[:total_length]
             try:
                 parsed = decode_packet(raw)
             except ProtocolError:

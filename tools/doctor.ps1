@@ -1,5 +1,8 @@
 [CmdletBinding()]
-param()
+param(
+    [ValidateSet("esp32", "esp32c3")]
+    [string]$Target
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -12,6 +15,10 @@ if (-not (Test-Path -LiteralPath $LocalConfig)) {
 }
 
 . $LocalConfig
+
+if ([string]::IsNullOrWhiteSpace($Target)) {
+    $Target = $ExpectedTarget
+}
 
 function Assert-Command {
     param([Parameter(Mandatory)][string]$Name)
@@ -47,6 +54,9 @@ if ($idfVersion -notmatch [regex]::Escape($ExpectedIdfVersion)) {
 }
 
 Write-Host "Configured serial port: $ProjectSerialPort"
-Write-Host "Expected target: $ExpectedTarget"
+Write-Host "Configured default target: $ExpectedTarget"
+Write-Host "Selected target: $Target"
+Write-Host "Selected build directory: firmware/build-$Target"
+Write-Host "Selected sdkconfig: firmware/sdkconfig.$Target"
 Write-Host "Expected flash size: $ExpectedFlashSize"
 Write-Host "Doctor check completed."

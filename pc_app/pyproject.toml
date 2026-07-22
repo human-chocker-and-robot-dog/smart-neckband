@@ -14,6 +14,7 @@ dev = [
     "pytest>=8",
 ]
 gui = [
+    "bleak>=0.22",
     "neurokit2>=0.2",
     "numpy>=1.26",
     "PyOpenGL>=3.1.7",
@@ -23,6 +24,9 @@ gui = [
 ]
 serial = [
     "pyserial>=3.5",
+]
+ble = [
+    "bleak>=0.22",
 ]
 upload = [
     "neurokit2>=0.2",

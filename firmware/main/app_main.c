@@ -14,7 +14,7 @@
 #include "protocol_v0.h"
 #include "sdkconfig.h"
 #include "sensors.h"
-#include "spp_transport.h"
+#include "transport.h"
 
 static const char *TAG = "v0_boot";
 
@@ -125,9 +125,11 @@ void app_main(void)
         ESP_LOGW(TAG, "I2C scan did not complete cleanly: %s", esp_err_to_name(scan_err));
     }
 
-    const esp_err_t spp_err = v0_spp_transport_start();
-    if (spp_err != ESP_OK) {
-        ESP_LOGW(TAG, "SPP transport not ready: %s", esp_err_to_name(spp_err));
+    const esp_err_t transport_err = v0_transport_start();
+    if (transport_err != ESP_OK) {
+        ESP_LOGW(TAG, "%s transport not ready: %s",
+                 BOARD_TRANSPORT_NAME,
+                 esp_err_to_name(transport_err));
     }
 
     const esp_err_t oled_err = v0_oled_status_start();
@@ -145,5 +147,7 @@ void app_main(void)
         ESP_LOGE(TAG, "packet task failed to start: %s", esp_err_to_name(packet_err));
     }
 
-    ESP_LOGI(TAG, "V0 runtime ready; waiting for Bluetooth Classic SPP client");
+    ESP_LOGI(TAG,
+             "V0 runtime ready; waiting for %s client",
+             BOARD_TRANSPORT_NAME);
 }

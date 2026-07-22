@@ -358,7 +358,7 @@ static void ecg_task(void *arg)
             continue;
         }
 
-        if (raw <= 0 || raw >= 4095) {
+        if (raw <= 0 || raw >= BOARD_ECG_ADC_RAW_MAX) {
             flags |= PROTOCOL_V0_FLAG_ADC_CLIPPING;
         }
 

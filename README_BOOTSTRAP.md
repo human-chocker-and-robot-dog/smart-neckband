@@ -1,6 +1,6 @@
 # AI Smart Collar Codex Bootstrap v4
 
-This bundle targets the classic ESP32 / ESP-WROOM-32 board and now embeds the user's complete upstream `powershell-command-runner` Skill without replacing its `core/`.
+This bundle supports both the classic ESP32 / ESP-WROOM-32 board and an ESP32-C3 SuperMini migration profile. The classic ESP32 remains the default until the C3 hardware gates pass. The repository embeds the user's complete upstream `powershell-command-runner` Skill without replacing its `core/`.
 
 ## Copy into the repository
 
@@ -38,5 +38,16 @@ Only one normalization was applied: the UTF-8 BOM before the first `---` in `SKI
 - LO- GPIO25, LO+ GPIO26;
 - I2C SDA GPIO21, SCL GPIO22;
 - ECG 500 Hz via GPTimer notification plus ADC oneshot task;
-- Bluetooth Classic SPP first, BLE later;
+- classic ESP32 uses Bluetooth Classic SPP; the C3 profile uses BLE GATT;
 - raw ECG remains unfiltered in the primary firmware stream.
+
+The provisional ESP32-C3 profile uses GPIO0 / ADC1_CH0 for ECG, GPIO3 and GPIO10 for lead-off, GPIO6/7 for I2C, and BLE GATT instead of Classic SPP. See [the wiring and verification guide](docs/hardware/esp32c3-supermini-wiring.md) before connecting a clone board.
+
+Select a target explicitly when validating the migration:
+
+```powershell
+.\tools\project.ps1 build -Target esp32c3
+.\tools\project.ps1 size -Target esp32c3
+.\tools\project.ps1 build -Target esp32
+.\tools\project.ps1 size -Target esp32
+```

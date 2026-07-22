@@ -14,7 +14,7 @@
 #include "protocol_v0.h"
 #include "sample_ring.h"
 #include "sensors.h"
-#include "spp_transport.h"
+#include "transport.h"
 
 static const char *TAG = "v0_packet";
 
@@ -48,7 +48,7 @@ static void send_ecg_batch(void)
                                       batch[0].sample_index,
                                       flags,
                                       samples)) {
-        (void)v0_spp_transport_enqueue(packet, sizeof(packet));
+        (void)v0_transport_enqueue(packet, sizeof(packet));
     }
 }
 
@@ -74,12 +74,12 @@ static void send_imu_batch(void)
                                       batch[0].sample_index,
                                       flags,
                                       samples)) {
-        (void)v0_spp_transport_enqueue(packet, sizeof(packet));
+        (void)v0_transport_enqueue(packet, sizeof(packet));
     }
 }
 
 static uint32_t total_error_count(const v0_sensor_status_t *sensor,
-                                  const v0_spp_transport_status_t *transport)
+                                  const v0_transport_status_t *transport)
 {
     return sensor->missed_timer_notifications +
            sensor->adc_error_count +
@@ -91,7 +91,7 @@ static uint32_t total_error_count(const v0_sensor_status_t *sensor,
 }
 
 static uint16_t aggregate_status_flags(const v0_sensor_status_t *sensor,
-                                       const v0_spp_transport_status_t *transport)
+                                       const v0_transport_status_t *transport)
 {
     uint16_t flags = sensor->lead_off_flags;
     if (sensor->missed_timer_notifications > 0U) {
@@ -111,9 +111,9 @@ static uint16_t aggregate_status_flags(const v0_sensor_status_t *sensor,
 static void send_device_status(void)
 {
     v0_sensor_status_t sensor = {0};
-    v0_spp_transport_status_t transport = {0};
+    v0_transport_status_t transport = {0};
     v0_sensors_get_status(&sensor);
-    v0_spp_transport_get_status(&transport);
+    v0_transport_get_status(&transport);
 
     uint8_t sensor_flags = 0U;
     if (sensor.mpu6050_online) {
@@ -153,7 +153,7 @@ static void send_device_status(void)
                                                 next_packet_sequence(),
                                                 (uint64_t)esp_timer_get_time(),
                                                 &status)) {
-        (void)v0_spp_transport_enqueue(packet, sizeof(packet));
+        (void)v0_transport_enqueue(packet, sizeof(packet));
     }
 }
 

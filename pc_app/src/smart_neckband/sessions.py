@@ -171,6 +171,7 @@ class ExperimentSessionRecorder:
         electrode_type: str,
         notes: str,
         port: str,
+        connection_type: str = "Bluetooth Classic SPP",
         created_at: datetime | None = None,
     ) -> None:
         created_at = created_at or datetime.now(timezone.utc).astimezone()
@@ -195,7 +196,7 @@ class ExperimentSessionRecorder:
             "electrode_type": electrode_type.strip(),
             "ecg_sample_rate_hz": ECG_SAMPLE_RATE_HZ,
             "power_mode": "独立电池",
-            "connection_type": "Bluetooth Classic SPP",
+            "connection_type": connection_type,
             "port": port,
             "notes": notes.strip(),
         }

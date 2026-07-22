@@ -1,23 +1,13 @@
-# Target and physical flash
-CONFIG_IDF_TARGET="esp32"
+# Shared physical flash and partition layout. The wrapper passes IDF_TARGET
+# explicitly and ESP-IDF automatically loads sdkconfig.defaults.<target>.
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 
-# Keep conservative ESP-WROOM-32 flash settings for V0
+# Keep conservative DIO/40 MHz settings shared by both 4 MB boards.
 CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
-
-# Bluetooth Classic SPP for V0 Windows virtual COM transport
-CONFIG_BT_ENABLED=y
-CONFIG_BTDM_CTRL_MODE_BLE_ONLY=n
-CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY=y
-CONFIG_BTDM_CTRL_MODE_BTDM=n
-CONFIG_BT_CLASSIC_ENABLED=y
-CONFIG_BT_SPP_ENABLED=y
-CONFIG_BT_BLE_ENABLED=n
-CONFIG_BTDM_CTRL_MODEM_SLEEP=n
 
 # Useful development defaults
 CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200

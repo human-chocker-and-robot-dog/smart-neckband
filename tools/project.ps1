@@ -16,7 +16,10 @@ param(
         "pc-setup",
         "pc-test"
     )]
-    [string]$Action = "build"
+    [string]$Action = "build",
+
+    [ValidateSet("esp32", "esp32c3")]
+    [string]$Target
 )
 
 Set-StrictMode -Version Latest
@@ -32,6 +35,21 @@ if (-not (Test-Path -LiteralPath $LocalConfig)) {
 }
 
 . $LocalConfig
+
+if ([string]::IsNullOrWhiteSpace($Target)) {
+    $Target = $ExpectedTarget
+}
+if ($Target -notin @("esp32", "esp32c3")) {
+    throw "Unsupported target '$Target'. Expected esp32 or esp32c3."
+}
+
+$BuildDir = Join-Path $FirmwareDir "build-$Target"
+$SdkconfigPath = Join-Path $FirmwareDir "sdkconfig.$Target"
+$TargetArguments = @(
+    "-B", $BuildDir,
+    "-DIDF_TARGET=$Target",
+    "-DSDKCONFIG=$SdkconfigPath"
+)
 
 function Invoke-Idf {
     param([Parameter(Mandatory)][string[]]$Arguments)
@@ -76,6 +94,12 @@ function Invoke-Idf {
     throw $message
 }
 
+function Invoke-TargetIdf {
+    param([Parameter(Mandatory)][string[]]$Arguments)
+
+    Invoke-Idf -Arguments ($TargetArguments + $Arguments)
+}
+
 function Add-PathPrefix {
     param([Parameter(Mandatory)][string]$PathPrefix)
 
@@ -100,11 +124,21 @@ function Initialize-LocalIdfToolEnvironment {
         Add-PathPrefix -PathPrefix (Split-Path -Parent $ccache.FullName)
     }
 
-    $xtensaGcc = Get-ChildItem -LiteralPath "C:\Espressif\tools\xtensa-esp-elf" -Recurse -Filter "xtensa-esp32-elf-gcc.exe" -ErrorAction SilentlyContinue |
+    $compilerRoot = if ($Target -eq "esp32c3") {
+        "C:\Espressif\tools\riscv32-esp-elf"
+    } else {
+        "C:\Espressif\tools\xtensa-esp-elf"
+    }
+    $compilerName = if ($Target -eq "esp32c3") {
+        "riscv32-esp-elf-gcc.exe"
+    } else {
+        "xtensa-esp32-elf-gcc.exe"
+    }
+    $targetGcc = Get-ChildItem -LiteralPath $compilerRoot -Recurse -Filter $compilerName -ErrorAction SilentlyContinue |
         Sort-Object FullName -Descending |
         Select-Object -First 1
-    if ($null -ne $xtensaGcc) {
-        Add-PathPrefix -PathPrefix (Split-Path -Parent $xtensaGcc.FullName)
+    if ($null -ne $targetGcc) {
+        Add-PathPrefix -PathPrefix (Split-Path -Parent $targetGcc.FullName)
     }
 
     $ninja = Get-ChildItem -LiteralPath "C:\Espressif\tools\ninja" -Recurse -Filter "ninja.exe" -ErrorAction SilentlyContinue |
@@ -115,7 +149,12 @@ function Initialize-LocalIdfToolEnvironment {
     }
     Add-PathPrefix -PathPrefix (Split-Path -Parent $ninja.FullName)
 
-    $romElf = Get-ChildItem -LiteralPath "C:\Espressif\tools\esp-rom-elfs" -Recurse -Filter "esp32_rev0_rom.elf" -ErrorAction SilentlyContinue |
+    $romElfName = if ($Target -eq "esp32c3") {
+        "esp32c3_rev0_rom.elf"
+    } else {
+        "esp32_rev0_rom.elf"
+    }
+    $romElf = Get-ChildItem -LiteralPath "C:\Espressif\tools\esp-rom-elfs" -Recurse -Filter $romElfName -ErrorAction SilentlyContinue |
         Sort-Object FullName -Descending |
         Select-Object -First 1
     if ($null -ne $romElf) {
@@ -128,24 +167,28 @@ function Initialize-LocalIdfToolEnvironment {
 function Invoke-IdfLocalBuildFallback {
     param([Parameter(Mandatory)][string[]]$Arguments)
 
-    if ($Arguments.Count -ne 1 -or ($Arguments[0] -notin @("build", "size"))) {
+    if ($Arguments.Count -eq 0) {
         return $false
     }
 
-    $buildDir = Join-Path $FirmwareDir "build"
-    $buildNinja = Join-Path $buildDir "build.ninja"
+    $requestedAction = $Arguments[$Arguments.Count - 1]
+    if ($requestedAction -notin @("build", "size")) {
+        return $false
+    }
+
+    $buildNinja = Join-Path $BuildDir "build.ninja"
     if (-not (Test-Path -LiteralPath $buildNinja)) {
         return $false
     }
 
-    Write-Warning "Falling back to local Ninja for idf.py $($Arguments[0])."
+    Write-Warning "Falling back to local Ninja for idf.py $requestedAction ($Target)."
     $ninja = Initialize-LocalIdfToolEnvironment
-    $ninjaArgs = @("-C", $buildDir)
-    if ($Arguments[0] -eq "size") {
+    $ninjaArgs = @("-C", $BuildDir)
+    if ($requestedAction -eq "size") {
         $ninjaArgs += "size"
     }
 
-    Invoke-Native -FilePath $ninja -Arguments $ninjaArgs -Description "ninja $($Arguments[0])"
+    Invoke-Native -FilePath $ninja -Arguments $ninjaArgs -Description "ninja $requestedAction ($Target)"
     return $true
 }
 
@@ -175,37 +218,37 @@ function Test-PythonModule {
 
 switch ($Action) {
     "doctor" {
-        & (Join-Path $PSScriptRoot "doctor.ps1")
+        & (Join-Path $PSScriptRoot "doctor.ps1") -Target $Target
     }
     "set-target" {
-        Invoke-Idf -Arguments @("set-target", "esp32")
+        Invoke-TargetIdf -Arguments @("set-target", $Target)
     }
     "reconfigure" {
-        Invoke-Idf -Arguments @("reconfigure")
+        Invoke-TargetIdf -Arguments @("reconfigure")
     }
     "menuconfig" {
-        Invoke-Idf -Arguments @("menuconfig")
+        Invoke-TargetIdf -Arguments @("menuconfig")
     }
     "build" {
-        Invoke-Idf -Arguments @("build")
+        Invoke-TargetIdf -Arguments @("build")
     }
     "size" {
-        Invoke-Idf -Arguments @("size")
+        Invoke-TargetIdf -Arguments @("size")
     }
     "flash" {
-        Invoke-Idf -Arguments @("-p", $ProjectSerialPort, "-b", "$ProjectFlashBaud", "flash")
+        Invoke-TargetIdf -Arguments @("-p", $ProjectSerialPort, "-b", "$ProjectFlashBaud", "flash")
     }
     "monitor" {
-        Invoke-Idf -Arguments @("-p", $ProjectSerialPort, "monitor")
+        Invoke-TargetIdf -Arguments @("-p", $ProjectSerialPort, "monitor")
     }
     "flash-monitor" {
-        Invoke-Idf -Arguments @("-p", $ProjectSerialPort, "-b", "$ProjectFlashBaud", "flash", "monitor")
+        Invoke-TargetIdf -Arguments @("-p", $ProjectSerialPort, "-b", "$ProjectFlashBaud", "flash", "monitor")
     }
     "erase-flash" {
-        Invoke-Idf -Arguments @("-p", $ProjectSerialPort, "erase-flash")
+        Invoke-TargetIdf -Arguments @("-p", $ProjectSerialPort, "erase-flash")
     }
     "fullclean" {
-        Invoke-Idf -Arguments @("fullclean")
+        Invoke-TargetIdf -Arguments @("fullclean")
     }
     "pc-setup" {
         if (-not (Test-Path -LiteralPath $PcDir)) {
@@ -255,7 +298,10 @@ switch ($Action) {
 
         Push-Location $PcDir
         try {
-            Invoke-Native -FilePath $pythonPath -Arguments ($pythonArgs + @("-m", "pytest")) -Description "pytest"
+            $pytestBaseTemp = Join-Path $PcDir ("pytest-cache-files-{0}" -f [guid]::NewGuid().ToString("N"))
+            Invoke-Native -FilePath $pythonPath -Arguments (
+                $pythonArgs + @("-m", "pytest", "--basetemp", $pytestBaseTemp)
+            ) -Description "pytest"
         }
         finally {
             $env:PYTHONPATH = $oldPythonPath
