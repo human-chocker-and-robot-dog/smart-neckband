@@ -51,3 +51,13 @@ Select a target explicitly when validating the migration:
 .\tools\project.ps1 build -Target esp32
 .\tools\project.ps1 size -Target esp32
 ```
+
+## GitHub remote
+
+This local repository is attached to:
+
+```text
+https://github.com/human-chocker-and-robot-dog/smart-neckband.git
+```
+
+Use `origin` for that remote. After Codex creates a validated Conventional Commit, it should push the committed branch to `origin` and set upstream when needed, unless the user explicitly says not to push.

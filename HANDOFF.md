@@ -1,14 +1,14 @@
 # AI Smart Collar Handoff
 
-Last updated: 2026-07-19.
+Last updated: 2026-07-23.
 
 ## Current Branch State
 
-- Current checked-out branch: `feat/v0-foundation`.
-- Current checked-out commit: `9327381 fix(live): resume ingest sequence after restart`.
-- Main baseline branch: `main` at `8c56a15 chore: establish ESP-IDF hello world baseline`.
+- Current checked-out branch: `main`.
+- Current checked-out commit: `42274f9 fix(ble): align Just Works GATT permissions`.
+- Main branch includes the ESP32-C3 SuperMini migration work from `feat/esp32c3-supermini-migration`.
 - Separate Live Beta test branch: `fix/live-fb892fa-reliability` at `39dc916 fix(live): adapt mobile ECG and settings`.
-- No Git remote is configured in this local repository at the time of this handoff, so push is skipped unless a remote is added later.
+- Canonical GitHub remote: `origin` -> `https://github.com/human-chocker-and-robot-dog/smart-neckband.git`.
 
 Important branch note:
 
@@ -22,15 +22,16 @@ Important branch note:
 - Do not connect desktop USB, wall power, a charging power bank, or grounded bench instruments while electrodes are attached to a person.
 - Do not claim body-connected behavior is validated unless battery-powered wireless test logs are supplied.
 - Keep raw ECG as raw ADC counts in firmware. Filtering, R peaks, HR, RR, HRV, and SQI belong in the PC application.
-- Commit coherent validated changes with Conventional Commits. Push only if an upstream exists.
+- Commit coherent validated changes with Conventional Commits. After each successful commit, push the committed branch to `origin` and set upstream when needed, unless the user explicitly says not to push.
 
 ## Hardware Baseline
 
-- Board: classic ESP32 / ESP-WROOM-32, not ESP32-S3.
+- Board profiles: classic ESP32 / ESP-WROOM-32 and ESP32-C3 SuperMini, not ESP32-S3.
 - ESP-IDF: v6.0.2.
 - Flash: 4 MB.
 - Target: `esp32`.
-- Bench USB port: `COM18`.
+- ESP32-C3 SuperMini bench USB port: `COM21`.
+- Historical classic ESP32 bench USB port: `COM18`; do not assume it for the C3.
 - Windows Bluetooth SPP outgoing COM observed: `COM19`.
 - Windows Bluetooth local placeholder COM observed: `COM20`.
 - ECG input: GPIO34 / ADC1_CH6.
@@ -153,7 +154,7 @@ There is a separate Live Beta web effort in this repository. It is useful, but i
 
 Branches:
 
-- `feat/v0-foundation`: currently contains the core V0 work and some live-uploader reliability work.
+- `main`: contains the current core V0 work, PC app, Live Beta baseline, and ESP32-C3 SuperMini migration.
 - `fix/live-fb892fa-reliability`: experimental Live Beta webpage branch with mobile ECG/settings adaptations.
 
 Live Beta files include:

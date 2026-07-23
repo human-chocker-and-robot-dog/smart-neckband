@@ -153,13 +153,14 @@ Preserve user changes. Do not overwrite unrelated modifications.
 ## 11. Git policy
 
 - `main` must remain buildable.
+- Canonical remote: `origin` must point to `https://github.com/human-chocker-and-robot-dog/smart-neckband.git`.
 - Create branches named `feat/<topic>`, `fix/<topic>`, `docs/<topic>`, `test/<topic>`, or `chore/<topic>` for non-trivial work.
 - Use Conventional Commits, for example `feat(firmware): add GPTimer ECG sampler`.
 - Make small commits with one coherent purpose.
 - Do not commit generated build directories, local ports, virtual environments, captured ECG data, or secrets.
 - Commit `sdkconfig.defaults`, custom partition tables, protocol definitions, lock files, tests, and documentation.
 - Standing user instruction as of 2026-07-15: after completing a coherent change, running the required validation, and confirming the diff only contains intended files, create a Conventional Commit without asking again.
-- Push the current branch to its configured upstream after such a commit when an upstream exists, unless the user explicitly says not to. If no remote or upstream is configured, report that push was skipped; do not invent remotes or force push.
+- Standing user instruction as of 2026-07-23: after each successful commit, automatically push the committed branch to `origin` and set upstream when needed, unless the user explicitly says not to push.
 - Never use destructive Git commands such as `reset --hard`, `clean -fd`, force push, or history rewriting without explicit user approval.
 - Do not amend a commit unless explicitly requested.
 
