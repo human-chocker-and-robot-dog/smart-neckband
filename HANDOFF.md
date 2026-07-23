@@ -4,8 +4,8 @@ Last updated: 2026-07-23.
 
 ## Current Branch State
 
-- Current checked-out branch: `main`.
-- Current checked-out commit: `42274f9 fix(ble): align Just Works GATT permissions`.
+- Current checked-out feature branch: `feat/pc-agent-webhook`, based on `main`.
+- Main baseline before this feature: `88b841b docs: configure GitHub remote workflow`.
 - Main branch includes the ESP32-C3 SuperMini migration work from `feat/esp32c3-supermini-migration`.
 - Separate Live Beta test branch: `fix/live-fb892fa-reliability` at `39dc916 fix(live): adapt mobile ECG and settings`.
 - Canonical GitHub remote: `origin` -> `https://github.com/human-chocker-and-robot-dog/smart-neckband.git`.
@@ -85,6 +85,7 @@ Implemented PC pieces:
 - Raw ECG display, cleaned ECG display, R-peak markers, HR, RR, SQI, lead-off, packet loss, and CRC counters.
 - IMU roll/pitch/yaw complementary filter and OpenGL cuboid display.
 - `Calibrate Flat` control that zeroes current orientation and captures stationary gyro bias.
+- Dedicated Webhook tab with durable instruction IDs, asynchronous Agent Gateway submission, retry classification, local reply callback listener, SQLite `reply_id` de-duplication, device-receiving gate, and DEBUG records.
 
 ## Known Fixes Already Applied
 
@@ -102,9 +103,10 @@ Implemented PC pieces:
 
 ## Current Validation Snapshot
 
-Most recent documented validation on the V0 path:
+Most recent documented PC validation:
 
-- `.\tools\project.ps1 pc-test`: 18 tests passed.
+- `.\tools\project.ps1 pc-test`: 57 tests passed, including 10 Agent Webhook tests.
+- Offscreen PySide6 smoke check: created and closed all five tabs, including `Webhook`.
 - `.\tools\project.ps1 build`: passed.
 - `.\tools\project.ps1 size`: passed.
 - `git diff --check`: passed.
@@ -125,9 +127,11 @@ py -3.12 -m smart_neckband
 
 In the GUI:
 
-- Select the port marked `BT OUT`, usually `COM19`.
+- For the ESP32-C3 SuperMini, select `ESP32-C3 BLE`, scan, and connect to `CollarC3-XXXX`.
+- For the classic ESP32 fallback, select the outgoing port marked `BT OUT`, historically `COM19`.
 - Use `Calibrate Flat` only when the IMU is physically still and flat.
 - Expect yaw to drift over time because MPU6050 has no magnetometer. The software can reduce gyro bias, but it cannot provide absolute yaw.
+- Use the `Webhook` tab only with a trusted Agent Gateway deployment. See `docs/pc-agent-webhook.md`.
 
 ## How To Build And Flash Firmware
 

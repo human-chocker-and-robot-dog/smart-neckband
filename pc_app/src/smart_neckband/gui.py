@@ -35,6 +35,7 @@ from .protocol import ECG_SAMPLE_RATE_HZ, FLAG_LO_MINUS, FLAG_LO_PLUS
 from .serial_io import PcDataStores, SerialPacketReader, list_serial_ports
 from .sessions import ExperimentSessionRecorder, PLACEMENT_PRESETS, WIRE_MAPS, RecordingState
 from .status import ConnectionSnapshot, ConnectionState, connection_state_text
+from .webhook_ui import WebhookTab
 
 
 LOGGER = logging.getLogger(__name__)
@@ -346,10 +347,16 @@ class MainWindow:
         diagnostics_tab = self._build_diagnostics_tab()
         history_tab = self._build_history_tab()
         compare_tab = self._build_compare_tab()
+        self.webhook_tab = WebhookTab(
+            QtCore=QtCore,
+            QtWidgets=QtWidgets,
+            post_gui=self._post_gui,
+        )
         tabs.addTab(live_tab, "实时")
         tabs.addTab(diagnostics_tab, "诊断")
         tabs.addTab(history_tab, "历史记录")
         tabs.addTab(compare_tab, "双轨对比")
+        tabs.addTab(self.webhook_tab.widget, "Webhook")
         self.window.setCentralWidget(tabs)
         self.refresh_button.clicked.connect(self.refresh_ports)
         self.transport_combo.currentIndexChanged.connect(self.refresh_ports)
@@ -616,6 +623,7 @@ class MainWindow:
         self.window.show()
 
     def close(self) -> None:
+        self.webhook_tab.close()
         self.disconnect_serial()
         self.ecg_worker.stop()
         self.attitude_worker.stop()
@@ -903,6 +911,7 @@ class MainWindow:
             if snapshot.seconds_since_last_packet is not None
             else "最后一包 --"
         )
+        self.webhook_tab.set_receiving(snapshot.state is ConnectionState.RECEIVING)
         self.connect_button.setEnabled(self.reader is None or snapshot.state is ConnectionState.ERROR)
         self.disconnect_button.setEnabled(self.reader is not None)
 

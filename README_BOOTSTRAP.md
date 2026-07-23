@@ -61,3 +61,9 @@ https://github.com/human-chocker-and-robot-dog/smart-neckband.git
 ```
 
 Use `origin` for that remote. After Codex creates a validated Conventional Commit, it should push the committed branch to `origin` and set upstream when needed, unless the user explicitly says not to push.
+
+## PC Agent Webhook
+
+The PC GUI includes a **Webhook** tab for submitting durable user-text instructions to an Agent Webhook Gateway and receiving de-duplicated final reply callbacks. The optional device gate enables ordinary sends only after the ESP32-C3 connection reaches `RECEIVING`; the HTTP integration does not change the BLE firmware protocol.
+
+See [the PC Agent Webhook guide](docs/pc-agent-webhook.md) for same-PC setup, remote-LAN setup, callback configuration, retry behavior, security limits, and troubleshooting.
