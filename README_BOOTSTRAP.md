@@ -67,3 +67,11 @@ Use `origin` for that remote. After Codex creates a validated Conventional Commi
 The PC GUI includes a **Webhook** tab for submitting durable user-text instructions to an Agent Webhook Gateway and receiving de-duplicated final reply callbacks. The optional device gate enables ordinary sends only after the ESP32-C3 connection reaches `RECEIVING`; the HTTP integration does not change the BLE firmware protocol.
 
 See [the PC Agent Webhook guide](docs/pc-agent-webhook.md) for same-PC setup, remote-LAN setup, callback configuration, retry behavior, security limits, and troubleshooting.
+
+## Optional ESP32-C3 Voice path
+
+The optional Voice profile adds an INMP441, exact local WakeNet9s wake word,
+Volcengine streaming ASR, and reliable BLE final-text delivery into the same
+durable Agent Webhook path. It is gated until the official custom
+“主人主人” model is supplied and reviewed. See
+[the Voice setup and safety guide](docs/voice-wake-asr.md).

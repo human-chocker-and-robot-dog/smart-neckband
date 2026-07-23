@@ -13,6 +13,8 @@ param(
         "flash-monitor",
         "erase-flash",
         "fullclean",
+        "voice-provision",
+        "voice-model-provision",
         "pc-setup",
         "pc-gui",
         "pc-test"
@@ -20,7 +22,11 @@ param(
     [string]$Action = "build",
 
     [ValidateSet("esp32", "esp32c3")]
-    [string]$Target
+    [string]$Target,
+
+    [switch]$Voice,
+
+    [string]$WakeNetModelPath
 )
 
 Set-StrictMode -Version Latest
@@ -43,14 +49,36 @@ if ([string]::IsNullOrWhiteSpace($Target)) {
 if ($Target -notin @("esp32", "esp32c3")) {
     throw "Unsupported target '$Target'. Expected esp32 or esp32c3."
 }
+if ($Voice -and $Target -ne "esp32c3") {
+    throw "-Voice is supported only with -Target esp32c3."
+}
+if ($Action -in @("voice-provision", "voice-model-provision") -and -not $Voice) {
+    throw "$Action requires -Voice."
+}
+if ($Action -eq "voice-model-provision" -and
+    [string]::IsNullOrWhiteSpace($WakeNetModelPath)) {
+    throw "voice-model-provision requires -WakeNetModelPath."
+}
 
-$BuildDir = Join-Path $FirmwareDir "build-$Target"
-$SdkconfigPath = Join-Path $FirmwareDir "sdkconfig.$Target"
+$BuildFlavor = if ($Voice) { "$Target-voice" } else { $Target }
+$BuildDir = Join-Path $FirmwareDir "build-$BuildFlavor"
+$SdkconfigPath = Join-Path $FirmwareDir "sdkconfig.$BuildFlavor"
 $TargetArguments = @(
     "-B", $BuildDir,
     "-DIDF_TARGET=$Target",
     "-DSDKCONFIG=$SdkconfigPath"
 )
+if ($Voice) {
+    $voiceDefaults = @(
+        "sdkconfig.defaults",
+        "sdkconfig.defaults.esp32c3",
+        "sdkconfig.defaults.voice"
+    ) -join ";"
+    $TargetArguments += @(
+        "-DSMART_NECKBAND_VOICE=ON",
+        "-DSDKCONFIG_DEFAULTS=$voiceDefaults"
+    )
+}
 
 function Invoke-Idf {
     param([Parameter(Mandatory)][string[]]$Arguments)
@@ -250,6 +278,26 @@ switch ($Action) {
     }
     "fullclean" {
         Invoke-TargetIdf -Arguments @("fullclean")
+    }
+    "voice-provision" {
+        $provisionScript = Join-Path $PSScriptRoot "voice-provision.ps1"
+        if (-not (Test-Path -LiteralPath $provisionScript)) {
+            throw "Missing voice provisioning script: $provisionScript"
+        }
+        & $provisionScript `
+            -ProjectSerialPort $ProjectSerialPort `
+            -IdfPath $env:IDF_PATH
+    }
+    "voice-model-provision" {
+        $modelProvisionScript = Join-Path $PSScriptRoot "voice-model-provision.ps1"
+        if (-not (Test-Path -LiteralPath $modelProvisionScript)) {
+            throw "Missing WakeNet model provisioning script: $modelProvisionScript"
+        }
+        & $modelProvisionScript `
+            -ProjectSerialPort $ProjectSerialPort `
+            -IdfPath $env:IDF_PATH `
+            -ModelPath $WakeNetModelPath `
+            -ManifestPath (Join-Path $FirmwareDir "models\wakenet_manifest.json")
     }
     "pc-setup" {
         if (-not (Test-Path -LiteralPath $PcDir)) {

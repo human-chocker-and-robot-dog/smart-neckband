@@ -15,7 +15,7 @@
 #include "sdkconfig.h"
 #include "sensors.h"
 #include "transport.h"
-#include "voice_link.h"
+#include "voice_runtime.h"
 
 static const char *TAG = "v0_boot";
 
@@ -149,10 +149,11 @@ void app_main(void)
     }
 
 #if SMART_NECKBAND_VOICE
-    const esp_err_t voice_link_err = v0_voice_link_start();
-    if (voice_link_err != ESP_OK) {
-        ESP_LOGE(TAG, "voice BLE link failed to start: %s",
-                 esp_err_to_name(voice_link_err));
+    const esp_err_t voice_err = v0_voice_runtime_start();
+    if (voice_err != ESP_OK) {
+        ESP_LOGW(TAG,
+                 "voice runtime gated or failed: %s",
+                 esp_err_to_name(voice_err));
     }
 #endif
 

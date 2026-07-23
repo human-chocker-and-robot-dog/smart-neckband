@@ -4,6 +4,7 @@ firmware/build-*/
 firmware/sdkconfig
 firmware/sdkconfig.esp32
 firmware/sdkconfig.esp32c3
+firmware/sdkconfig.esp32c3-voice
 firmware/sdkconfig.old
 firmware/sdkconfig.*.old
 firmware/managed_components/
@@ -39,6 +40,7 @@ recordings/
 *.parquet
 *.csv
 !firmware/partitions.csv
+!firmware/partitions_voice.csv
 *.log
 
 # Editors and OS
