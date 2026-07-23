@@ -1,0 +1,2705 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smart-neckband.example/contracts/health-mcp/0.2.0",
+  "title": "Smart Collar Health MCP v0.2.0 contract",
+  "description": "Normative domain, MCP tool, webhook, and golden-message contract for the smart-neckband repository.",
+  "$defs": {
+    "WearerId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "Uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "SafeNonNegativeInteger": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "DataSource": {
+      "type": "string",
+      "enum": [
+        "live",
+        "replay",
+        "synthetic"
+      ]
+    },
+    "QualityLevel": {
+      "type": "string",
+      "enum": [
+        "unknown",
+        "bad",
+        "fair",
+        "good"
+      ]
+    },
+    "UnavailableReason": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "not_implemented",
+        "no_data",
+        "stale_data",
+        "lead_off",
+        "adc_clipping",
+        "insufficient_window",
+        "insufficient_stable_r_peaks",
+        "analysis_unavailable",
+        "quality_below_threshold",
+        null
+      ]
+    },
+    "HeartRateMetric": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 20,
+          "maximum": 240
+        },
+        "unit": {
+          "const": "bpm"
+        },
+        "valid": {
+          "type": "boolean"
+        },
+        "observed_at": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "age_ms": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SafeNonNegativeInteger"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "window_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 60
+        },
+        "method": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "neurokit2_rr_median",
+            null
+          ]
+        },
+        "unavailable_reason": {
+          "$ref": "#/$defs/UnavailableReason"
+        }
+      },
+      "required": [
+        "value",
+        "unit",
+        "valid",
+        "observed_at",
+        "age_ms",
+        "window_s",
+        "method",
+        "unavailable_reason"
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "valid": {
+              "const": true
+            },
+            "value": {
+              "type": "number"
+            },
+            "observed_at": {
+              "$ref": "#/$defs/Timestamp"
+            },
+            "age_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2000
+            },
+            "window_s": {
+              "const": 10.0
+            },
+            "method": {
+              "const": "neurokit2_rr_median"
+            },
+            "unavailable_reason": {
+              "const": null
+            }
+          }
+        },
+        {
+          "properties": {
+            "valid": {
+              "const": false
+            },
+            "value": {
+              "const": null
+            },
+            "unavailable_reason": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "RrIntervalMetric": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 300,
+          "maximum": 2000
+        },
+        "unit": {
+          "const": "ms"
+        },
+        "valid": {
+          "type": "boolean"
+        },
+        "observed_at": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "age_ms": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SafeNonNegativeInteger"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "window_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 60
+        },
+        "method": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "neurokit2_latest_valid_rr",
+            null
+          ]
+        },
+        "unavailable_reason": {
+          "$ref": "#/$defs/UnavailableReason"
+        }
+      },
+      "required": [
+        "value",
+        "unit",
+        "valid",
+        "observed_at",
+        "age_ms",
+        "window_s",
+        "method",
+        "unavailable_reason"
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "valid": {
+              "const": true
+            },
+            "value": {
+              "type": "number"
+            },
+            "observed_at": {
+              "$ref": "#/$defs/Timestamp"
+            },
+            "age_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2000
+            },
+            "window_s": {
+              "const": 10.0
+            },
+            "method": {
+              "const": "neurokit2_latest_valid_rr"
+            },
+            "unavailable_reason": {
+              "const": null
+            }
+          }
+        },
+        {
+          "properties": {
+            "valid": {
+              "const": false
+            },
+            "value": {
+              "const": null
+            },
+            "unavailable_reason": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "HeartState": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "analysis_source_instance_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "analyzed_through_ecg_sample_index": {
+          "description": "PC-expanded monotonic ECG sample ordinal within analysis_source_instance_id; not the raw uint32 wire index.",
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SafeNonNegativeInteger"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "heart_rate": {
+          "$ref": "#/$defs/HeartRateMetric"
+        },
+        "rr_interval": {
+          "$ref": "#/$defs/RrIntervalMetric"
+        }
+      },
+      "required": [
+        "analysis_source_instance_id",
+        "analyzed_through_ecg_sample_index",
+        "heart_rate",
+        "rr_interval"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "heart_rate": {
+                    "properties": {
+                      "valid": {
+                        "const": true
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "rr_interval": {
+                    "properties": {
+                      "valid": {
+                        "const": true
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "then": {
+            "properties": {
+              "analysis_source_instance_id": {
+                "$ref": "#/$defs/Uuid"
+              },
+              "analyzed_through_ecg_sample_index": {
+                "$ref": "#/$defs/SafeNonNegativeInteger"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "SignalState": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "quality_score": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "quality_level": {
+          "$ref": "#/$defs/QualityLevel"
+        },
+        "quality_rank": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "lead_off": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "adc_clipping_ratio_10s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "packet_loss_ratio_10s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "crc_errors_delta_10s": {
+          "$ref": "#/$defs/SafeNonNegativeInteger"
+        },
+        "window_s": {
+          "const": 10.0
+        }
+      },
+      "required": [
+        "quality_score",
+        "quality_level",
+        "quality_rank",
+        "lead_off",
+        "adc_clipping_ratio_10s",
+        "packet_loss_ratio_10s",
+        "crc_errors_delta_10s",
+        "window_s"
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "quality_level": {
+              "const": "unknown"
+            },
+            "quality_rank": {
+              "const": 0
+            }
+          }
+        },
+        {
+          "properties": {
+            "quality_level": {
+              "const": "bad"
+            },
+            "quality_rank": {
+              "const": 1
+            }
+          }
+        },
+        {
+          "properties": {
+            "quality_level": {
+              "const": "fair"
+            },
+            "quality_rank": {
+              "const": 2
+            }
+          }
+        },
+        {
+          "properties": {
+            "quality_level": {
+              "const": "good"
+            },
+            "quality_rank": {
+              "const": 3
+            }
+          }
+        }
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "lead_off": {
+                "const": null
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "quality_score": {
+                "const": null
+              },
+              "quality_level": {
+                "const": "unknown"
+              },
+              "quality_rank": {
+                "const": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "MotionState": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "const": null
+        },
+        "confidence": {
+          "const": null
+        },
+        "observed_at": {
+          "const": null
+        },
+        "age_ms": {
+          "const": null
+        },
+        "window_s": {
+          "const": null
+        },
+        "method": {
+          "const": null
+        },
+        "unavailable_reason": {
+          "const": "not_implemented"
+        }
+      },
+      "required": [
+        "level",
+        "confidence",
+        "observed_at",
+        "age_ms",
+        "window_s",
+        "method",
+        "unavailable_reason"
+      ]
+    },
+    "DeviceCounters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "packets_ok": {
+          "$ref": "#/$defs/SafeNonNegativeInteger"
+        },
+        "packets_lost": {
+          "$ref": "#/$defs/SafeNonNegativeInteger"
+        },
+        "crc_errors": {
+          "$ref": "#/$defs/SafeNonNegativeInteger"
+        },
+        "firmware_error_count": {
+          "$ref": "#/$defs/SafeNonNegativeInteger"
+        },
+        "ecg_ring_overflow_count": {
+          "$ref": "#/$defs/SafeNonNegativeInteger"
+        },
+        "imu_ring_overflow_count": {
+          "$ref": "#/$defs/SafeNonNegativeInteger"
+        },
+        "transport_queue_overflow_count": {
+          "$ref": "#/$defs/SafeNonNegativeInteger"
+        },
+        "transport_drop_count": {
+          "$ref": "#/$defs/SafeNonNegativeInteger"
+        },
+        "i2c_error_count": {
+          "$ref": "#/$defs/SafeNonNegativeInteger"
+        }
+      },
+      "required": [
+        "packets_ok",
+        "packets_lost",
+        "crc_errors",
+        "firmware_error_count",
+        "ecg_ring_overflow_count",
+        "imu_ring_overflow_count",
+        "transport_queue_overflow_count",
+        "transport_drop_count",
+        "i2c_error_count"
+      ]
+    },
+    "DeviceState": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "degraded",
+            "stale",
+            "offline"
+          ]
+        },
+        "connection_state": {
+          "type": "string",
+          "enum": [
+            "DISCONNECTED",
+            "CONNECTING",
+            "CONNECTED_WAITING_DATA",
+            "RECEIVING",
+            "STALE",
+            "ERROR",
+            "DISCONNECTING"
+          ]
+        },
+        "transport": {
+          "type": "string",
+          "enum": [
+            "uart",
+            "spp",
+            "ble",
+            "unknown"
+          ]
+        },
+        "firmware_protocol_version": {
+          "const": 1
+        },
+        "ecg_sample_rate_hz": {
+          "const": 500
+        },
+        "imu_sample_rate_hz": {
+          "const": 50
+        },
+        "last_ecg_packet_age_ms": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SafeNonNegativeInteger"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_transport_packet_age_ms": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SafeNonNegativeInteger"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sampling_active": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "imu_online": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "oled_online": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "transport_connected": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "transport_congested": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "counters": {
+          "$ref": "#/$defs/DeviceCounters"
+        }
+      },
+      "required": [
+        "status",
+        "connection_state",
+        "transport",
+        "firmware_protocol_version",
+        "ecg_sample_rate_hz",
+        "imu_sample_rate_hz",
+        "last_ecg_packet_age_ms",
+        "last_transport_packet_age_ms",
+        "sampling_active",
+        "imu_online",
+        "oled_online",
+        "transport_connected",
+        "transport_congested",
+        "counters"
+      ]
+    },
+    "EventType": {
+      "type": "string",
+      "enum": [
+        "lead_off",
+        "adc_clipping",
+        "input_stale",
+        "input_offline"
+      ]
+    },
+    "EventSeverity": {
+      "type": "string",
+      "enum": [
+        "warning",
+        "error"
+      ]
+    },
+    "EventRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "event_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "event_type": {
+          "$ref": "#/$defs/EventType"
+        },
+        "status": {
+          "const": "active"
+        },
+        "severity": {
+          "$ref": "#/$defs/EventSeverity"
+        },
+        "opened_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "required": [
+        "event_id",
+        "event_revision",
+        "event_type",
+        "status",
+        "severity",
+        "opened_at",
+        "updated_at"
+      ]
+    },
+    "EventEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "lead_off": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "adc_clipping_ratio_10s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "last_ecg_packet_age_ms": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SafeNonNegativeInteger"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_transport_packet_age_ms": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SafeNonNegativeInteger"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quality_level": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/QualityLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "detail": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "lead_off",
+        "adc_clipping_ratio_10s",
+        "last_ecg_packet_age_ms",
+        "last_transport_packet_age_ms",
+        "quality_level",
+        "detail"
+      ]
+    },
+    "WearerEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "0.2.0"
+        },
+        "event_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "event_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "event_type": {
+          "$ref": "#/$defs/EventType"
+        },
+        "wearer_id": {
+          "$ref": "#/$defs/WearerId"
+        },
+        "source_instance_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "data_source": {
+          "$ref": "#/$defs/DataSource"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "resolved"
+          ]
+        },
+        "severity": {
+          "$ref": "#/$defs/EventSeverity"
+        },
+        "opened_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "resolved_at": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state_revision": {
+          "$ref": "#/$defs/SafeNonNegativeInteger"
+        },
+        "evidence": {
+          "$ref": "#/$defs/EventEvidence"
+        },
+        "recommended_consumer_behavior": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "refresh_current_state",
+              "do_not_use_old_physiology",
+              "do_not_infer_diagnosis"
+            ]
+          }
+        },
+        "test_mode": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "schema_version",
+        "event_id",
+        "event_revision",
+        "event_type",
+        "wearer_id",
+        "source_instance_id",
+        "data_source",
+        "status",
+        "severity",
+        "opened_at",
+        "updated_at",
+        "resolved_at",
+        "state_revision",
+        "evidence",
+        "recommended_consumer_behavior",
+        "test_mode"
+      ],
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "status": {
+                  "const": "active"
+                },
+                "resolved_at": {
+                  "const": null
+                }
+              }
+            },
+            {
+              "properties": {
+                "status": {
+                  "const": "resolved"
+                },
+                "resolved_at": {
+                  "$ref": "#/$defs/Timestamp"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "event_type": {
+                  "const": "input_offline"
+                },
+                "severity": {
+                  "const": "error"
+                }
+              }
+            },
+            {
+              "properties": {
+                "event_type": {
+                  "enum": [
+                    "lead_off",
+                    "adc_clipping",
+                    "input_stale"
+                  ]
+                },
+                "severity": {
+                  "const": "warning"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "if": {
+            "properties": {
+              "data_source": {
+                "enum": [
+                  "replay",
+                  "synthetic"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "test_mode": {
+                "const": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "WearerState": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "0.2.0"
+        },
+        "wearer_id": {
+          "$ref": "#/$defs/WearerId"
+        },
+        "state_revision": {
+          "$ref": "#/$defs/SafeNonNegativeInteger"
+        },
+        "source_instance_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "data_source": {
+          "$ref": "#/$defs/DataSource"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "device_timestamp_us": {
+          "$ref": "#/$defs/SafeNonNegativeInteger"
+        },
+        "ecg_sample_index": {
+          "$ref": "#/$defs/SafeNonNegativeInteger",
+          "description": "PC-expanded monotonic ECG sample ordinal within source_instance_id; not the raw uint32 wire index."
+        },
+        "age_ms": {
+          "$ref": "#/$defs/SafeNonNegativeInteger"
+        },
+        "freshness": {
+          "type": "string",
+          "enum": [
+            "fresh",
+            "stale",
+            "offline"
+          ]
+        },
+        "heart": {
+          "$ref": "#/$defs/HeartState"
+        },
+        "signal": {
+          "$ref": "#/$defs/SignalState"
+        },
+        "motion": {
+          "$ref": "#/$defs/MotionState"
+        },
+        "device": {
+          "$ref": "#/$defs/DeviceState"
+        },
+        "active_events": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {
+            "$ref": "#/$defs/EventRef"
+          }
+        },
+        "test_mode": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "schema_version",
+        "wearer_id",
+        "state_revision",
+        "source_instance_id",
+        "data_source",
+        "observed_at",
+        "device_timestamp_us",
+        "ecg_sample_index",
+        "age_ms",
+        "freshness",
+        "heart",
+        "signal",
+        "motion",
+        "device",
+        "active_events",
+        "test_mode"
+      ],
+      "allOf": [
+        {
+          "properties": {
+            "device": {
+              "properties": {
+                "last_ecg_packet_age_ms": {
+                  "$ref": "#/$defs/SafeNonNegativeInteger"
+                },
+                "last_transport_packet_age_ms": {
+                  "$ref": "#/$defs/SafeNonNegativeInteger"
+                }
+              },
+              "required": [
+                "last_ecg_packet_age_ms",
+                "last_transport_packet_age_ms"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "data_source": {
+                "enum": [
+                  "replay",
+                  "synthetic"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "test_mode": {
+                "const": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ToolMeta": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "0.2.0"
+        },
+        "generated_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "data_source": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DataSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "age_ms": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SafeNonNegativeInteger"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trace_id": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "schema_version",
+        "generated_at",
+        "data_source",
+        "age_ms",
+        "trace_id"
+      ]
+    },
+    "ToolErrorDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "actual_age_ms": {
+          "$ref": "#/$defs/SafeNonNegativeInteger"
+        },
+        "max_age_ms": {
+          "$ref": "#/$defs/SafeNonNegativeInteger"
+        },
+        "field": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "event_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "maxProperties": 5
+    },
+    "ToolError": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "INVALID_ARGUMENT",
+            "WEARER_NOT_FOUND",
+            "STATE_UNAVAILABLE",
+            "STATE_STALE",
+            "STATE_OFFLINE",
+            "DEVICE_OFFLINE",
+            "EVENT_NOT_FOUND",
+            "RATE_LIMITED",
+            "INTERNAL_ERROR"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "retry_after_ms": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SafeNonNegativeInteger"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "details": {
+          "$ref": "#/$defs/ToolErrorDetails"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retryable",
+        "retry_after_ms",
+        "details"
+      ]
+    },
+    "FailureEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ok": {
+          "const": false
+        },
+        "data": {
+          "const": null
+        },
+        "meta": {
+          "$ref": "#/$defs/ToolMeta"
+        },
+        "error": {
+          "$ref": "#/$defs/ToolError"
+        }
+      },
+      "required": [
+        "ok",
+        "data",
+        "meta",
+        "error"
+      ]
+    },
+    "GetCurrentStateInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "wearer_id": {
+          "$ref": "#/$defs/WearerId"
+        },
+        "max_age_ms": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 2000,
+          "default": 2000
+        }
+      },
+      "required": [
+        "wearer_id"
+      ]
+    },
+    "GetCurrentStateSuccess": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "$ref": "#/$defs/WearerState"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        "meta": {
+          "$ref": "#/$defs/ToolMeta"
+        },
+        "error": {
+          "const": null
+        }
+      },
+      "required": [
+        "ok",
+        "data",
+        "meta",
+        "error"
+      ]
+    },
+    "GetCurrentStateResult": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/GetCurrentStateSuccess"
+        },
+        {
+          "$ref": "#/$defs/FailureEnvelope"
+        }
+      ]
+    },
+    "GetEventDetailsInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "event_id": {
+          "$ref": "#/$defs/Uuid"
+        }
+      },
+      "required": [
+        "event_id"
+      ]
+    },
+    "GetEventDetailsSuccess": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "event": {
+              "$ref": "#/$defs/WearerEvent"
+            }
+          },
+          "required": [
+            "event"
+          ]
+        },
+        "meta": {
+          "$ref": "#/$defs/ToolMeta"
+        },
+        "error": {
+          "const": null
+        }
+      },
+      "required": [
+        "ok",
+        "data",
+        "meta",
+        "error"
+      ]
+    },
+    "GetEventDetailsResult": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/GetEventDetailsSuccess"
+        },
+        {
+          "$ref": "#/$defs/FailureEnvelope"
+        }
+      ]
+    },
+    "GetRecentEventsInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "wearer_id": {
+          "$ref": "#/$defs/WearerId"
+        },
+        "event_types": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/EventType"
+          }
+        },
+        "statuses": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "active",
+              "resolved"
+            ]
+          }
+        },
+        "since": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 4096,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 20
+        }
+      },
+      "required": [
+        "wearer_id"
+      ]
+    },
+    "GetRecentEventsSuccess": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "events": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "$ref": "#/$defs/WearerEvent"
+              }
+            },
+            "next_cursor": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 4096,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            }
+          },
+          "required": [
+            "events",
+            "next_cursor"
+          ]
+        },
+        "meta": {
+          "$ref": "#/$defs/ToolMeta"
+        },
+        "error": {
+          "const": null
+        }
+      },
+      "required": [
+        "ok",
+        "data",
+        "meta",
+        "error"
+      ]
+    },
+    "GetRecentEventsResult": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/GetRecentEventsSuccess"
+        },
+        {
+          "$ref": "#/$defs/FailureEnvelope"
+        }
+      ]
+    },
+    "GetDeviceStatusInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "wearer_id": {
+          "$ref": "#/$defs/WearerId"
+        }
+      },
+      "required": [
+        "wearer_id"
+      ]
+    },
+    "GetDeviceStatusSuccess": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "device": {
+              "$ref": "#/$defs/DeviceState"
+            }
+          },
+          "required": [
+            "device"
+          ]
+        },
+        "meta": {
+          "$ref": "#/$defs/ToolMeta"
+        },
+        "error": {
+          "const": null
+        }
+      },
+      "required": [
+        "ok",
+        "data",
+        "meta",
+        "error"
+      ]
+    },
+    "GetDeviceStatusResult": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/GetDeviceStatusSuccess"
+        },
+        {
+          "$ref": "#/$defs/FailureEnvelope"
+        }
+      ]
+    },
+    "McpTextContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "text"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 2
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ]
+    },
+    "McpCallToolResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "type": [
+            "integer",
+            "string"
+          ]
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "items": {
+                "$ref": "#/$defs/McpTextContent"
+              }
+            },
+            "structuredContent": {
+              "type": "object"
+            },
+            "isError": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "content",
+            "structuredContent",
+            "isError"
+          ]
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ]
+    },
+    "JsonRpcErrorResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "type": [
+            "integer",
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "type": "integer"
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "data": {}
+          },
+          "required": [
+            "code",
+            "message"
+          ]
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "error"
+      ]
+    },
+    "WebhookRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "0.2.0"
+        },
+        "notification_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "notification_sequence": {
+          "$ref": "#/$defs/SafeNonNegativeInteger"
+        },
+        "event_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "event_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "transition": {
+          "type": "string",
+          "enum": [
+            "opened",
+            "resolved"
+          ]
+        },
+        "event_type": {
+          "$ref": "#/$defs/EventType"
+        },
+        "wearer_id": {
+          "$ref": "#/$defs/WearerId"
+        },
+        "source_instance_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "state_revision": {
+          "$ref": "#/$defs/SafeNonNegativeInteger"
+        },
+        "data_source": {
+          "$ref": "#/$defs/DataSource"
+        },
+        "occurred_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "sent_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "trace_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "test_mode": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "schema_version",
+        "notification_id",
+        "notification_sequence",
+        "event_id",
+        "event_revision",
+        "transition",
+        "event_type",
+        "wearer_id",
+        "source_instance_id",
+        "state_revision",
+        "data_source",
+        "occurred_at",
+        "sent_at",
+        "trace_id",
+        "test_mode"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "data_source": {
+                "enum": [
+                  "replay",
+                  "synthetic"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "test_mode": {
+                "const": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "WebhookAck": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "notification_id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "accepted",
+            "duplicate"
+          ]
+        }
+      },
+      "required": [
+        "notification_id",
+        "status"
+      ]
+    },
+    "WebhookErrorAck": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "invalid_request",
+            "invalid_signature",
+            "timestamp_out_of_range",
+            "notification_id_conflict",
+            "body_too_large",
+            "unsupported_media_type",
+            "not_found",
+            "method_not_allowed",
+            "internal_error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  "x-contract": {
+    "contract_version": "0.2.0",
+    "mcp_protocol_version": "2025-11-25",
+    "firmware_protocol_version": 1,
+    "ecg_sample_rate_hz": 500,
+    "imu_sample_rate_hz": 50,
+    "mcp_p0_transport": "stdio",
+    "mcp_p1_loopback_endpoint": "http://127.0.0.1:8765/mcp",
+    "webhook_path": "/v1/health-events",
+    "webhook_delivery_semantics": "at-least-once",
+    "device_reset_detection": {
+      "pending_window_scope": "Every CRC-valid device-to-PC V0 packet accepted by PacketParser, currently ECG_BATCH, IMU_BATCH, DEVICE_STATUS, VOICE_TEXT_CHUNK, and VOICE_STATUS. Future inbound packet types enter this scope by default.",
+      "current_inbound_packet_types": [
+        "ECG_BATCH",
+        "IMU_BATCH",
+        "DEVICE_STATUS",
+        "VOICE_TEXT_CHUNK",
+        "VOICE_STATUS"
+      ],
+      "excluded_outbound_packet_types": [
+        "VOICE_TEXT_ACK"
+      ],
+      "trigger_eligible_packet_types": [
+        "ECG_BATCH",
+        "IMU_BATCH",
+        "DEVICE_STATUS",
+        "VOICE_TEXT_CHUNK",
+        "VOICE_STATUS"
+      ],
+      "buffer_only_packet_types": [],
+      "voice_text_retransmission_wire_semantics": "Commit 17fc0df reuses utterance_id/text but allocates a new global V0 packet_sequence and current timestamp_us for every send/retransmission. RETRANSMIT payload flags do not affect reset eligibility.",
+      "future_packet_type_rule": "Every new device-to-PC packet type is buffered and trigger-eligible by default. Exclusion requires a wire-level old-header retransmission rule plus a documented reset-detection completeness proof.",
+      "maximum_pending_candidates": 1,
+      "timestamp_rollback_threshold_us_exclusive": 1000000,
+      "confirmation_timeout_ms": 2000,
+      "maximum_buffered_packets": 256,
+      "maximum_buffered_raw_bytes": 65536,
+      "sequence_forward_distance_minimum": 1,
+      "sequence_forward_distance_maximum": 2147483647,
+      "confirmation_packet_scope": "same packet_type",
+      "while_pending": "Buffer every accepted inbound V0 packet in receive order, including voice packets, and do not publish state, events, webhooks, or voice ACKs. Never buffer the outbound VOICE_TEXT_ACK and do not create another candidate.",
+      "confirmed_policy": "Rotate source_instance_id exactly once, clear per-source health rings, analysis windows, trigger maxima, and loss baselines, preserve lifetime diagnostics and durably committed voice text, then replay the full buffer in receive order into the new instance through each subsystem's normal deduplication.",
+      "unconfirmed_policy": "Do not rotate. Drop the trigger candidate, then revalidate and replay every other buffered packet in receive order against the old instance as if the candidate never existed; drop and count any packet that still fails.",
+      "rotation_completion_rule": "Clear the global pending window before another candidate can be created.",
+      "required_interleaving_tests": [
+        "ECG trigger with interleaved IMU_BATCH and DEVICE_STATUS",
+        "ECG trigger with interleaved VOICE_TEXT_CHUNK and VOICE_STATUS",
+        "same utterance retransmission with new forward sequence/timestamp does not falsely trigger reset",
+        "two VOICE_TEXT_CHUNK packets after a real sequence/timestamp rollback can trigger and confirm reset",
+        "confirmed reset replays voice chunks through utterance/chunk deduplication without early ACK"
+      ]
+    },
+    "ecg_sample_index_semantics": {
+      "wire_type": "uint32 first_sample_index",
+      "public_fields": [
+        "WearerState.ecg_sample_index",
+        "HeartState.analyzed_through_ecg_sample_index"
+      ],
+      "runtime_and_ring_ordinal_fields": [
+        "SerialRuntimeStatus.last_ecg_sample_ordinal",
+        "BLE runtime status.last_ecg_sample_ordinal",
+        "ECG ring batch.first_sample_ordinal",
+        "ECG ring batch.last_sample_ordinal",
+        "EcgAnalysisResult.analyzed_through_ecg_sample_index"
+      ],
+      "raw_uint32_diagnostic_fields": [
+        "SerialRuntimeStatus.last_ecg_raw_sample_index",
+        "BLE runtime status.last_ecg_raw_sample_index",
+        "ECG ring batch.raw_first_sample_index"
+      ],
+      "public_meaning": "PC-expanded monotonically increasing ECG sample ordinal within one source_instance_id",
+      "extender_location": "One shared extender after SourceInstanceCoordinator commit and before serial/BLE runtime, ECG ring, analysis, or state updates.",
+      "forward_distance": "(new_batch_first_raw - last_raw_sample_index) & 0xffffffff",
+      "forward_distance_minimum": 1,
+      "forward_distance_maximum": 2147483647,
+      "duplicate_distance": 0,
+      "backward_distance_minimum": 2147483648,
+      "first_source_ordinal": "unsigned raw first_sample_index",
+      "maximum_public_ordinal": 9007199254740991,
+      "cross_source_comparison_allowed": false,
+      "wrap_golden": {
+        "raw_batch_first_before_wrap": 4294967280,
+        "sample_count": 20,
+        "expanded_batch_first": 4294967280,
+        "expanded_batch_last": 4294967299,
+        "next_raw_batch_first": 4,
+        "next_sample_count": 20,
+        "next_expanded_batch_first": 4294967300,
+        "next_expanded_batch_last": 4294967319,
+        "runtime_last_ecg_raw_sample_index": 23,
+        "runtime_last_ecg_sample_ordinal": 4294967319
+      }
+    },
+    "freshness_policy": {
+      "wearer_state_evidence": "last accepted ECG_BATCH containing at least one ECG sample",
+      "wearer_state_age_field": "age_ms",
+      "wearer_state_age_equals": "device.last_ecg_packet_age_ms",
+      "transport_liveness_field": "device.last_transport_packet_age_ms",
+      "transport_liveness_scope": "any accepted device-to-PC V0 packet; outbound VOICE_TEXT_ACK excluded",
+      "non_ecg_packets_never_refresh_health_freshness": true,
+      "fresh_maximum_ecg_age_ms_inclusive": 2000,
+      "stale_maximum_ecg_age_ms_inclusive": 10000,
+      "offline_ecg_age_ms_exclusive": 10000,
+      "never_received_ecg_behavior": "Do not create WearerState; health.get_device_status may still report transport state.",
+      "required_non_ecg_continuity_tests": [
+        "IMU, device status, and voice packets continue while ECG stops for more than 2000 ms: health freshness becomes stale and input_stale opens",
+        "IMU, device status, and voice packets continue while ECG stops for more than 10000 ms: health freshness becomes offline and input_offline opens"
+      ]
+    },
+    "ingress_commit_pipeline": {
+      "order": [
+        "optional raw recorder or raw_chunk_callback writes each received transport chunk byte-for-byte exactly once",
+        "frame extraction and magic/length/CRC/payload decode",
+        "create immutable StagedPacket with one monotonic/UTC PacketReceipt",
+        "SourceInstanceCoordinator buffer/confirm/reject/replay",
+        "commit sequence/loss/parser stats exactly once",
+        "extend committed ECG raw uint32 sample indices through the one per-source ordinal extender",
+        "append ECG/IMU/status ring or enter voice assembler",
+        "update runtime evidence",
+        "publish, durable voice insert, and voice ACK",
+        "build health state/events/webhooks"
+      ],
+      "parser_stats_before_commit": [
+        "magic_errors",
+        "length_errors",
+        "crc_errors",
+        "decode_errors"
+      ],
+      "parser_stats_only_on_commit": [
+        "packets_ok",
+        "packets_lost",
+        "duplicates",
+        "stale_packets",
+        "sequence_baseline"
+      ],
+      "buffered_voice_ack_allowed": false,
+      "packet_receipt_recomputed_on_replay": false,
+      "raw_recorder_before_decode_and_coordinator": true,
+      "raw_recorder_includes_crc_decode_and_reset_rejected_bytes": true,
+      "raw_recorder_replays_bytes": false,
+      "required_existing_files": [
+        "pc_app/src/smart_neckband/protocol.py",
+        "pc_app/src/smart_neckband/serial_io.py",
+        "pc_app/src/smart_neckband/ble_io.py",
+        "pc_app/src/smart_neckband/buffers.py",
+        "pc_app/src/smart_neckband/analysis.py"
+      ]
+    },
+    "analysis_provenance": {
+      "required_result_fields": [
+        "source_instance_id",
+        "analyzed_through_ecg_sample_index",
+        "analyzed_through_received_monotonic_ns",
+        "analyzed_through_received_at_utc"
+      ],
+      "valid_metric_maximum_age_ms_inclusive": 2000,
+      "valid_metric_window_s": 10.0,
+      "valid_metric_requires_current_source_instance": true,
+      "stalled_analysis_invalidates_old_metrics_while_ecg_continues": true
+    },
+    "device_status_policy": {
+      "offline": "reader closed/error; transport age >10000 ms; or no inbound packet for >10000 ms after reader start",
+      "stale": "reader normal and transport age in (2000,10000] ms",
+      "degraded": "within initial 10000 ms without a packet; or transport fresh but ECG missing/older than 2000 ms or another device degradation exists",
+      "ok": "transport and ECG both fresh with no degradation evidence",
+      "ecg_age_never_sets_transport_stale_or_offline": true
+    },
+    "runtime_invariants": [
+      "WearerState.device.last_ecg_packet_age_ms is non-null.",
+      "WearerState.device.last_transport_packet_age_ms is non-null because every accepted ECG packet is also an inbound transport packet.",
+      "WearerState.age_ms equals WearerState.device.last_ecg_packet_age_ms.",
+      "For get_current_state success, ToolMeta.age_ms equals WearerState.age_ms.",
+      "A valid heart metric belongs to WearerState.source_instance_id and is analyzed through a PC-expanded ECG ordinal not newer than WearerState.ecg_sample_index.",
+      "Serial/BLE runtime, ECG ring, EcgAnalysisResult, and WearerState use the same post-commit ECG ordinal extender; raw uint32 fields are diagnostic only.",
+      "Non-ECG inbound packets never refresh ECG evidence age."
+    ]
+  },
+  "x-tool-meta-semantics": {
+    "always": {
+      "schema_version": "0.2.0",
+      "generated_at": "response generation UTC timestamp",
+      "trace_id": "UUID generated for this tools/call"
+    },
+    "success": {
+      "health.get_current_state": {
+        "data_source": "returned state.data_source",
+        "age_ms": "state.age_ms == state.device.last_ecg_packet_age_ms"
+      },
+      "health.get_device_status": {
+        "data_source": "device snapshot data source",
+        "age_ms": "device.last_transport_packet_age_ms, or null before any inbound packet"
+      },
+      "health.get_event_details": {
+        "data_source": "returned event.data_source",
+        "age_ms": null
+      },
+      "health.get_recent_events": {
+        "data_source": "the common data source when a non-empty page contains one source; otherwise null",
+        "age_ms": null
+      }
+    },
+    "failure": {
+      "STATE_STALE": {
+        "data_source": "latest state data source",
+        "age_ms": "ECG age"
+      },
+      "STATE_OFFLINE": {
+        "data_source": "latest state data source",
+        "age_ms": "ECG age"
+      },
+      "DEVICE_OFFLINE": {
+        "data_source": "device snapshot data source when available, otherwise null",
+        "age_ms": "transport age when available, otherwise null"
+      },
+      "all_other_error_codes": {
+        "data_source": null,
+        "age_ms": null
+      }
+    }
+  },
+  "x-mcp-tools": [
+    {
+      "name": "health.get_current_state",
+      "title": "Get current smart-collar state",
+      "description": "Return the latest complete engineering state for the configured wearer when it satisfies max_age_ms.",
+      "inputSchema": {
+        "$ref": "#/$defs/GetCurrentStateInput"
+      },
+      "outputSchema": {
+        "$ref": "#/$defs/GetCurrentStateResult"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "health.get_event_details",
+      "title": "Get health event details",
+      "description": "Return the authoritative current revision of one persisted engineering event.",
+      "inputSchema": {
+        "$ref": "#/$defs/GetEventDetailsInput"
+      },
+      "outputSchema": {
+        "$ref": "#/$defs/GetEventDetailsResult"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "health.get_recent_events",
+      "title": "Get recent health events",
+      "description": "Return a cursor-paginated list of persisted engineering events for the configured wearer.",
+      "inputSchema": {
+        "$ref": "#/$defs/GetRecentEventsInput"
+      },
+      "outputSchema": {
+        "$ref": "#/$defs/GetRecentEventsResult"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "health.get_device_status",
+      "title": "Get smart-collar device status",
+      "description": "Return connection, transport, firmware-protocol, sampling, sensor, and counter status without requiring valid physiology.",
+      "inputSchema": {
+        "$ref": "#/$defs/GetDeviceStatusInput"
+      },
+      "outputSchema": {
+        "$ref": "#/$defs/GetDeviceStatusResult"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    }
+  ],
+  "x-event-transitions": {
+    "pre_first_wearer_state": {
+      "policy": "No Health event transition, event ID, state_revision reference, or webhook outbox may be created before the first persisted WearerState.",
+      "status_evidence": "Fresh DEVICE_STATUS evidence may remain in memory/status ring and health.get_device_status remains available.",
+      "first_state_rule": "When the first ECG creates WearerState revision R, reevaluate retained still-fresh status evidence in the same transaction; an observed lead-off opens with state_revision R.",
+      "required_test": "Only status/voice packets arrive, no ECG has ever arrived, and lead_off is true: no event/outbox. First ECG then opens lead_off against the first state revision."
+    },
+    "input_stale_to_input_offline": {
+      "atomic": true,
+      "state_revision_count": 1,
+      "operation_order": [
+        "persist offline WearerState as revision R",
+        "resolve input_stale with event_revision + 1 and state_revision R",
+        "open input_offline with event_revision 1 and state_revision R",
+        "enqueue input_stale resolved notification as sequence N",
+        "enqueue input_offline opened notification as sequence N + 1"
+      ],
+      "shared_fields": [
+        "state_revision",
+        "occurred_at",
+        "trace_id"
+      ],
+      "distinct_fields": [
+        "event_id",
+        "notification_id"
+      ],
+      "dispatch_rule": "Per wearer, sequence N + 1 is blocked until N is acknowledged or moved to dead letter."
+    }
+  },
+  "x-webhook": {
+    "method": "POST",
+    "path": "/v1/health-events",
+    "max_body_bytes": 65536,
+    "request_timeout_seconds": 3,
+    "timestamp_skew_seconds": 300,
+    "timestamp_header_pattern": "^[1-9][0-9]{0,11}$",
+    "timestamp_unix_seconds_minimum": 1,
+    "timestamp_unix_seconds_maximum": 253402300799,
+    "notification_id_header_must_equal_body": true,
+    "duplicate_identity": "SHA-256(raw UTF-8 request body bytes)",
+    "body_serialization": {
+      "encoding": "UTF-8",
+      "bom": false,
+      "trailing_newline": false,
+      "insignificant_whitespace": false,
+      "boolean_encoding": "lowercase JSON literals",
+      "field_order": [
+        "schema_version",
+        "notification_id",
+        "notification_sequence",
+        "event_id",
+        "event_revision",
+        "transition",
+        "event_type",
+        "wearer_id",
+        "source_instance_id",
+        "state_revision",
+        "data_source",
+        "occurred_at",
+        "sent_at",
+        "trace_id",
+        "test_mode"
+      ],
+      "retry_rule": "Persist the first raw body bytes and reuse them byte-for-byte; only the signature timestamp header changes."
+    },
+    "signature": {
+      "algorithm": "HMAC-SHA256",
+      "signed_payload": "ascii(timestamp) + '.' + raw_utf8_request_body",
+      "encoding": "lowercase hexadecimal",
+      "header_prefix": "v1=",
+      "exact_secret_bytes": 32
+    },
+    "secret_configuration": {
+      "environment_variable": "SMART_COLLAR_HEALTH_WEBHOOK_SECRET_HEX",
+      "pattern": "^[0-9a-f]{64}$",
+      "encoding": "lowercase hexadecimal without prefix or whitespace",
+      "decoded_bytes": 32,
+      "reject": [
+        "missing",
+        "uppercase",
+        "0x prefix",
+        "whitespace or newline",
+        "odd or non-64 length",
+        "non-hex",
+        "Base64",
+        "UTF-8 passphrase"
+      ],
+      "invalid_configuration_action": "Fail closed before starting sender/receiver workers and before any network request; log only variable name and error category.",
+      "golden_environment_value": "x-golden.webhook_secret_hex"
+    },
+    "required_headers": [
+      "Content-Type",
+      "Content-Length",
+      "X-Smart-Collar-Key-Id",
+      "X-Smart-Collar-Timestamp",
+      "X-Smart-Collar-Notification-Id",
+      "X-Smart-Collar-Signature"
+    ],
+    "advisory_request_headers": {
+      "Accept": "Sender should send application/json; receiver must not require or validate it and response format does not negotiate through this header.",
+      "User-Agent": "Sender should identify smart-neckband-health; receiver must not require or validate it."
+    },
+    "requestSchema": {
+      "$ref": "#/$defs/WebhookRequest"
+    },
+    "ackSchema": {
+      "$ref": "#/$defs/WebhookAck"
+    },
+    "errorAckSchema": {
+      "$ref": "#/$defs/WebhookErrorAck"
+    },
+    "content_type_policy": {
+      "media_type_case_insensitive": "application/json",
+      "accepted_parameter_sets": [
+        [],
+        [
+          "charset=utf-8"
+        ]
+      ],
+      "parameter_name_and_value_case_insensitive": true,
+      "optional_whitespace_around_semicolon": true,
+      "reject_other_charsets": true,
+      "reject_other_or_multiple_parameters": true
+    },
+    "request_body_policy": {
+      "transfer_encoding_chunked_allowed": false,
+      "content_length_required": true,
+      "content_length_decimal_integer_minimum": 1,
+      "content_length_decimal_integer_maximum": 65536,
+      "maximum_received_raw_body_bytes": 65536
+    },
+    "validation_order": [
+      "method",
+      "path",
+      "content_type",
+      "content_length_and_raw_body_size",
+      "timestamp",
+      "key_id_and_raw_body_hmac",
+      "utf8_json_and_request_schema",
+      "header_body_notification_id_equality",
+      "raw_body_sha256_deduplication",
+      "durable_persistence"
+    ],
+    "error_response_policy": {
+      "content_type": "application/json; charset=utf-8",
+      "bodySchema": {
+        "$ref": "#/$defs/WebhookErrorAck"
+      },
+      "method_not_allowed_allow_header": "POST",
+      "receiver_emits_403": false,
+      "forbidden_echoes": [
+        "secret",
+        "signature",
+        "raw body",
+        "parsed notification",
+        "internal exception"
+      ]
+    },
+    "redirect_policy": {
+      "follow_redirects": false,
+      "terminal_http_status_minimum": 300,
+      "terminal_http_status_maximum": 399,
+      "location_header_action": "ignore",
+      "reason": "Never forward signed headers or raw health notification bodies to an endpoint that did not pass the configured URL policy.",
+      "required_tests": [
+        301,
+        302,
+        303,
+        307,
+        308
+      ]
+    },
+    "receiver_idempotency": {
+      "unique_key": "notification_id",
+      "digest": "SHA-256(raw body bytes)",
+      "transaction": "Atomic insert-or-read-digest under a database unique constraint; queue insertion occurs in the same transaction only for the winning insert.",
+      "reference_sqlite_begin_mode": "IMMEDIATE",
+      "same_id_same_digest_concurrency": "Exactly one accepted, every other request duplicate, exactly one queue row.",
+      "same_id_different_digest_concurrency": "Exactly one value accepted; every losing different digest returns 409 notification_id_conflict.",
+      "crash_after_commit_before_ack": "Retry returns duplicate without another queue row.",
+      "storage_failure": "503 internal_error"
+    },
+    "validation_error_mapping": [
+      {
+        "condition": "HTTP method is not POST",
+        "http_status": 405,
+        "error": "method_not_allowed",
+        "retryable": false
+      },
+      {
+        "condition": "request path is not exactly /v1/health-events",
+        "http_status": 404,
+        "error": "not_found",
+        "retryable": false
+      },
+      {
+        "condition": "Content-Type is not application/json with optional charset=utf-8",
+        "http_status": 415,
+        "error": "unsupported_media_type",
+        "retryable": false
+      },
+      {
+        "condition": "Content-Length is missing, invalid, zero, or chunked transfer is used",
+        "http_status": 400,
+        "error": "invalid_request",
+        "retryable": false
+      },
+      {
+        "condition": "Content-Length or received raw body exceeds 65536 bytes",
+        "http_status": 413,
+        "error": "body_too_large",
+        "retryable": false
+      },
+      {
+        "condition": "X-Smart-Collar-Timestamp is missing, malformed, outside the integer range, or outside plus/minus 300 seconds",
+        "http_status": 401,
+        "error": "timestamp_out_of_range",
+        "retryable": false
+      },
+      {
+        "condition": "Key-Id or Signature is missing, Key-Id is unknown, signature syntax is invalid, or HMAC comparison fails",
+        "http_status": 401,
+        "error": "invalid_signature",
+        "retryable": false
+      },
+      {
+        "condition": "raw body is not UTF-8 JSON or fails WebhookRequest schema",
+        "http_status": 400,
+        "error": "invalid_request",
+        "retryable": false
+      },
+      {
+        "condition": "notification ID header does not exactly equal body notification_id",
+        "http_status": 400,
+        "error": "invalid_request",
+        "retryable": false
+      },
+      {
+        "condition": "existing notification_id has a different raw-body SHA-256",
+        "http_status": 409,
+        "error": "notification_id_conflict",
+        "retryable": false
+      },
+      {
+        "condition": "receiver cannot durably persist or deduplicate the validated notification",
+        "http_status": 503,
+        "error": "internal_error",
+        "retryable": true
+      }
+    ],
+    "retryable_http_statuses": [
+      408,
+      425,
+      429
+    ],
+    "retryable_http_status_ranges": [
+      {
+        "minimum": 500,
+        "maximum": 599
+      }
+    ],
+    "terminal_http_status_ranges": [
+      {
+        "minimum": 300,
+        "maximum": 399
+      }
+    ],
+    "terminal_http_statuses": [
+      400,
+      401,
+      403,
+      404,
+      405,
+      409,
+      413,
+      415
+    ],
+    "backoff_seconds": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      30,
+      60,
+      300
+    ],
+    "jitter_ratio": 0.2,
+    "dead_letter_after_seconds": 86400
+  },
+  "x-golden": {
+    "tool_meta_device_status_success": {
+      "schema_version": "0.2.0",
+      "generated_at": "2026-07-23T02:10:00.250Z",
+      "data_source": "live",
+      "age_ms": 35,
+      "trace_id": "7a916c4a-3b3e-4ec5-8491-e5fc7e843863"
+    },
+    "tool_meta_event_details_success": {
+      "schema_version": "0.2.0",
+      "generated_at": "2026-07-23T02:10:00.250Z",
+      "data_source": "live",
+      "age_ms": null,
+      "trace_id": "7a916c4a-3b3e-4ec5-8491-e5fc7e843863"
+    },
+    "tool_meta_recent_events_mixed": {
+      "schema_version": "0.2.0",
+      "generated_at": "2026-07-23T02:10:00.250Z",
+      "data_source": null,
+      "age_ms": null,
+      "trace_id": "7a916c4a-3b3e-4ec5-8491-e5fc7e843863"
+    },
+    "tool_meta_generic_failure": {
+      "schema_version": "0.2.0",
+      "generated_at": "2026-07-23T02:10:00.250Z",
+      "data_source": null,
+      "age_ms": null,
+      "trace_id": "7a916c4a-3b3e-4ec5-8491-e5fc7e843863"
+    },
+    "ecg_sample_ordinal_wrap": {
+      "raw_batch_first_before_wrap": 4294967280,
+      "sample_count": 20,
+      "expanded_batch_first": 4294967280,
+      "expanded_batch_last": 4294967299,
+      "next_raw_batch_first": 4,
+      "next_sample_count": 20,
+      "next_expanded_batch_first": 4294967300,
+      "next_expanded_batch_last": 4294967319,
+      "runtime_last_ecg_raw_sample_index": 23,
+      "runtime_last_ecg_sample_ordinal": 4294967319
+    },
+    "wearer_state_live": {
+      "schema_version": "0.2.0",
+      "wearer_id": "xwen",
+      "state_revision": 1842,
+      "source_instance_id": "ef132c67-a98f-474a-a673-4ab6ea784790",
+      "data_source": "live",
+      "observed_at": "2026-07-23T02:10:00.123Z",
+      "device_timestamp_us": 1845023123,
+      "ecg_sample_index": 923410,
+      "age_ms": 120,
+      "freshness": "fresh",
+      "heart": {
+        "analysis_source_instance_id": "ef132c67-a98f-474a-a673-4ab6ea784790",
+        "analyzed_through_ecg_sample_index": 923350,
+        "heart_rate": {
+          "value": 92.0,
+          "unit": "bpm",
+          "valid": true,
+          "observed_at": "2026-07-23T02:10:00.003Z",
+          "age_ms": 240,
+          "window_s": 10.0,
+          "method": "neurokit2_rr_median",
+          "unavailable_reason": null
+        },
+        "rr_interval": {
+          "value": 652.0,
+          "unit": "ms",
+          "valid": true,
+          "observed_at": "2026-07-23T02:10:00.003Z",
+          "age_ms": 240,
+          "window_s": 10.0,
+          "method": "neurokit2_latest_valid_rr",
+          "unavailable_reason": null
+        }
+      },
+      "signal": {
+        "quality_score": 0.86,
+        "quality_level": "good",
+        "quality_rank": 3,
+        "lead_off": false,
+        "adc_clipping_ratio_10s": 0.0,
+        "packet_loss_ratio_10s": 0.002,
+        "crc_errors_delta_10s": 0,
+        "window_s": 10.0
+      },
+      "motion": {
+        "level": null,
+        "confidence": null,
+        "observed_at": null,
+        "age_ms": null,
+        "window_s": null,
+        "method": null,
+        "unavailable_reason": "not_implemented"
+      },
+      "device": {
+        "status": "ok",
+        "connection_state": "RECEIVING",
+        "transport": "spp",
+        "firmware_protocol_version": 1,
+        "ecg_sample_rate_hz": 500,
+        "imu_sample_rate_hz": 50,
+        "last_ecg_packet_age_ms": 120,
+        "last_transport_packet_age_ms": 35,
+        "sampling_active": true,
+        "imu_online": true,
+        "oled_online": true,
+        "transport_connected": true,
+        "transport_congested": false,
+        "counters": {
+          "packets_ok": 46191,
+          "packets_lost": 9,
+          "crc_errors": 0,
+          "firmware_error_count": 0,
+          "ecg_ring_overflow_count": 0,
+          "imu_ring_overflow_count": 0,
+          "transport_queue_overflow_count": 0,
+          "transport_drop_count": 0,
+          "i2c_error_count": 0
+        }
+      },
+      "active_events": [],
+      "test_mode": false
+    },
+    "wearer_event_resolved": {
+      "schema_version": "0.2.0",
+      "event_id": "50d40557-8df6-47b5-abce-1ef447bf5543",
+      "event_revision": 2,
+      "event_type": "lead_off",
+      "wearer_id": "xwen",
+      "source_instance_id": "ef132c67-a98f-474a-a673-4ab6ea784790",
+      "data_source": "live",
+      "status": "resolved",
+      "severity": "warning",
+      "opened_at": "2026-07-23T02:09:40.000Z",
+      "updated_at": "2026-07-23T02:10:03.000Z",
+      "resolved_at": "2026-07-23T02:10:03.000Z",
+      "state_revision": 1849,
+      "evidence": {
+        "lead_off": false,
+        "adc_clipping_ratio_10s": null,
+        "last_ecg_packet_age_ms": 110,
+        "last_transport_packet_age_ms": 35,
+        "quality_level": "fair",
+        "detail": "Three consecutive fresh DEVICE_STATUS packets reported both lead-off bits clear."
+      },
+      "recommended_consumer_behavior": [
+        "refresh_current_state",
+        "do_not_infer_diagnosis"
+      ],
+      "test_mode": false
+    },
+    "mcp_get_current_state_request": {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "method": "tools/call",
+      "params": {
+        "name": "health.get_current_state",
+        "arguments": {
+          "wearer_id": "xwen",
+          "max_age_ms": 2000
+        }
+      }
+    },
+    "mcp_get_current_state_success_structured_content": {
+      "ok": true,
+      "data": {
+        "state": {
+          "schema_version": "0.2.0",
+          "wearer_id": "xwen",
+          "state_revision": 1842,
+          "source_instance_id": "ef132c67-a98f-474a-a673-4ab6ea784790",
+          "data_source": "live",
+          "observed_at": "2026-07-23T02:10:00.123Z",
+          "device_timestamp_us": 1845023123,
+          "ecg_sample_index": 923410,
+          "age_ms": 120,
+          "freshness": "fresh",
+          "heart": {
+            "analysis_source_instance_id": "ef132c67-a98f-474a-a673-4ab6ea784790",
+            "analyzed_through_ecg_sample_index": 923350,
+            "heart_rate": {
+              "value": 92.0,
+              "unit": "bpm",
+              "valid": true,
+              "observed_at": "2026-07-23T02:10:00.003Z",
+              "age_ms": 240,
+              "window_s": 10.0,
+              "method": "neurokit2_rr_median",
+              "unavailable_reason": null
+            },
+            "rr_interval": {
+              "value": 652.0,
+              "unit": "ms",
+              "valid": true,
+              "observed_at": "2026-07-23T02:10:00.003Z",
+              "age_ms": 240,
+              "window_s": 10.0,
+              "method": "neurokit2_latest_valid_rr",
+              "unavailable_reason": null
+            }
+          },
+          "signal": {
+            "quality_score": 0.86,
+            "quality_level": "good",
+            "quality_rank": 3,
+            "lead_off": false,
+            "adc_clipping_ratio_10s": 0.0,
+            "packet_loss_ratio_10s": 0.002,
+            "crc_errors_delta_10s": 0,
+            "window_s": 10.0
+          },
+          "motion": {
+            "level": null,
+            "confidence": null,
+            "observed_at": null,
+            "age_ms": null,
+            "window_s": null,
+            "method": null,
+            "unavailable_reason": "not_implemented"
+          },
+          "device": {
+            "status": "ok",
+            "connection_state": "RECEIVING",
+            "transport": "spp",
+            "firmware_protocol_version": 1,
+            "ecg_sample_rate_hz": 500,
+            "imu_sample_rate_hz": 50,
+            "last_ecg_packet_age_ms": 120,
+            "last_transport_packet_age_ms": 35,
+            "sampling_active": true,
+            "imu_online": true,
+            "oled_online": true,
+            "transport_connected": true,
+            "transport_congested": false,
+            "counters": {
+              "packets_ok": 46191,
+              "packets_lost": 9,
+              "crc_errors": 0,
+              "firmware_error_count": 0,
+              "ecg_ring_overflow_count": 0,
+              "imu_ring_overflow_count": 0,
+              "transport_queue_overflow_count": 0,
+              "transport_drop_count": 0,
+              "i2c_error_count": 0
+            }
+          },
+          "active_events": [],
+          "test_mode": false
+        }
+      },
+      "meta": {
+        "schema_version": "0.2.0",
+        "generated_at": "2026-07-23T02:10:00.250Z",
+        "data_source": "live",
+        "age_ms": 120,
+        "trace_id": "7a916c4a-3b3e-4ec5-8491-e5fc7e843863"
+      },
+      "error": null
+    },
+    "mcp_get_current_state_success": {"jsonrpc":"2.0","id":7,"result":{"content":[{"type":"text","text":"{\"ok\":true,\"data\":{\"state\":{\"schema_version\":\"0.2.0\",\"wearer_id\":\"xwen\",\"state_revision\":1842,\"source_instance_id\":\"ef132c67-a98f-474a-a673-4ab6ea784790\",\"data_source\":\"live\",\"observed_at\":\"2026-07-23T02:10:00.123Z\",\"device_timestamp_us\":1845023123,\"ecg_sample_index\":923410,\"age_ms\":120,\"freshness\":\"fresh\",\"heart\":{\"analysis_source_instance_id\":\"ef132c67-a98f-474a-a673-4ab6ea784790\",\"analyzed_through_ecg_sample_index\":923350,\"heart_rate\":{\"value\":92.0,\"unit\":\"bpm\",\"valid\":true,\"observed_at\":\"2026-07-23T02:10:00.003Z\",\"age_ms\":240,\"window_s\":10.0,\"method\":\"neurokit2_rr_median\",\"unavailable_reason\":null},\"rr_interval\":{\"value\":652.0,\"unit\":\"ms\",\"valid\":true,\"observed_at\":\"2026-07-23T02:10:00.003Z\",\"age_ms\":240,\"window_s\":10.0,\"method\":\"neurokit2_latest_valid_rr\",\"unavailable_reason\":null}},\"signal\":{\"quality_score\":0.86,\"quality_level\":\"good\",\"quality_rank\":3,\"lead_off\":false,\"adc_clipping_ratio_10s\":0.0,\"packet_loss_ratio_10s\":0.002,\"crc_errors_delta_10s\":0,\"window_s\":10.0},\"motion\":{\"level\":null,\"confidence\":null,\"observed_at\":null,\"age_ms\":null,\"window_s\":null,\"method\":null,\"unavailable_reason\":\"not_implemented\"},\"device\":{\"status\":\"ok\",\"connection_state\":\"RECEIVING\",\"transport\":\"spp\",\"firmware_protocol_version\":1,\"ecg_sample_rate_hz\":500,\"imu_sample_rate_hz\":50,\"last_ecg_packet_age_ms\":120,\"last_transport_packet_age_ms\":35,\"sampling_active\":true,\"imu_online\":true,\"oled_online\":true,\"transport_connected\":true,\"transport_congested\":false,\"counters\":{\"packets_ok\":46191,\"packets_lost\":9,\"crc_errors\":0,\"firmware_error_count\":0,\"ecg_ring_overflow_count\":0,\"imu_ring_overflow_count\":0,\"transport_queue_overflow_count\":0,\"transport_drop_count\":0,\"i2c_error_count\":0}},\"active_events\":[],\"test_mode\":false}},\"meta\":{\"schema_version\":\"0.2.0\",\"generated_at\":\"2026-07-23T02:10:00.250Z\",\"data_source\":\"live\",\"age_ms\":120,\"trace_id\":\"7a916c4a-3b3e-4ec5-8491-e5fc7e843863\"},\"error\":null}"}],"structuredContent":{"ok":true,"data":{"state":{"schema_version":"0.2.0","wearer_id":"xwen","state_revision":1842,"source_instance_id":"ef132c67-a98f-474a-a673-4ab6ea784790","data_source":"live","observed_at":"2026-07-23T02:10:00.123Z","device_timestamp_us":1845023123,"ecg_sample_index":923410,"age_ms":120,"freshness":"fresh","heart":{"analysis_source_instance_id":"ef132c67-a98f-474a-a673-4ab6ea784790","analyzed_through_ecg_sample_index":923350,"heart_rate":{"value":92.0,"unit":"bpm","valid":true,"observed_at":"2026-07-23T02:10:00.003Z","age_ms":240,"window_s":10.0,"method":"neurokit2_rr_median","unavailable_reason":null},"rr_interval":{"value":652.0,"unit":"ms","valid":true,"observed_at":"2026-07-23T02:10:00.003Z","age_ms":240,"window_s":10.0,"method":"neurokit2_latest_valid_rr","unavailable_reason":null}},"signal":{"quality_score":0.86,"quality_level":"good","quality_rank":3,"lead_off":false,"adc_clipping_ratio_10s":0.0,"packet_loss_ratio_10s":0.002,"crc_errors_delta_10s":0,"window_s":10.0},"motion":{"level":null,"confidence":null,"observed_at":null,"age_ms":null,"window_s":null,"method":null,"unavailable_reason":"not_implemented"},"device":{"status":"ok","connection_state":"RECEIVING","transport":"spp","firmware_protocol_version":1,"ecg_sample_rate_hz":500,"imu_sample_rate_hz":50,"last_ecg_packet_age_ms":120,"last_transport_packet_age_ms":35,"sampling_active":true,"imu_online":true,"oled_online":true,"transport_connected":true,"transport_congested":false,"counters":{"packets_ok":46191,"packets_lost":9,"crc_errors":0,"firmware_error_count":0,"ecg_ring_overflow_count":0,"imu_ring_overflow_count":0,"transport_queue_overflow_count":0,"transport_drop_count":0,"i2c_error_count":0}},"active_events":[],"test_mode":false}},"meta":{"schema_version":"0.2.0","generated_at":"2026-07-23T02:10:00.250Z","data_source":"live","age_ms":120,"trace_id":"7a916c4a-3b3e-4ec5-8491-e5fc7e843863"},"error":null},"isError":false}},
+    "mcp_state_stale_structured_content": {
+      "ok": false,
+      "data": null,
+      "meta": {
+        "schema_version": "0.2.0",
+        "generated_at": "2026-07-23T02:10:02.250Z",
+        "data_source": "live",
+        "age_ms": 2120,
+        "trace_id": "7a916c4a-3b3e-4ec5-8491-e5fc7e843863"
+      },
+      "error": {
+        "code": "STATE_STALE",
+        "message": "Latest wearer state is older than max_age_ms.",
+        "retryable": true,
+        "retry_after_ms": 500,
+        "details": {
+          "actual_age_ms": 2120,
+          "max_age_ms": 2000
+        }
+      }
+    },
+    "mcp_state_stale_error": {"jsonrpc":"2.0","id":8,"result":{"content":[{"type":"text","text":"{\"ok\":false,\"data\":null,\"meta\":{\"schema_version\":\"0.2.0\",\"generated_at\":\"2026-07-23T02:10:02.250Z\",\"data_source\":\"live\",\"age_ms\":2120,\"trace_id\":\"7a916c4a-3b3e-4ec5-8491-e5fc7e843863\"},\"error\":{\"code\":\"STATE_STALE\",\"message\":\"Latest wearer state is older than max_age_ms.\",\"retryable\":true,\"retry_after_ms\":500,\"details\":{\"actual_age_ms\":2120,\"max_age_ms\":2000}}}"}],"structuredContent":{"ok":false,"data":null,"meta":{"schema_version":"0.2.0","generated_at":"2026-07-23T02:10:02.250Z","data_source":"live","age_ms":2120,"trace_id":"7a916c4a-3b3e-4ec5-8491-e5fc7e843863"},"error":{"code":"STATE_STALE","message":"Latest wearer state is older than max_age_ms.","retryable":true,"retry_after_ms":500,"details":{"actual_age_ms":2120,"max_age_ms":2000}}},"isError":true}},
+    "mcp_state_offline_structured_content": {
+      "ok": false,
+      "data": null,
+      "meta": {
+        "schema_version": "0.2.0",
+        "generated_at": "2026-07-23T02:10:11.250Z",
+        "data_source": "live",
+        "age_ms": 11001,
+        "trace_id": "7a916c4a-3b3e-4ec5-8491-e5fc7e843863"
+      },
+      "error": {
+        "code": "STATE_OFFLINE",
+        "message": "ECG input is offline while transport may still be available.",
+        "retryable": true,
+        "retry_after_ms": 500,
+        "details": {
+          "actual_age_ms": 11001,
+          "max_age_ms": 10000
+        }
+      }
+    },
+    "mcp_state_offline_error": {
+      "jsonrpc": "2.0",
+      "id": 11,
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"ok\":false,\"data\":null,\"meta\":{\"schema_version\":\"0.2.0\",\"generated_at\":\"2026-07-23T02:10:11.250Z\",\"data_source\":\"live\",\"age_ms\":11001,\"trace_id\":\"7a916c4a-3b3e-4ec5-8491-e5fc7e843863\"},\"error\":{\"code\":\"STATE_OFFLINE\",\"message\":\"ECG input is offline while transport may still be available.\",\"retryable\":true,\"retry_after_ms\":500,\"details\":{\"actual_age_ms\":11001,\"max_age_ms\":10000}}}"
+          }
+        ],
+        "structuredContent": {
+          "ok": false,
+          "data": null,
+          "meta": {
+            "schema_version": "0.2.0",
+            "generated_at": "2026-07-23T02:10:11.250Z",
+            "data_source": "live",
+            "age_ms": 11001,
+            "trace_id": "7a916c4a-3b3e-4ec5-8491-e5fc7e843863"
+          },
+          "error": {
+            "code": "STATE_OFFLINE",
+            "message": "ECG input is offline while transport may still be available.",
+            "retryable": true,
+            "retry_after_ms": 500,
+            "details": {
+              "actual_age_ms": 11001,
+              "max_age_ms": 10000
+            }
+          }
+        },
+        "isError": true
+      }
+    },
+    "mcp_unknown_tool_error": {"jsonrpc":"2.0","id":9,"error":{"code":-32602,"message":"Unknown tool: health.unknown"}},
+    "mcp_malformed_call_error": {"jsonrpc":"2.0","id":10,"error":{"code":-32602,"message":"Invalid tools/call params: name is required."}},
+    "webhook_secret_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "webhook_timestamp": "1784772600",
+    "webhook_request": {
+      "schema_version": "0.2.0",
+      "notification_id": "894d7ebf-3c7a-4818-a85d-3555a0d4dd13",
+      "notification_sequence": 431,
+      "event_id": "50d40557-8df6-47b5-abce-1ef447bf5543",
+      "event_revision": 2,
+      "transition": "resolved",
+      "event_type": "lead_off",
+      "wearer_id": "xwen",
+      "source_instance_id": "ef132c67-a98f-474a-a673-4ab6ea784790",
+      "state_revision": 1849,
+      "data_source": "live",
+      "occurred_at": "2026-07-23T02:10:03.000Z",
+      "sent_at": "2026-07-23T02:10:03.120Z",
+      "trace_id": "7a916c4a-3b3e-4ec5-8491-e5fc7e843863",
+      "test_mode": false
+    },
+    "webhook_canonical_body_utf8": "{\"schema_version\":\"0.2.0\",\"notification_id\":\"894d7ebf-3c7a-4818-a85d-3555a0d4dd13\",\"notification_sequence\":431,\"event_id\":\"50d40557-8df6-47b5-abce-1ef447bf5543\",\"event_revision\":2,\"transition\":\"resolved\",\"event_type\":\"lead_off\",\"wearer_id\":\"xwen\",\"source_instance_id\":\"ef132c67-a98f-474a-a673-4ab6ea784790\",\"state_revision\":1849,\"data_source\":\"live\",\"occurred_at\":\"2026-07-23T02:10:03.000Z\",\"sent_at\":\"2026-07-23T02:10:03.120Z\",\"trace_id\":\"7a916c4a-3b3e-4ec5-8491-e5fc7e843863\",\"test_mode\":false}",
+    "webhook_raw_body_sha256": "3d9b8b18eb31aa9c8f7ddc42e0787ca8d1814511ad36be32eaef53cfd6ce0f43",
+    "webhook_signature_v1": "v1=217d52203ca73e60f36a9f6c323e34023e22a00d3db74af92522ae6d5c974067",
+    "webhook_ack_accepted": {
+      "notification_id": "894d7ebf-3c7a-4818-a85d-3555a0d4dd13",
+      "status": "accepted"
+    },
+    "webhook_ack_duplicate": {
+      "notification_id": "894d7ebf-3c7a-4818-a85d-3555a0d4dd13",
+      "status": "duplicate"
+    }
+  }
+}
