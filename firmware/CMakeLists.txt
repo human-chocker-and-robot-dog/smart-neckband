@@ -13,7 +13,7 @@ endif()
 
 if(IDF_TARGET STREQUAL "esp32c3")
     list(APPEND EXTRA_COMPONENT_DIRS
-        "$ENV{IDF_PATH}/examples/bluetooth/common/ble_uart"
+        "${CMAKE_CURRENT_LIST_DIR}/components/ble_uart"
     )
 endif()
 
