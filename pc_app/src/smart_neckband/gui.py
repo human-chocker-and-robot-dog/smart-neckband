@@ -31,7 +31,7 @@ from .history import (
     write_compare_csv,
     y_range_for,
 )
-from .protocol import ECG_SAMPLE_RATE_HZ, FLAG_LO_MINUS, FLAG_LO_PLUS
+from .protocol import ECG_SAMPLE_RATE_HZ, FLAG_LO_MINUS, FLAG_LO_PLUS, VoiceStatusPayload
 from .serial_io import PcDataStores, SerialPacketReader, list_serial_ports
 from .sessions import ExperimentSessionRecorder, PLACEMENT_PRESETS, WIRE_MAPS, RecordingState
 from .status import ConnectionSnapshot, ConnectionState, connection_state_text
@@ -715,6 +715,8 @@ class MainWindow:
                 raw_log_path=raw_path,
                 raw_chunk_callback=self._record_raw_chunk,
                 debug_callback=self._queue_ble_debug,
+                voice_text_callback=self.webhook_tab.enqueue_voice_text,
+                voice_status_callback=self._queue_voice_status,
             )
         else:
             self.reader = SerialPacketReader(
@@ -751,6 +753,15 @@ class MainWindow:
         if not self._debug_enabled:
             return
         self._post_gui(lambda message=message: self._append_debug_log(message))
+
+    def _queue_voice_status(self, status: VoiceStatusPayload) -> None:
+        reader = self.reader
+        pending_count = (
+            reader.voice_assembler.pending_count
+            if isinstance(reader, BlePacketReader)
+            else 0
+        )
+        self.webhook_tab.update_voice_status(status, pending_count=pending_count)
 
     def _append_debug_log(self, message: str) -> None:
         if not self._debug_enabled:

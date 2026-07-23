@@ -21,9 +21,9 @@ static const char *TAG = "v0_packet";
 static TaskHandle_t s_packet_task_handle = NULL;
 static uint32_t s_packet_sequence = 0U;
 
-static uint32_t next_packet_sequence(void)
+uint32_t v0_packet_next_sequence(void)
 {
-    return s_packet_sequence++;
+    return __atomic_fetch_add(&s_packet_sequence, 1U, __ATOMIC_RELAXED);
 }
 
 static void send_ecg_batch(void)
@@ -43,7 +43,7 @@ static void send_ecg_batch(void)
     uint8_t packet[PROTOCOL_V0_ECG_PACKET_SIZE] = {0};
     if (protocol_v0_encode_ecg_packet(packet,
                                       sizeof(packet),
-                                      next_packet_sequence(),
+                                      v0_packet_next_sequence(),
                                       batch[0].timestamp_us,
                                       batch[0].sample_index,
                                       flags,
@@ -69,7 +69,7 @@ static void send_imu_batch(void)
     uint8_t packet[PROTOCOL_V0_IMU_PACKET_SIZE] = {0};
     if (protocol_v0_encode_imu_packet(packet,
                                       sizeof(packet),
-                                      next_packet_sequence(),
+                                      v0_packet_next_sequence(),
                                       batch[0].timestamp_us,
                                       batch[0].sample_index,
                                       flags,
@@ -150,7 +150,7 @@ static void send_device_status(void)
     uint8_t packet[PROTOCOL_V0_DEVICE_STATUS_PACKET_SIZE] = {0};
     if (protocol_v0_encode_device_status_packet(packet,
                                                 sizeof(packet),
-                                                next_packet_sequence(),
+                                                v0_packet_next_sequence(),
                                                 (uint64_t)esp_timer_get_time(),
                                                 &status)) {
         (void)v0_transport_enqueue(packet, sizeof(packet));

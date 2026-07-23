@@ -15,6 +15,8 @@ from .webhook_models import (
 )
 from .webhook_receiver import ReplyWebhookServer
 from .webhook_store import WebhookStore
+from .protocol import VoiceStatusPayload
+from .voice import VoiceTranscript
 
 
 STATE_TEXT = {
@@ -23,6 +25,16 @@ STATE_TEXT = {
     InstructionState.RETRY_WAIT: "等待重试",
     InstructionState.ACCEPTED: "已受理",
     InstructionState.FAILED: "提交失败",
+}
+
+
+VOICE_STATE_TEXT = {
+    0: "禁用",
+    1: "等待唤醒",
+    2: "连接 ASR",
+    3: "正在识别",
+    4: "等待最终文本",
+    5: "错误冷却",
 }
 
 
@@ -59,6 +71,19 @@ class WebhookTab:
         QtWidgets = self.QtWidgets
         widget = QtWidgets.QWidget()
         root = QtWidgets.QVBoxLayout(widget)
+
+        voice_group = QtWidgets.QGroupBox("设备语音链路")
+        voice_layout = QtWidgets.QGridLayout(voice_group)
+        self.voice_state_label = QtWidgets.QLabel("语音状态：--")
+        self.voice_transcript_label = QtWidgets.QLabel("最终文本：--")
+        self.voice_transcript_label.setWordWrap(True)
+        self.voice_error_label = QtWidgets.QLabel("最近错误：0")
+        self.voice_pending_label = QtWidgets.QLabel("待重组：0")
+        voice_layout.addWidget(self.voice_state_label, 0, 0)
+        voice_layout.addWidget(self.voice_error_label, 0, 1)
+        voice_layout.addWidget(self.voice_pending_label, 0, 2)
+        voice_layout.addWidget(self.voice_transcript_label, 1, 0, 1, 3)
+        root.addWidget(voice_group)
 
         settings_group = QtWidgets.QGroupBox("Webhook 设置")
         settings_layout = QtWidgets.QGridLayout(settings_group)
@@ -325,6 +350,49 @@ class WebhookTab:
             f"指令已先写入本地 SQLite，等待提交：instruction_id={record.instruction_id}"
         )
         self._refresh_records()
+
+    def enqueue_voice_text(self, transcript: VoiceTranscript) -> bool:
+        """Persist a final device transcript before the BLE reader emits ACK."""
+
+        try:
+            record = self.dispatcher.enqueue_text(
+                transcript.text,
+                instruction_id=transcript.instruction_id,
+            )
+        except Exception as exc:
+            self._queue_debug(
+                "语音文本持久化失败，未发送 ACK："
+                f"{type(exc).__name__}: {exc}"
+            )
+            return False
+
+        def update_ui() -> None:
+            self.last_instruction_label.setText(
+                f"instruction_id：{record.instruction_id}"
+            )
+            self.voice_transcript_label.setText(f"最终文本：{record.text}")
+            self._append_debug(
+                "语音文本已写入 SQLite，允许 BLE ACK："
+                f"instruction_id={record.instruction_id}"
+            )
+            self._refresh_records()
+
+        self.post_gui(update_ui)
+        return True
+
+    def update_voice_status(self, status: VoiceStatusPayload, *, pending_count: int) -> None:
+        def update_ui() -> None:
+            state_text = VOICE_STATE_TEXT.get(status.state, f"未知({status.state})")
+            self.voice_state_label.setText(
+                f"语音状态：{state_text}，唤醒 {status.wake_count}，"
+                f"成功 {status.asr_success_count}，失败 {status.asr_error_count}"
+            )
+            self.voice_error_label.setText(f"最近错误：{status.last_error}")
+            self.voice_pending_label.setText(
+                f"待重组：{pending_count}，设备丢弃 {status.text_drop_count}"
+            )
+
+        self.post_gui(update_ui)
 
     def _retry_selected(self) -> None:
         row = self.instruction_table.currentRow()

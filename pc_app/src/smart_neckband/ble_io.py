@@ -4,15 +4,27 @@ import asyncio
 from dataclasses import dataclass
 import logging
 from pathlib import Path
+from queue import Empty, Queue
 import sys
 from threading import Event, Lock, Thread
 import time
 from typing import Callable
 
-from .protocol import DeviceStatusPayload, EcgPayload, ImuPayload, PacketParser, ParserStats, ParsedPacket
+from .protocol import (
+    DeviceStatusPayload,
+    EcgPayload,
+    ImuPayload,
+    PacketParser,
+    ParserStats,
+    ParsedPacket,
+    VoiceStatusPayload,
+    VoiceTextChunkPayload,
+    encode_voice_text_ack_packet,
+)
 from .publisher import DataPublisher, NullPublisher
 from .recorder import RawBinaryRecorder
 from .serial_io import PcDataStores, SerialRuntimeStatus
+from .voice import VoiceTextAssembler, VoiceTranscript
 
 
 BLE_UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
@@ -110,6 +122,9 @@ class BlePacketReader:
         publisher: DataPublisher | None = None,
         raw_chunk_callback: Callable[[bytes], None] | None = None,
         debug_callback: Callable[[str], None] | None = None,
+        voice_text_callback: Callable[[VoiceTranscript], bool] | None = None,
+        voice_status_callback: Callable[[VoiceStatusPayload], None] | None = None,
+        control_write_callback: Callable[[bytes], None] | None = None,
     ) -> None:
         self.address = address
         self.port = address
@@ -119,6 +134,12 @@ class BlePacketReader:
         self.raw_log_path = Path(raw_log_path) if raw_log_path is not None else None
         self.raw_chunk_callback = raw_chunk_callback
         self.debug_callback = debug_callback
+        self.voice_text_callback = voice_text_callback
+        self.voice_status_callback = voice_status_callback
+        self.control_write_callback = control_write_callback
+        self.voice_assembler = VoiceTextAssembler()
+        self._control_tx_queue: Queue[bytes] = Queue()
+        self._control_packet_sequence = 0
         self._stop = Event()
         self._runtime_lock = Lock()
         self._thread: Thread | None = None
@@ -269,11 +290,30 @@ class BlePacketReader:
             self._debug("BLE 数据通道已就绪")
 
             while not self._stop.is_set() and client.is_connected:
+                await self._drain_control_writes(client)
                 await asyncio.sleep(0.1)
 
             if client.is_connected:
                 self._debug("停止 TX notification")
                 await client.stop_notify(BLE_UART_TX_UUID)
+
+    async def _drain_control_writes(self, client: object) -> None:
+        while True:
+            try:
+                packet = self._control_tx_queue.get_nowait()
+            except Empty:
+                return
+            await client.write_gatt_char(  # type: ignore[attr-defined]
+                BLE_UART_RX_UUID,
+                packet,
+                response=True,
+            )
+
+    def queue_control_packet(self, packet: bytes) -> None:
+        if self.control_write_callback is not None:
+            self.control_write_callback(packet)
+            return
+        self._control_tx_queue.put(packet)
 
     def _debug(self, message: str, *args: object) -> None:
         rendered = message % args if args else message
@@ -295,7 +335,32 @@ class BlePacketReader:
             self.stores.imu.append_batch(packet.header, payload)
         elif isinstance(payload, DeviceStatusPayload):
             self.stores.status.append(packet.header, payload)
+        elif isinstance(payload, VoiceTextChunkPayload):
+            transcript = self.voice_assembler.add_chunk(payload)
+            if transcript is not None and self.voice_text_callback is not None:
+                try:
+                    durable = self.voice_text_callback(transcript)
+                except Exception:
+                    LOGGER.exception(
+                        "voice transcript persistence failed for utterance %016x",
+                        transcript.utterance_id,
+                    )
+                    durable = False
+                if durable:
+                    self._queue_voice_ack(transcript.utterance_id)
+        elif isinstance(payload, VoiceStatusPayload):
+            if self.voice_status_callback is not None:
+                self.voice_status_callback(payload)
         with self._runtime_lock:
             self._packet_count += 1
             self._last_packet_monotonic_s = time.monotonic()
         self.publisher.publish_packet(packet)
+
+    def _queue_voice_ack(self, utterance_id: int) -> None:
+        packet = encode_voice_text_ack_packet(
+            packet_sequence=self._control_packet_sequence,
+            timestamp_us=time.monotonic_ns() // 1_000,
+            utterance_id=utterance_id,
+        )
+        self._control_packet_sequence = (self._control_packet_sequence + 1) & 0xFFFFFFFF
+        self.queue_control_packet(packet)

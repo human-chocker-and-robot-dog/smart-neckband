@@ -17,6 +17,7 @@ idf_component_register(
         "protocol_v0.c"
         "sample_ring.c"
         "sensors.c"
+        "voice_link.c"
         "${transport_source}"
     PRIV_REQUIRES
         ${transport_requirements}
@@ -32,3 +33,12 @@ idf_component_register(
     INCLUDE_DIRS
         "."
 )
+
+if(SMART_NECKBAND_VOICE)
+    if(NOT IDF_TARGET STREQUAL "esp32c3")
+        message(FATAL_ERROR "SMART_NECKBAND_VOICE is supported only on esp32c3")
+    endif()
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE SMART_NECKBAND_VOICE=1)
+else()
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE SMART_NECKBAND_VOICE=0)
+endif()

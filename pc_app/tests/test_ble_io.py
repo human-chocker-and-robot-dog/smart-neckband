@@ -11,6 +11,8 @@ from smart_neckband.ble_io import (
     _start_notify_after_bond,
 )
 from smart_neckband.serial_io import PcDataStores
+from smart_neckband.protocol import VoiceTextAckPayload, decode_packet
+from smart_neckband.webhook_store import WebhookStore
 
 
 def load_ecg_packet() -> bytes:
@@ -19,6 +21,15 @@ def load_ecg_packet() -> bytes:
         (repo_root / "docs" / "protocol" / "v0_golden_vectors.json").read_text(encoding="utf-8")
     )["vectors"]
     vector = next(item for item in vectors if item["name"].startswith("ecg_batch"))
+    return bytes.fromhex(vector["packet_hex"])
+
+
+def load_vector(name: str) -> bytes:
+    repo_root = Path(__file__).resolve().parents[2]
+    vectors = json.loads(
+        (repo_root / "docs" / "protocol" / "v0_golden_vectors.json").read_text(encoding="utf-8")
+    )["vectors"]
+    vector = next(item for item in vectors if item["name"] == name)
     return bytes.fromhex(vector["packet_hex"])
 
 
@@ -85,3 +96,54 @@ def test_ble_reader_recovers_after_truncated_packet() -> None:
 
     assert reader.runtime_status.ecg_packet_count == 1
     assert len(stores.ecg.snapshot()) == 20
+
+
+def test_voice_text_is_durable_before_ack_and_duplicate_reuses_instruction(tmp_path) -> None:
+    packet = load_vector("voice_text_final_single_chunk")
+    store = WebhookStore(tmp_path / "webhook.sqlite3")
+    events: list[str] = []
+    acks: list[bytes] = []
+
+    def persist(transcript) -> bool:
+        store.create_instruction(
+            transcript.text,
+            instruction_id=transcript.instruction_id,
+        )
+        events.append(f"persist:{transcript.instruction_id}")
+        return True
+
+    def write_control(control_packet: bytes) -> None:
+        assert store.get_instruction("voice-1122334455667788").text == "主人主人，向前走。"
+        events.append("ack")
+        acks.append(control_packet)
+
+    reader = BlePacketReader(
+        address="AA:BB:CC:DD:EE:FF",
+        voice_text_callback=persist,
+        control_write_callback=write_control,
+    )
+    for offset in range(0, len(packet), 7):
+        reader.feed_notification(packet[offset : offset + 7])
+
+    assert events == ["persist:voice-1122334455667788", "ack"]
+    ack = decode_packet(acks[0])
+    assert isinstance(ack.payload, VoiceTextAckPayload)
+    assert ack.payload.utterance_id == 0x1122334455667788
+
+    reader.feed_notification(packet)
+    assert events[-2:] == ["persist:voice-1122334455667788", "ack"]
+    assert len(store.list_instructions()) == 1
+
+
+def test_voice_text_is_not_acked_when_persistence_fails() -> None:
+    packet = load_vector("voice_text_final_single_chunk")
+    acks: list[bytes] = []
+    reader = BlePacketReader(
+        address="AA:BB:CC:DD:EE:FF",
+        voice_text_callback=lambda _transcript: False,
+        control_write_callback=acks.append,
+    )
+
+    reader.feed_notification(packet)
+
+    assert acks == []

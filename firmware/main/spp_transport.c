@@ -31,6 +31,7 @@ typedef struct {
 static QueueHandle_t s_tx_queue = NULL;
 static TaskHandle_t s_tx_task_handle = NULL;
 static TaskHandle_t s_discovery_task_handle = NULL;
+static v0_transport_rx_callback_t s_rx_callback = NULL;
 
 static volatile bool s_connected = false;
 static volatile bool s_congested = false;
@@ -391,6 +392,13 @@ static void spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
         s_write_pending = false;
         notify_tx_task();
         break;
+    case ESP_SPP_DATA_IND_EVT:
+        if (s_rx_callback != NULL &&
+            param->data_ind.data != NULL &&
+            param->data_ind.len > 0) {
+            s_rx_callback(param->data_ind.data, (size_t)param->data_ind.len);
+        }
+        break;
     default:
         break;
     }
@@ -570,6 +578,30 @@ bool v0_transport_enqueue(const uint8_t *data, size_t length)
 
     add_disconnected_drop();
     return false;
+}
+
+bool v0_transport_enqueue_low_priority(const uint8_t *data, size_t length)
+{
+    if (data == NULL || length == 0U || length > PROTOCOL_V0_MAX_PACKET_SIZE ||
+        s_tx_queue == NULL || !s_connected) {
+        return false;
+    }
+
+    v0_spp_tx_item_t item = {
+        .length = (uint16_t)length,
+    };
+    memcpy(item.data, data, length);
+    if (xQueueSend(s_tx_queue, &item, 0U) != pdTRUE) {
+        add_queue_overflow();
+        return false;
+    }
+    notify_tx_task();
+    return true;
+}
+
+void v0_transport_set_rx_callback(v0_transport_rx_callback_t callback)
+{
+    s_rx_callback = callback;
 }
 
 void v0_transport_get_status(v0_transport_status_t *out_status)

@@ -15,6 +15,7 @@
 #include "sdkconfig.h"
 #include "sensors.h"
 #include "transport.h"
+#include "voice_link.h"
 
 static const char *TAG = "v0_boot";
 
@@ -146,6 +147,14 @@ void app_main(void)
     if (packet_err != ESP_OK) {
         ESP_LOGE(TAG, "packet task failed to start: %s", esp_err_to_name(packet_err));
     }
+
+#if SMART_NECKBAND_VOICE
+    const esp_err_t voice_link_err = v0_voice_link_start();
+    if (voice_link_err != ESP_OK) {
+        ESP_LOGE(TAG, "voice BLE link failed to start: %s",
+                 esp_err_to_name(voice_link_err));
+    }
+#endif
 
     ESP_LOGI(TAG,
              "V0 runtime ready; waiting for %s client",
