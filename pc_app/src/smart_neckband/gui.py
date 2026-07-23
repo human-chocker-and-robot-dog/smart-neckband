@@ -188,6 +188,7 @@ class MainWindow:
         self.gui_callbacks_lock = Lock()
         self._ble_scan_generation = 0
         self._ble_scan_thread: Thread | None = None
+        self._debug_enabled = True
         self.debug_log_path = debug_log_path
         self.raw_marker_items: list[object] = []
         self.clean_marker_items: list[object] = []
@@ -251,8 +252,8 @@ class MainWindow:
             connection_layout.addWidget(widget, index // 3, index % 3)
         layout.addWidget(connection_group)
 
-        debug_group = QtWidgets.QGroupBox("BLE DEBUG 日志")
-        debug_layout = QtWidgets.QVBoxLayout(debug_group)
+        self.debug_group = QtWidgets.QGroupBox("BLE DEBUG 日志")
+        debug_layout = QtWidgets.QVBoxLayout(self.debug_group)
         self.debug_log_output = QtWidgets.QPlainTextEdit()
         self.debug_log_output.setReadOnly(True)
         self.debug_log_output.setMaximumBlockCount(500)
@@ -260,7 +261,7 @@ class MainWindow:
         debug_layout.addWidget(self.debug_log_output)
         self.clear_debug_button = QtWidgets.QPushButton("清空显示")
         debug_layout.addWidget(self.clear_debug_button)
-        layout.addWidget(debug_group)
+        layout.addWidget(self.debug_group)
 
         record_group = QtWidgets.QGroupBox("实验记录")
         record_layout = QtWidgets.QGridLayout(record_group)
@@ -355,6 +356,7 @@ class MainWindow:
         self.connect_button.clicked.connect(self.connect_device)
         self.disconnect_button.clicked.connect(self.disconnect_serial)
         self.clear_debug_button.clicked.connect(self.debug_log_output.clear)
+        self.debug_enabled_checkbox.toggled.connect(self._set_debug_enabled)
         self.calibrate_button.clicked.connect(self.attitude_worker.calibrate_flat)
         self.start_record_button.clicked.connect(self.start_recording)
         self.stop_record_button.clicked.connect(self.stop_recording)
@@ -401,7 +403,10 @@ class MainWindow:
 
         controls = QtWidgets.QHBoxLayout()
         self.calibrate_button = QtWidgets.QPushButton("平放校准")
+        self.debug_enabled_checkbox = QtWidgets.QCheckBox("启用连接 DEBUG 日志")
+        self.debug_enabled_checkbox.setChecked(True)
         controls.addWidget(self.calibrate_button)
+        controls.addWidget(self.debug_enabled_checkbox)
         controls.addStretch(1)
         layout.addLayout(controls)
 
@@ -735,11 +740,25 @@ class MainWindow:
             self.gui_callbacks.append(callback)
 
     def _queue_ble_debug(self, message: str) -> None:
+        if not self._debug_enabled:
+            return
         self._post_gui(lambda message=message: self._append_debug_log(message))
 
     def _append_debug_log(self, message: str) -> None:
+        if not self._debug_enabled:
+            return
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         self.debug_log_output.appendPlainText(f"[{timestamp}] {message}")
+
+    def _set_debug_enabled(self, enabled: bool) -> None:
+        self._debug_enabled = bool(enabled)
+        self.debug_group.setVisible(self._debug_enabled)
+        level = logging.DEBUG if self._debug_enabled else logging.INFO
+        logging.getLogger("smart_neckband").setLevel(level)
+        logging.getLogger("bleak").setLevel(level)
+        if self._debug_enabled:
+            logging.getLogger("bleak.backends.winrt.scanner").setLevel(logging.INFO)
+            self._append_debug_log("DEBUG 日志已启用")
 
     def _drain_gui_callbacks(self) -> None:
         callbacks: list[object] = []
