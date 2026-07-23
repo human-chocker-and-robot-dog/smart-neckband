@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 from threading import Event, Lock, Thread
 import time
@@ -18,6 +19,7 @@ BLE_UART_RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
 BLE_UART_TX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 BLE_AUTH_SETTLE_ATTEMPTS = 20
 BLE_AUTH_SETTLE_DELAY_S = 0.25
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +31,7 @@ class BleDeviceInfo:
 def list_ble_devices(timeout: float = 2.0) -> list[BleDeviceInfo]:
     """Scan synchronously for GUI use; Bleak stays an optional dependency."""
 
+    LOGGER.debug("BLE scan started; timeout=%.1f seconds", timeout)
     try:
         from bleak import BleakScanner
     except ImportError as exc:  # pragma: no cover - depends on optional Bleak
@@ -45,7 +48,12 @@ def list_ble_devices(timeout: float = 2.0) -> list[BleDeviceInfo]:
             result.append(BleDeviceInfo(address=device.address, name=name))
         return sorted(result, key=lambda item: (item.name, item.address))
 
-    return asyncio.run(discover())
+    devices = asyncio.run(discover())
+    LOGGER.debug(
+        "BLE scan completed; matching devices=%s",
+        [(device.name, device.address) for device in devices],
+    )
+    return devices
 
 
 def _matches_ble_uart_device(name: str, service_uuids: list[str]) -> bool:
@@ -64,10 +72,17 @@ async def _start_notify_after_bond(
 
     for attempt in range(attempts):
         try:
+            LOGGER.debug("BLE TX notify attempt %d/%d", attempt + 1, attempts)
             await client.start_notify(BLE_UART_TX_UUID, callback)  # type: ignore[attr-defined]
+            LOGGER.debug("BLE TX notifications enabled")
             return
         except Exception as exc:
             authentication_pending = "Insufficient Authentication" in str(exc)
+            LOGGER.debug(
+                "BLE TX notify attempt %d failed: %s",
+                attempt + 1,
+                exc,
+            )
             if not authentication_pending or attempt + 1 >= attempts:
                 raise
             await asyncio.sleep(delay_s)
@@ -89,6 +104,7 @@ class BlePacketReader:
         raw_log_path: str | Path | None = None,
         publisher: DataPublisher | None = None,
         raw_chunk_callback: Callable[[bytes], None] | None = None,
+        debug_callback: Callable[[str], None] | None = None,
     ) -> None:
         self.address = address
         self.port = address
@@ -97,6 +113,7 @@ class BlePacketReader:
         self.publisher = publisher or NullPublisher()
         self.raw_log_path = Path(raw_log_path) if raw_log_path is not None else None
         self.raw_chunk_callback = raw_chunk_callback
+        self.debug_callback = debug_callback
         self._stop = Event()
         self._runtime_lock = Lock()
         self._thread: Thread | None = None
@@ -108,6 +125,7 @@ class BlePacketReader:
         self._ecg_packet_count = 0
         self._last_packet_monotonic_s: float | None = None
         self._last_ecg_sample_index: int | None = None
+        self._first_notification_logged = False
 
     @property
     def stats(self) -> ParserStats:
@@ -133,6 +151,7 @@ class BlePacketReader:
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
+            self._debug("启动请求已忽略：BLE 读取线程已在运行")
             return
         self._stop.clear()
         with self._runtime_lock:
@@ -143,13 +162,20 @@ class BlePacketReader:
             self._ecg_packet_count = 0
             self._last_packet_monotonic_s = None
             self._last_ecg_sample_index = None
+            self._first_notification_logged = False
         self._thread = Thread(target=self._run, name=f"BlePacketReader-{self.address}", daemon=True)
+        self._debug("启动 BLE 连接线程，设备=%s", self.address)
         self._thread.start()
 
     def stop(self, timeout: float = 3.0) -> None:
+        self._debug("请求断开 BLE，等待 %.1f 秒", timeout)
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=timeout)
+            if self._thread.is_alive():
+                self._debug("警告：BLE 线程未在超时内退出")
+            else:
+                self._debug("BLE 线程已退出")
         if self._recorder is not None:
             self._recorder.close()
             self._recorder = None
@@ -168,8 +194,11 @@ class BlePacketReader:
 
     def _run(self) -> None:
         try:
+            self._debug("BLE asyncio 事件循环启动")
             asyncio.run(self._run_async())
         except Exception as exc:  # pragma: no cover - hardware/OS path
+            LOGGER.exception("BLE connection failed for %s", self.address)
+            self._debug("BLE 连接失败：%s: %s", type(exc).__name__, exc)
             with self._runtime_lock:
                 self._last_error = exc
         finally:
@@ -178,8 +207,10 @@ class BlePacketReader:
             if self._recorder is not None:
                 self._recorder.close()
                 self._recorder = None
+            self._debug("BLE 连接流程结束")
 
     async def _run_async(self) -> None:
+        self._debug("加载 Bleak Windows 后端")
         try:
             from bleak import BleakClient
         except ImportError as exc:  # pragma: no cover - optional dependency
@@ -189,6 +220,7 @@ class BlePacketReader:
             self._recorder = RawBinaryRecorder(self.raw_log_path)
 
         def disconnected(_: object) -> None:
+            self._debug("收到 BLE 断开回调")
             with self._runtime_lock:
                 self._serial_open = False
 
@@ -198,12 +230,17 @@ class BlePacketReader:
             # session. Receiving a notification is stronger evidence that
             # the final session is live, so repair the UI/runtime flag here.
             with self._runtime_lock:
+                first_notification = not self._first_notification_logged
+                self._first_notification_logged = True
                 self._serial_open = True
+            if first_notification:
+                self._debug("收到首个 BLE notification，长度=%d 字节", len(data))
             self.feed_notification(bytes(data))
 
         # Ask the backend to pair as part of connect. The firmware initiates
         # security immediately on GAP connect, so calling pair() only after
         # connect creates a Windows/NimBLE pairing race.
+        self._debug("开始连接并自动配对，超时=20 秒，禁用 WinRT GATT 缓存")
         async with BleakClient(
             self.address,
             disconnected_callback=disconnected,
@@ -214,15 +251,29 @@ class BlePacketReader:
             if not client.is_connected:
                 raise RuntimeError(f"failed to connect to BLE device {self.address}")
 
+            service_uuids = ", ".join(str(service.uuid) for service in client.services)
+            self._debug("BLE 已连接并完成配对阶段；GATT 服务=%s", service_uuids or "<none>")
+            self._debug("等待绑定链路加密并订阅 TX notification")
             await _start_notify_after_bond(client, notification)
             with self._runtime_lock:
                 self._serial_open = True
+            self._debug("BLE 数据通道已就绪")
 
             while not self._stop.is_set() and client.is_connected:
                 await asyncio.sleep(0.1)
 
             if client.is_connected:
+                self._debug("停止 TX notification")
                 await client.stop_notify(BLE_UART_TX_UUID)
+
+    def _debug(self, message: str, *args: object) -> None:
+        rendered = message % args if args else message
+        LOGGER.debug(rendered)
+        if self.debug_callback is not None:
+            try:
+                self.debug_callback(rendered)
+            except Exception:
+                LOGGER.exception("BLE debug callback failed")
 
     def _dispatch(self, packet: ParsedPacket) -> None:
         payload = packet.payload

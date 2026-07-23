@@ -233,6 +233,7 @@
 - 实际上位机链路已从 `CollarC3-2E4A` 连续解析 849 个 V0 包（其中 415 个 ECG 包，最后样本索引 21099，无解析错误）。WinRT 在配对切换到 bonded GATT session 时会产生一次瞬时断开回调，即使通知随后持续；运行状态因此在收到真实 notification 时重新标记为已连接。
 - Windows WinRT 对该设备使用 `services` 过滤并禁用服务缓存时会返回“设备不识别此命令”；上位机改为禁用缓存但枚举完整 GATT 服务。随后在 COM21 实板上完成闭环：发现 `CollarC3-2E4A`、自动复用/建立绑定、进入连接状态、解析 11 个 V0 包（6 个 ECG 包、CRC 错误 0）、主动断开，且设备重新广播。首次短测出现的序号缺口来自设备在连接前持续采样，不是 CRC 损坏。此结果不替代 10 分钟连续流验收。
 - Windows 在新 Bond 建立后的首次重连还可能返回不完整的 GATT 缓存，表现为 TX characteristic 暂时不存在；Bleak 客户端现在在 WinRT 上禁用 cached services，并完整枚举 GATT 服务以兼容该设备。
+- 2026-07-23 后续 GUI 复现表明连接仍不稳定：WinRT 能完成 GATT 枚举，但 TX CCCD 持续返回 `Insufficient Authentication`；清除 Windows Bond 后重新配对仍可复现，期间只会短暂收到 3–5 个 notification，不能视为有效连续连接。上位机已增加界面 DEBUG 面板和按次落盘的 Bleak/WinRT 日志，下一步需结合 COM21 NimBLE 安全事件日志修正设备端认证/CCCD 时序。
 
 ## References
 

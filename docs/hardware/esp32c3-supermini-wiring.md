@@ -85,6 +85,8 @@ esptool.py --chip esp32c3 -p COM21 flash_id
 
 Just Works 配对仍会加密 GATT 链路并保存 Bond，但首次配对不具备数字比较/口令带来的 MITM 身份校验。后续可在 OLED 可用后改成显示动态配对码的认证模式。
 
+上位机实时页提供“BLE DEBUG 日志”窗口，会显示扫描、连接、自动配对、GATT 服务发现、notification 订阅、断开和异常阶段。每次启动还会在 `data/logs/pc_debug_YYYYMMDD_HHMMSS.log` 写入完整 DEBUG 日志，其中包含 Bleak/WinRT 的底层信息；复现连接失败后应保留该文件。日志不记录 ECG 原始采样数据。
+
 ## 2026-07-23 烧录记录
 
 - 端口：`COM21`

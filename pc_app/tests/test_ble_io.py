@@ -50,6 +50,15 @@ def test_ble_notify_waits_for_bond_encryption() -> None:
     assert client.calls == 2
 
 
+def test_ble_reader_forwards_debug_messages() -> None:
+    messages: list[str] = []
+    reader = BlePacketReader(address="AA:BB:CC:DD:EE:FF", debug_callback=messages.append)
+
+    reader._debug("连接阶段 %d", 2)
+
+    assert messages == ["连接阶段 2"]
+
+
 def test_ble_reader_reassembles_default_mtu_notifications() -> None:
     packet = load_ecg_packet()
     stores = PcDataStores.create()

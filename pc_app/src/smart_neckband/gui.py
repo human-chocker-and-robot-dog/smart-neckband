@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime
+import logging
 from pathlib import Path
 from threading import Event, Lock, Thread
 import time
@@ -33,6 +34,29 @@ from .protocol import ECG_SAMPLE_RATE_HZ, FLAG_LO_MINUS, FLAG_LO_PLUS
 from .serial_io import PcDataStores, SerialPacketReader, list_serial_ports
 from .sessions import ExperimentSessionRecorder, PLACEMENT_PRESETS, WIRE_MAPS, RecordingState
 from .status import ConnectionSnapshot, ConnectionState, connection_state_text
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+def configure_debug_logging() -> Path:
+    log_dir = Path("data") / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"pc_debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    formatter = logging.Formatter(
+        "%(asctime)s.%(msecs)03d %(levelname)s %(threadName)s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler.setFormatter(formatter)
+    logging.basicConfig(level=logging.INFO, handlers=(console_handler, file_handler), force=True)
+    logging.getLogger("smart_neckband").setLevel(logging.DEBUG)
+    logging.getLogger("bleak").setLevel(logging.DEBUG)
+    logging.getLogger("bleak.backends.winrt.scanner").setLevel(logging.INFO)
+    LOGGER.debug("PC DEBUG logging initialized: %s", log_path.resolve())
+    return log_path
 
 
 class EcgAnalysisWorker:
@@ -141,7 +165,7 @@ def _body_mesh_data(gl: object) -> object:
 
 
 class MainWindow:
-    def __init__(self) -> None:
+    def __init__(self, *, debug_log_path: Path | None = None) -> None:
         from PySide6 import QtCore, QtWidgets
         import pyqtgraph as pg
 
@@ -160,6 +184,7 @@ class MainWindow:
         self.record_prebuffer_lock = Lock()
         self.gui_callbacks: deque[object] = deque()
         self.gui_callbacks_lock = Lock()
+        self.debug_log_path = debug_log_path
         self.raw_marker_items: list[object] = []
         self.clean_marker_items: list[object] = []
         self.history_records: tuple[object, ...] = ()
@@ -221,6 +246,17 @@ class MainWindow:
         ):
             connection_layout.addWidget(widget, index // 3, index % 3)
         layout.addWidget(connection_group)
+
+        debug_group = QtWidgets.QGroupBox("BLE DEBUG 日志")
+        debug_layout = QtWidgets.QVBoxLayout(debug_group)
+        self.debug_log_output = QtWidgets.QPlainTextEdit()
+        self.debug_log_output.setReadOnly(True)
+        self.debug_log_output.setMaximumBlockCount(500)
+        self.debug_log_output.setMinimumHeight(110)
+        debug_layout.addWidget(self.debug_log_output)
+        self.clear_debug_button = QtWidgets.QPushButton("清空显示")
+        debug_layout.addWidget(self.clear_debug_button)
+        layout.addWidget(debug_group)
 
         record_group = QtWidgets.QGroupBox("实验记录")
         record_layout = QtWidgets.QGridLayout(record_group)
@@ -314,6 +350,7 @@ class MainWindow:
         self.transport_combo.currentIndexChanged.connect(self.refresh_ports)
         self.connect_button.clicked.connect(self.connect_device)
         self.disconnect_button.clicked.connect(self.disconnect_serial)
+        self.clear_debug_button.clicked.connect(self.debug_log_output.clear)
         self.calibrate_button.clicked.connect(self.attitude_worker.calibrate_flat)
         self.start_record_button.clicked.connect(self.start_recording)
         self.stop_record_button.clicked.connect(self.stop_recording)
@@ -347,6 +384,8 @@ class MainWindow:
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.update_view)
         self.timer.start(100)
+        if self.debug_log_path is not None:
+            self._append_debug_log(f"完整日志文件：{self.debug_log_path.resolve()}")
         self.refresh_ports()
         self.refresh_history_sessions()
 
@@ -574,15 +613,22 @@ class MainWindow:
     def refresh_ports(self) -> None:
         self.port_combo.clear()
         if self.transport_combo.currentData() == "ble":
+            self._append_debug_log("开始扫描 BLE 设备……")
             try:
                 devices = list_ble_devices()
-            except RuntimeError as exc:
+            except Exception as exc:
+                LOGGER.exception("BLE scan failed")
+                self._append_debug_log(f"BLE 扫描失败：{type(exc).__name__}: {exc}")
                 self.port_combo.addItem(str(exc), "")
                 return
             for device in devices:
                 self.port_combo.addItem(f"{device.name} - {device.address}", device.address)
             if not devices:
                 self.port_combo.addItem("未发现 BLE 设备", "")
+                self._append_debug_log("扫描完成：未发现 CollarC3 设备")
+            else:
+                summary = ", ".join(f"{device.name} ({device.address})" for device in devices)
+                self._append_debug_log(f"扫描完成：{summary}")
             return
 
         try:
@@ -598,15 +644,18 @@ class MainWindow:
     def connect_device(self) -> None:
         endpoint = self.port_combo.currentData()
         if not endpoint:
+            self._append_debug_log("连接已取消：没有选择有效设备")
             return
         self.disconnect_serial()
         raw_path = Path("data") / f"smartcollar_v0_{time.strftime('%Y%m%d_%H%M%S')}.bin"
         if self.transport_combo.currentData() == "ble":
+            self._append_debug_log(f"点击连接：BLE {endpoint}")
             self.reader = BlePacketReader(
                 address=endpoint,
                 stores=self.stores,
                 raw_log_path=raw_path,
                 raw_chunk_callback=self._record_raw_chunk,
+                debug_callback=self._queue_ble_debug,
             )
         else:
             self.reader = SerialPacketReader(
@@ -622,6 +671,7 @@ class MainWindow:
         if self.session_recorder is not None:
             self._finish_recording(status="interrupted", reason="连接断开")
         if self.reader is not None:
+            self._append_debug_log(f"断开设备：{self.reader.port}")
             self.reader.stop()
             self.reader = None
         self.connection_label.setText("未连接")
@@ -637,6 +687,13 @@ class MainWindow:
     def _post_gui(self, callback: object) -> None:
         with self.gui_callbacks_lock:
             self.gui_callbacks.append(callback)
+
+    def _queue_ble_debug(self, message: str) -> None:
+        self._post_gui(lambda message=message: self._append_debug_log(message))
+
+    def _append_debug_log(self, message: str) -> None:
+        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        self.debug_log_output.appendPlainText(f"[{timestamp}] {message}")
 
     def _drain_gui_callbacks(self) -> None:
         callbacks: list[object] = []
@@ -1550,8 +1607,9 @@ def main() -> int:
     except ImportError as exc:
         raise SystemExit("Install the gui optional dependencies: bleak pyserial PySide6 pyqtgraph neurokit2 numpy") from exc
 
+    debug_log_path = configure_debug_logging()
     app = QtWidgets.QApplication([])
-    window = MainWindow()
+    window = MainWindow(debug_log_path=debug_log_path)
     app.aboutToQuit.connect(window.close)
     window.show()
     return app.exec()
