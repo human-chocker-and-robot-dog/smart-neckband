@@ -235,6 +235,7 @@
 - Windows 在新 Bond 建立后的首次重连还可能返回不完整的 GATT 缓存，表现为 TX characteristic 暂时不存在；Bleak 客户端现在在 WinRT 上禁用 cached services，并完整枚举 GATT 服务以兼容该设备。
 - 2026-07-23 后续 GUI 复现表明连接仍不稳定：WinRT 能完成 GATT 枚举，但 TX CCCD 持续返回 `Insufficient Authentication`；清除 Windows Bond 后重新配对仍可复现，期间只会短暂收到 3–5 个 notification，不能视为有效连续连接。上位机已增加界面 DEBUG 面板和按次落盘的 Bleak/WinRT 日志，下一步需结合 COM21 NimBLE 安全事件日志修正设备端认证/CCCD 时序。
 - GUI 日志随后暴露出另一条独立问题：直接由系统 Python 启动时，该环境有 PySide6 但没有 Bleak，扫描会在导入阶段失败。项目新增 `pc-gui` 入口，固定使用已安装完整依赖的 `pc_app\.venv`，并在界面和日志首行显示实际 Python 路径。
+- Qt GUI 主线程属于 Windows STA；原同步 BLE 扫描用 `asyncio.run()` 阻塞了 GUI 消息泵，Bleak 因而报告 `Thread is configured for Windows GUI but callbacks are not working`。扫描现已移到独立后台线程，实测可从 GUI 路径发现 `CollarC3-2E4A`。继续连接后确认根因在设备权限配置：上游 `ble_uart` 的 encrypted 模式同时要求 TX CCCD `ENC + AUTHEN`，而当前 Just Works 配置只能达到 `encrypted=1 authenticated=0 bonded=1`，所以 Windows 虽显示已配对，CCCD 仍必然返回 `Insufficient Authentication`；固件权限修复与重新烧录尚未执行。
 
 ## References
 

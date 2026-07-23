@@ -10,7 +10,7 @@ import time
 
 from .analysis import EcgAnalysisResult, analyze_recent_ecg, get_ecg_analysis_info
 from .attitude import ComplementaryAttitudeFilter, Orientation
-from .ble_io import BlePacketReader, list_ble_devices
+from .ble_io import BleDeviceInfo, BlePacketReader, list_ble_devices
 from .buffers import ImuSample
 from .history import (
     ComparisonTrack,
@@ -186,6 +186,8 @@ class MainWindow:
         self.record_prebuffer_lock = Lock()
         self.gui_callbacks: deque[object] = deque()
         self.gui_callbacks_lock = Lock()
+        self._ble_scan_generation = 0
+        self._ble_scan_thread: Thread | None = None
         self.debug_log_path = debug_log_path
         self.raw_marker_items: list[object] = []
         self.clean_marker_items: list[object] = []
@@ -614,26 +616,23 @@ class MainWindow:
         self.attitude_worker.stop()
 
     def refresh_ports(self) -> None:
+        self._ble_scan_generation += 1
+        scan_generation = self._ble_scan_generation
         self.port_combo.clear()
         if self.transport_combo.currentData() == "ble":
             self._append_debug_log("开始扫描 BLE 设备……")
-            try:
-                devices = list_ble_devices()
-            except Exception as exc:
-                LOGGER.exception("BLE scan failed")
-                self._append_debug_log(f"BLE 扫描失败：{type(exc).__name__}: {exc}")
-                self.port_combo.addItem(str(exc), "")
-                return
-            for device in devices:
-                self.port_combo.addItem(f"{device.name} - {device.address}", device.address)
-            if not devices:
-                self.port_combo.addItem("未发现 BLE 设备", "")
-                self._append_debug_log("扫描完成：未发现 CollarC3 设备")
-            else:
-                summary = ", ".join(f"{device.name} ({device.address})" for device in devices)
-                self._append_debug_log(f"扫描完成：{summary}")
+            self.port_combo.addItem("正在扫描 BLE 设备……", "")
+            self.refresh_button.setEnabled(False)
+            self._ble_scan_thread = Thread(
+                target=self._scan_ble_devices,
+                args=(scan_generation,),
+                name="BleDeviceScanner",
+                daemon=True,
+            )
+            self._ble_scan_thread.start()
             return
 
+        self.refresh_button.setEnabled(True)
         try:
             ports = list_serial_ports()
         except RuntimeError as exc:
@@ -643,6 +642,50 @@ class MainWindow:
         for port in ports:
             suffix = " BT OUT" if port.is_bluetooth_outgoing else " BT" if port.is_bluetooth_candidate else ""
             self.port_combo.addItem(f"{port.device} - {port.description}{suffix}", port.device)
+
+    def _scan_ble_devices(self, scan_generation: int) -> None:
+        try:
+            devices = tuple(list_ble_devices())
+            error_text = None
+        except Exception as exc:
+            LOGGER.exception("BLE scan failed")
+            devices = ()
+            error_text = f"{type(exc).__name__}: {exc}"
+        self._post_gui(
+            lambda: self._finish_ble_scan(
+                scan_generation=scan_generation,
+                devices=devices,
+                error_text=error_text,
+            )
+        )
+
+    def _finish_ble_scan(
+        self,
+        *,
+        scan_generation: int,
+        devices: tuple[BleDeviceInfo, ...],
+        error_text: str | None,
+    ) -> None:
+        if scan_generation != self._ble_scan_generation:
+            return
+        self._ble_scan_thread = None
+        self.refresh_button.setEnabled(True)
+        if self.transport_combo.currentData() != "ble":
+            return
+
+        self.port_combo.clear()
+        if error_text is not None:
+            self._append_debug_log(f"BLE 扫描失败：{error_text}")
+            self.port_combo.addItem(error_text, "")
+            return
+        for device in devices:
+            self.port_combo.addItem(f"{device.name} - {device.address}", device.address)
+        if not devices:
+            self.port_combo.addItem("未发现 BLE 设备", "")
+            self._append_debug_log("扫描完成：未发现 CollarC3 设备")
+        else:
+            summary = ", ".join(f"{device.name} ({device.address})" for device in devices)
+            self._append_debug_log(f"扫描完成：{summary}")
 
     def connect_device(self) -> None:
         endpoint = self.port_combo.currentData()
