@@ -172,7 +172,11 @@ static void packet_task(void *arg)
             next_status_us = now_us + 1000000LL;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(2));
+        /* The default C3 tick is 10 ms. A 2 ms conversion becomes zero and
+         * turns this priority-7 loop into a busy yield that starves IDLE and
+         * triggers the single-core task watchdog. One tick is still well
+         * below the 40 ms ECG/IMU packet period. */
+        vTaskDelay(pdMS_TO_TICKS(10U));
     }
 }
 

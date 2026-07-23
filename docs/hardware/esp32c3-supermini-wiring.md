@@ -81,7 +81,7 @@ esptool.py --chip esp32c3 -p COM21 flash_id
 .\tools\project.ps1 size -Target esp32c3
 ```
 
-先运行 `.\tools\project.ps1 pc-setup` 安装项目以及包含 Bleak 的 GUI/串口依赖。PC GUI 中选择 `BLE`，扫描 `CollarC3-XXXX` 后连接；首次连接由上位机发起 LE Secure Connections Just Works 配对并保存绑定，不需要六位配对码，以后可复用绑定自动连接。不要优先在 Windows“添加设备”页面手工配对；如果那里残留旧的 `ESP32` 记录，应先在 Windows 中移除旧设备，再由上位机连接。经典 ESP32 仍可选择串口，通过 Windows 的 SPP COM 口工作。仓库目前仍默认 `esp32`；只有完成实板、传感器和 BLE 连续流验收后才切换默认目标。
+先运行 `.\tools\project.ps1 pc-setup` 安装项目以及包含 Bleak 的 GUI/串口依赖。PC GUI 中选择 `BLE`，扫描 `CollarC3-XXXX` 后连接；上位机把首次配对作为连接过程的一部分完成，使用 LE Secure Connections Just Works 并保存绑定，不需要六位配对码，以后可复用绑定自动连接。不要优先在 Windows“添加设备”页面手工配对；如果那里残留旧的 `ESP32` 记录，应先在 Windows 中移除旧设备，再由上位机连接。经典 ESP32 仍可选择串口，通过 Windows 的 SPP COM 口工作。仓库目前仍默认 `esp32`；只有完成实板、传感器和 BLE 连续流验收后才切换默认目标。
 
 Just Works 配对仍会加密 GATT 链路并保存 Bond，但首次配对不具备数字比较/口令带来的 MITM 身份校验。后续可在 OLED 可用后改成显示动态配对码的认证模式。
 
@@ -93,10 +93,10 @@ Just Works 配对仍会加密 GATT 链路并保存 Bond，但首次配对不具�
 - 能力：Wi-Fi、Bluetooth 5 LE、单核 160 MHz
 - Flash：内置 XMC 4 MB
 - USB：USB Serial/JTAG
-- 应用镜像：541,312 字节，写入地址 `0x10000`
+- 应用镜像：541,392 字节，写入地址 `0x10000`
 - bootloader、分区表和应用镜像：写入后哈希校验全部通过
 - 复位：烧录结束后通过 RTS 硬复位
-- 串口 monitor：未运行，因此尚未确认应用启动日志、I2C 地址、ADC、LO 状态或 BLE 广播
+- 串口 monitor：已做有界运行日志检查，确认 BLE 加密绑定参数为 `encrypted=1 authenticated=0 bonded=1`，修正 packet task 在 100 Hz tick 下的空转后未再观察到任务看门狗错误；I2C 地址、ADC 和 LO 状态仍未做外设台架核验
 
 ## 当前验证状态
 
@@ -106,6 +106,7 @@ Just Works 配对仍会加密 GATT 链路并保存 Bond，但首次配对不具�
 | 经典 ESP32 回归编译与尺寸检查 | 已通过 |
 | PC BLE 字节流/分段解析测试 | 已通过自动化测试 |
 | 芯片型号、Flash、USB | 已由 COM21 烧录握手确认 |
+| Windows 自动配对与短时 BLE 闭环 | 已通过：`CollarC3-2E4A` 可连接、收包、断开并恢复广播；CRC 错误 0 |
 | 克隆板丝印和板载 GPIO 负载 | 未核验 |
 | GPIO0/3/6/7/10 实板可用性 | 未核验 |
 | ADC、LO、I2C、500 Hz 台架运行 | 未核验 |

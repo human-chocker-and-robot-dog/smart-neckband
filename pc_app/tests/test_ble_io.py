@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from smart_neckband.ble_io import (
     BLE_UART_TX_UUID,
     BlePacketReader,
     _matches_ble_uart_device,
+    _start_notify_after_bond,
 )
 from smart_neckband.serial_io import PcDataStores
 
@@ -30,6 +32,22 @@ def test_ble_scan_matches_service_uuid_or_project_name() -> None:
     assert _matches_ble_uart_device("Unknown", [BLE_UART_SERVICE_UUID.upper()])
     assert _matches_ble_uart_device("CollarC3-12AB", [])
     assert not _matches_ble_uart_device("Other sensor", [])
+
+
+def test_ble_notify_waits_for_bond_encryption() -> None:
+    class FakeClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def start_notify(self, uuid: str, callback: object) -> None:
+            del uuid, callback
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("GATT Protocol Error: Insufficient Authentication")
+
+    client = FakeClient()
+    asyncio.run(_start_notify_after_bond(client, lambda *_: None, attempts=2, delay_s=0.0))
+    assert client.calls == 2
 
 
 def test_ble_reader_reassembles_default_mtu_notifications() -> None:

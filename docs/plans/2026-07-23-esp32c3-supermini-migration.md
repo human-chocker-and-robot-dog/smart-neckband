@@ -11,7 +11,7 @@
 - 保留经典 ESP32 的可构建配置，便于对照、回归和回退；
 - 形成可核验的旧板/新板接线表，而不是仅凭“ESP32-C3 SuperMini”商品名假定克隆板完全一致。
 
-本计划是实施时持续更新的 ExecPlan。软件迁移、自动化验证和 COM21 烧录已经完成；外设引脚台架与 BLE 连续流验证仍等待后续明确许可。
+本计划是实施时持续更新的 ExecPlan。软件迁移、自动化验证、COM21 烧录和 BLE 自动配对/短时数据闭环已经完成；外设引脚台架与 10 分钟连续流验收尚未完成。
 
 ## Initial state
 
@@ -229,6 +229,10 @@
 - 2026-07-23 软件验证通过：ESP32-C3 镜像 `0x84280` 字节，2 MiB 应用分区剩余 74%；经典 ESP32 镜像 `0xa0a50` 字节，剩余 69%；PC 测试 45 项全部通过。
 - 2026-07-23 COM21 烧录握手确认实板为 ESP32-C3 AZ QFN32 revision v1.1、单核 160 MHz、内置 XMC 4 MB Flash、USB Serial/JTAG；bootloader、分区表和 541,312 字节应用镜像均写入并通过哈希校验。未运行 monitor，不能据此推断应用、I2C、ADC、LO 或 BLE 已正常运行。
 - 首次 Windows 连接暴露了 DisplayOnly MITM 配对的可用性问题：动态六位码只打印到串口，用户无法从上位机完成配对。当前 bring-up 策略改为 Secure Connections Just Works + bonding，由 Bleak 发起首次配对；链路保持加密，但首次配对没有 MITM 身份校验，正式版计划在 OLED 上显示动态配对码后恢复认证配对。
+- COM21 运行日志进一步确认 Just Works 达到 `encrypted=1 authenticated=0 bonded=1`。Windows 在 bonded-link 加密完成前可能先返回 GATT 服务，上位机因此只对 `Insufficient Authentication` 的 CCCD 写入做有界重试。日志还发现 100 Hz tick 下原 `pdMS_TO_TICKS(2)` 为零，单核 C3 的 packet task 会饿死 IDLE；改为 10 ms 后仍满足 40 ms 包周期。
+- 实际上位机链路已从 `CollarC3-2E4A` 连续解析 849 个 V0 包（其中 415 个 ECG 包，最后样本索引 21099，无解析错误）。WinRT 在配对切换到 bonded GATT session 时会产生一次瞬时断开回调，即使通知随后持续；运行状态因此在收到真实 notification 时重新标记为已连接。
+- Windows WinRT 对该设备使用 `services` 过滤并禁用服务缓存时会返回“设备不识别此命令”；上位机改为禁用缓存但枚举完整 GATT 服务。随后在 COM21 实板上完成闭环：发现 `CollarC3-2E4A`、自动复用/建立绑定、进入连接状态、解析 11 个 V0 包（6 个 ECG 包、CRC 错误 0）、主动断开，且设备重新广播。首次短测出现的序号缺口来自设备在连接前持续采样，不是 CRC 损坏。此结果不替代 10 分钟连续流验收。
+- Windows 在新 Bond 建立后的首次重连还可能返回不完整的 GATT 缓存，表现为 TX characteristic 暂时不存在；Bleak 客户端现在在 WinRT 上禁用 cached services，并完整枚举 GATT 服务以兼容该设备。
 
 ## References
 
@@ -243,4 +247,4 @@
 
 ## Result
 
-软件迁移已实现：双 target/profile、集中式板型引脚、通用 transport、ESP32-C3 NimBLE GATT、PC Bleak 接收、GUI 选择和协议/接线文档均已落地，Gate B 已通过。当前镜像已成功烧录到 COM21 上的 ESP32-C3 SuperMini，并确认芯片、4 MB Flash 与原生 USB；未打开 monitor，外设 GPIO、ADC、LO、I2C、500 Hz 采样和 BLE 仍未做运行验证。Gate A 仍缺克隆板/引脚证据，Gate C、D、E 也未通过，候选引脚表必须经台架核验后才能成为最终接线依据。
+软件迁移已实现：双 target/profile、集中式板型引脚、通用 transport、ESP32-C3 NimBLE GATT、PC Bleak 接收、GUI 选择和协议/接线文档均已落地，Gate B 已通过。当前镜像已成功烧录到 COM21 上的 ESP32-C3 SuperMini，并确认芯片、4 MB Flash 与原生 USB；有界串口日志和上位机短时闭环已验证 BLE 加密绑定、V0 数据接收、主动断开及恢复广播。外设 GPIO、ADC、LO、I2C 和 10 分钟连续流仍未验收。Gate A 仍缺克隆板/引脚证据，Gate C、D、E 也未通过，候选引脚表必须经台架核验后才能成为最终接线依据。

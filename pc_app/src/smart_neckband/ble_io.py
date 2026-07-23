@@ -16,6 +16,8 @@ from .serial_io import PcDataStores, SerialRuntimeStatus
 BLE_UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 BLE_UART_RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
 BLE_UART_TX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
+BLE_AUTH_SETTLE_ATTEMPTS = 20
+BLE_AUTH_SETTLE_DELAY_S = 0.25
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +51,26 @@ def list_ble_devices(timeout: float = 2.0) -> list[BleDeviceInfo]:
 def _matches_ble_uart_device(name: str, service_uuids: list[str]) -> bool:
     normalized_services = {value.lower() for value in service_uuids}
     return BLE_UART_SERVICE_UUID in normalized_services or name.lower().startswith("collarc3-")
+
+
+async def _start_notify_after_bond(
+    client: object,
+    callback: Callable[[object, bytearray], None],
+    *,
+    attempts: int = BLE_AUTH_SETTLE_ATTEMPTS,
+    delay_s: float = BLE_AUTH_SETTLE_DELAY_S,
+) -> None:
+    """Wait for bonded-link encryption before writing the TX CCCD."""
+
+    for attempt in range(attempts):
+        try:
+            await client.start_notify(BLE_UART_TX_UUID, callback)  # type: ignore[attr-defined]
+            return
+        except Exception as exc:
+            authentication_pending = "Insufficient Authentication" in str(exc)
+            if not authentication_pending or attempt + 1 >= attempts:
+                raise
+            await asyncio.sleep(delay_s)
 
 
 class BlePacketReader:
@@ -171,22 +193,28 @@ class BlePacketReader:
                 self._serial_open = False
 
         def notification(_: object, data: bytearray) -> None:
+            # WinRT may emit a transient disconnected callback while the
+            # pair=True connection is being replaced by its bonded GATT
+            # session. Receiving a notification is stronger evidence that
+            # the final session is live, so repair the UI/runtime flag here.
+            with self._runtime_lock:
+                self._serial_open = True
             self.feed_notification(bytes(data))
 
-        async with BleakClient(self.address, disconnected_callback=disconnected, timeout=20.0) as client:
+        # Ask the backend to pair as part of connect. The firmware initiates
+        # security immediately on GAP connect, so calling pair() only after
+        # connect creates a Windows/NimBLE pairing race.
+        async with BleakClient(
+            self.address,
+            disconnected_callback=disconnected,
+            timeout=20.0,
+            pair=True,
+            winrt={"use_cached_services": False},
+        ) as client:
             if not client.is_connected:
                 raise RuntimeError(f"failed to connect to BLE device {self.address}")
 
-            # The firmware uses LE Secure Connections Just Works + bonding.
-            # The first connection completes pairing without a numeric passkey;
-            # a previously bonded device returns quickly.
-            pair = getattr(client, "pair", None)
-            if pair is not None:
-                paired = await pair()
-                if paired is False:
-                    raise RuntimeError(f"BLE pairing was rejected for {self.address}")
-
-            await client.start_notify(BLE_UART_TX_UUID, notification)
+            await _start_notify_after_bond(client, notification)
             with self._runtime_lock:
                 self._serial_open = True
 
