@@ -74,6 +74,15 @@ esptool.py --chip esp32c3 -p COM21 flash_id
 
 ## 构建与 PC 连接
 
+首次安装和日常启动分别使用以下入口：
+
+```powershell
+.\tools\project.ps1 pc-setup
+.\tools\project.ps1 pc-gui
+```
+
+`pc-gui` 固定使用 `pc_app\.venv`，并在启动前检查 Bleak 与 PySide6。不要直接用系统 Python 启动 GUI，否则可能出现“bleak is required”但串口页面仍能打开的混合环境。
+
 ```powershell
 . 'C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1'
 .\tools\project.ps1 doctor -Target esp32c3

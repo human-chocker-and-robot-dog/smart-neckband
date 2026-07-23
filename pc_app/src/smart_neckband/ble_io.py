@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 import logging
 from pathlib import Path
+import sys
 from threading import Event, Lock, Thread
 import time
 from typing import Callable
@@ -35,7 +36,11 @@ def list_ble_devices(timeout: float = 2.0) -> list[BleDeviceInfo]:
     try:
         from bleak import BleakScanner
     except ImportError as exc:  # pragma: no cover - depends on optional Bleak
-        raise RuntimeError("bleak is required for ESP32-C3 BLE discovery") from exc
+        raise RuntimeError(
+            "Bleak 未安装在当前 Python 环境；"
+            f"当前解释器：{sys.executable}。请运行 .\\tools\\project.ps1 pc-setup，"
+            "然后使用 .\\tools\\project.ps1 pc-gui 启动上位机"
+        ) from exc
 
     async def discover() -> list[BleDeviceInfo]:
         discovered = await BleakScanner.discover(timeout=timeout, return_adv=True)
@@ -214,7 +219,11 @@ class BlePacketReader:
         try:
             from bleak import BleakClient
         except ImportError as exc:  # pragma: no cover - optional dependency
-            raise RuntimeError("bleak is required for ESP32-C3 BLE reading") from exc
+            raise RuntimeError(
+                "Bleak 未安装在当前 Python 环境；"
+                f"当前解释器：{sys.executable}。请运行 .\\tools\\project.ps1 pc-setup，"
+                "然后使用 .\\tools\\project.ps1 pc-gui 启动上位机"
+            ) from exc
 
         if self.raw_log_path is not None:
             self._recorder = RawBinaryRecorder(self.raw_log_path)

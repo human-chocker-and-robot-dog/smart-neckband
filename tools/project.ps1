@@ -14,6 +14,7 @@ param(
         "erase-flash",
         "fullclean",
         "pc-setup",
+        "pc-gui",
         "pc-test"
     )]
     [string]$Action = "build",
@@ -274,6 +275,26 @@ switch ($Action) {
             Invoke-Native -FilePath $venvPython -Arguments @(
                 "-m", "pip", "install", "-e", ".[dev,gui,serial]"
             ) -Description "PC application and BLE GUI dependency installation"
+        }
+        finally {
+            Pop-Location
+        }
+    }
+    "pc-gui" {
+        $venvPython = Join-Path $PcDir ".venv\Scripts\python.exe"
+        if (-not (Test-Path -LiteralPath $venvPython)) {
+            throw "PC virtual environment is missing. Run '.\tools\project.ps1 pc-setup' first."
+        }
+        foreach ($moduleName in @("bleak", "PySide6")) {
+            if (-not (Test-PythonModule -FilePath $venvPython -ModuleName $moduleName)) {
+                throw "PC module '$moduleName' is missing from .venv. Run '.\tools\project.ps1 pc-setup' first."
+            }
+        }
+        Push-Location $PcDir
+        try {
+            Invoke-Native -FilePath $venvPython -Arguments @(
+                "-m", "smart_neckband"
+            ) -Description "PC GUI"
         }
         finally {
             Pop-Location

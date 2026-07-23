@@ -4,6 +4,7 @@ from collections import deque
 from datetime import datetime
 import logging
 from pathlib import Path
+import sys
 from threading import Event, Lock, Thread
 import time
 
@@ -55,6 +56,7 @@ def configure_debug_logging() -> Path:
     logging.getLogger("smart_neckband").setLevel(logging.DEBUG)
     logging.getLogger("bleak").setLevel(logging.DEBUG)
     logging.getLogger("bleak.backends.winrt.scanner").setLevel(logging.INFO)
+    LOGGER.debug("Python runtime: executable=%s version=%s", sys.executable, sys.version.replace("\n", " "))
     LOGGER.debug("PC DEBUG logging initialized: %s", log_path.resolve())
     return log_path
 
@@ -385,6 +387,7 @@ class MainWindow:
         self.timer.timeout.connect(self.update_view)
         self.timer.start(100)
         if self.debug_log_path is not None:
+            self._append_debug_log(f"Python：{sys.executable}")
             self._append_debug_log(f"完整日志文件：{self.debug_log_path.resolve()}")
         self.refresh_ports()
         self.refresh_history_sessions()
