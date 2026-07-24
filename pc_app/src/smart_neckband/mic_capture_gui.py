@@ -17,7 +17,13 @@ from .mic_capture_protocol import (
     WakeEventFrame,
 )
 from .funasr_vad import FunAsrVadSettings, FunAsrVadThread, VadEvent
-from .volc_asr_client import VolcAsrClientThread, VolcAsrEvent, VolcAsrSettings
+from .volc_asr_client import (
+    VolcAsrClientThread,
+    VolcAsrEvent,
+    VolcAsrSettings,
+    load_volc_asr_settings,
+    save_volc_asr_settings,
+)
 
 
 def main() -> int:
@@ -93,7 +99,16 @@ def main() -> int:
             connection_row.addWidget(self.state_label)
             layout.addLayout(connection_row)
 
-            settings = VolcAsrSettings.from_environment()
+            self.asr_settings_path = Path.cwd() / "data" / "volc_asr_settings.json"
+            try:
+                settings = load_volc_asr_settings(self.asr_settings_path)
+            except Exception as exc:
+                settings = VolcAsrSettings.from_environment()
+                QMessageBox.warning(
+                    self,
+                    "ASR 配置读取失败",
+                    f"无法读取本地 ASR 配置，将使用环境变量/default。\n\n{exc}",
+                )
 
             tabs = QTabWidget()
             asr_tab = QWidget()
@@ -106,9 +121,8 @@ def main() -> int:
             self.asr_auth_mode = QComboBox()
             self.asr_auth_mode.addItem("API Key", "api_key")
             self.asr_auth_mode.addItem("App Key + Access Key", "legacy")
-            self.asr_auth_mode.setCurrentIndex(
-                1 if settings.auth_mode == "legacy" else 0
-            )
+            mode_index = self.asr_auth_mode.findData(settings.auth_mode)
+            self.asr_auth_mode.setCurrentIndex(mode_index if mode_index >= 0 else 0)
             self.asr_api_key = QLineEdit(settings.api_key)
             self.asr_api_key.setEchoMode(QLineEdit.EchoMode.Password)
             self.asr_app_key = QLineEdit(settings.app_key)
@@ -124,6 +138,8 @@ def main() -> int:
             asr_form.addRow("Access Key", self.asr_access_key)
             asr_form.addRow("UID", self.asr_uid)
             asr_form.addRow("模型", self.asr_model)
+            self.save_asr_settings_button = QPushButton("保存 ASR 配置")
+            asr_form.addRow("本地配置", self.save_asr_settings_button)
             asr_layout.addWidget(asr_group)
 
             vad_group = QGroupBox("自动断句")
@@ -213,6 +229,7 @@ def main() -> int:
             self.wave_test_button.clicked.connect(self.start_wave_test)
             self.stop_button.clicked.connect(self.stop_capture)
             self.browse_button.clicked.connect(self.choose_path)
+            self.save_asr_settings_button.clicked.connect(self.save_asr_settings)
             self.timer = QTimer(self)
             self.timer.timeout.connect(self.refresh_plot)
             self.timer.start(100)
@@ -412,6 +429,7 @@ def main() -> int:
                 self.asr_access_key,
                 self.asr_uid,
                 self.asr_model,
+                self.save_asr_settings_button,
                 self.vad_enabled,
             ):
                 widget.setEnabled(enabled)
@@ -426,6 +444,20 @@ def main() -> int:
                 resource_id=self.asr_resource_id.text().strip(),
                 uid=self.asr_uid.text().strip() or "smart-neckband-pc",
                 model_name=self.asr_model.text().strip() or "bigmodel",
+            )
+
+        def save_asr_settings(self) -> None:
+            try:
+                settings = self.asr_settings()
+                settings.validate()
+                save_volc_asr_settings(self.asr_settings_path, settings)
+            except Exception as exc:
+                QMessageBox.warning(self, "ASR 配置保存失败", str(exc))
+                return
+            QMessageBox.information(
+                self,
+                "ASR 配置已保存",
+                f"已保存到：{self.asr_settings_path}",
             )
 
         def start_asr_session(self) -> None:

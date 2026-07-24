@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import os
+from pathlib import Path
 from queue import Empty, Queue
 import struct
 from threading import Event, Thread
@@ -67,6 +68,53 @@ class VolcAsrSettings:
                 raise ValueError("App Key 和 Access Key 不能为空")
         else:
             raise ValueError(f"未知鉴权模式：{self.auth_mode}")
+
+    def to_json_dict(self) -> dict[str, object]:
+        return {
+            "endpoint": self.endpoint,
+            "auth_mode": self.auth_mode,
+            "api_key": self.api_key,
+            "app_key": self.app_key,
+            "access_key": self.access_key,
+            "resource_id": self.resource_id,
+            "uid": self.uid,
+            "model_name": self.model_name,
+        }
+
+    @classmethod
+    def from_json_dict(cls, data: object) -> "VolcAsrSettings":
+        if not isinstance(data, dict):
+            raise ValueError("ASR 配置文件格式错误")
+        defaults = cls.from_environment()
+        return cls(
+            endpoint=str(data.get("endpoint", defaults.endpoint)).strip()
+            or defaults.endpoint,
+            auth_mode=str(data.get("auth_mode", defaults.auth_mode)).strip()
+            or defaults.auth_mode,
+            api_key=str(data.get("api_key", defaults.api_key)).strip(),
+            app_key=str(data.get("app_key", defaults.app_key)).strip(),
+            access_key=str(data.get("access_key", defaults.access_key)).strip(),
+            resource_id=str(data.get("resource_id", defaults.resource_id)).strip(),
+            uid=str(data.get("uid", defaults.uid)).strip() or defaults.uid,
+            model_name=str(data.get("model_name", defaults.model_name)).strip()
+            or defaults.model_name,
+        )
+
+
+def load_volc_asr_settings(path: Path) -> VolcAsrSettings:
+    if not path.exists():
+        return VolcAsrSettings.from_environment()
+    return VolcAsrSettings.from_json_dict(
+        json.loads(path.read_text(encoding="utf-8"))
+    )
+
+
+def save_volc_asr_settings(path: Path, settings: VolcAsrSettings) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(settings.to_json_dict(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 @dataclass(frozen=True, slots=True)

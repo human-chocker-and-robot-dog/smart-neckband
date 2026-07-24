@@ -12,7 +12,9 @@ from smart_neckband.volc_asr_client import (
     build_audio_frame,
     build_client_frame,
     build_full_request,
+    load_volc_asr_settings,
     parse_server_frame,
+    save_volc_asr_settings,
 )
 
 
@@ -166,3 +168,20 @@ def test_asr_settings_validate_required_credentials() -> None:
         VolcAsrSettings(api_key="key").validate()
     with pytest.raises(ValueError, match="API Key"):
         VolcAsrSettings(resource_id="resource").validate()
+
+
+def test_asr_settings_save_and_load_local_json(tmp_path: Path) -> None:
+    path = tmp_path / "volc_asr_settings.json"
+    settings = VolcAsrSettings(
+        endpoint="wss://example.test/asr",
+        auth_mode="legacy",
+        app_key="app",
+        access_key="access",
+        resource_id="resource",
+        uid="unit",
+        model_name="bigmodel",
+    )
+
+    save_volc_asr_settings(path, settings)
+
+    assert load_volc_asr_settings(path) == settings
