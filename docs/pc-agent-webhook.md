@@ -1,5 +1,7 @@
 # PC Agent Webhook
 
+For historical branch consolidation and the complete ordinary/voice/Health Webhook source map, read [the Webhook merge handoff](webhook/HANDOFF.md).
+
 The Windows PC application has a dedicated **Webhook** tab that acts as both:
 
 1. an input client for `POST /v1/instructions`; and
