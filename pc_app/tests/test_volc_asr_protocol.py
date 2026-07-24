@@ -236,3 +236,49 @@ def test_asr_finish_drops_stale_audio_until_final_marker_fits() -> None:
     assert queued[-1] is None
     assert len(queued) == 8
     assert queued[0] == (1,)
+
+
+def test_asr_drain_sends_backlog_without_recv_pacing() -> None:
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.sent: list[bytes] = []
+
+        def send_binary(self, frame: bytes) -> None:
+            self.sent.append(frame)
+
+    fake = FakeWebSocket()
+    asr = VolcAsrClientThread(
+        VolcAsrSettings(
+            api_key="key",
+            resource_id="resource",
+            audio_chunk_ms=20,
+            receive_timeout_s=0.5,
+        ),
+        on_event=lambda event: None,
+    )
+    pending: list[int] = []
+    chunk_samples = 4
+
+    asr.feed((1, 2))
+    asr.feed((3, 4))
+    asr.feed((5, 6))
+    asr.finish()
+    drained = asr._drain_audio_queue(
+        fake,
+        pending,
+        chunk_samples,
+        wait_timeout_s=0.0,
+    )
+
+    assert drained.final_sent is True
+    assert drained.frames == 3
+    assert len(fake.sent) == 2
+    audio_type, audio_flags, _sequence, audio_payload = _parse_server_frame(fake.sent[0])
+    final_type, final_flags, _sequence, final_payload = _parse_server_frame(fake.sent[1])
+    assert audio_type == 2
+    assert audio_flags == 0
+    assert struct.unpack("<hhhh", audio_payload) == (1, 2, 3, 4)
+    assert final_type == 2
+    assert final_flags & 2
+    assert struct.unpack("<hh", final_payload) == (5, 6)
+    assert asr._effective_receive_timeout_s() == 0.02

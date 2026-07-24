@@ -37,10 +37,10 @@ class VolcAsrSettings:
     uid: str = "smart-neckband-pc"
     model_name: str = "bigmodel"
     connect_timeout_s: float = 10.0
-    receive_timeout_s: float = 0.1
+    receive_timeout_s: float = 0.02
     final_timeout_s: float = 5.0
     audio_queue_depth: int = 512
-    audio_chunk_ms: int = 200
+    audio_chunk_ms: int = 100
     end_window_size_ms: int = 800
     force_to_speech_time_ms: int = 1000
 
@@ -60,7 +60,7 @@ class VolcAsrSettings:
             model_name=os.getenv("VOLC_ASR_MODEL_NAME", "bigmodel").strip()
             or "bigmodel",
             audio_queue_depth=_env_int("VOLC_ASR_AUDIO_QUEUE_DEPTH", 512),
-            audio_chunk_ms=_env_int("VOLC_ASR_AUDIO_CHUNK_MS", 200),
+            audio_chunk_ms=_env_int("VOLC_ASR_AUDIO_CHUNK_MS", 100),
             end_window_size_ms=_env_int("VOLC_ASR_END_WINDOW_SIZE_MS", 800),
             force_to_speech_time_ms=_env_int(
                 "VOLC_ASR_FORCE_TO_SPEECH_TIME_MS", 1000
@@ -84,6 +84,8 @@ class VolcAsrSettings:
             raise ValueError("ASR 音频队列深度至少为 8")
         if self.audio_chunk_ms < 20:
             raise ValueError("ASR 发送分片至少为 20 ms")
+        if self.receive_timeout_s < 0.001:
+            raise ValueError("ASR 接收轮询超时至少为 0.001 s")
         if self.end_window_size_ms < 0:
             raise ValueError("ASR end_window_size 不能为负数")
         if self.force_to_speech_time_ms < 0:
@@ -169,6 +171,12 @@ class VolcAsrEvent:
     kind: str
     text: str = ""
     detail: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class _AsrDrainResult:
+    frames: int = 0
+    final_sent: bool = False
 
 
 EventCallback = Callable[[VolcAsrEvent], None]
@@ -432,7 +440,7 @@ class VolcAsrClientThread(Thread):
             timeout=self._settings.connect_timeout_s,
         )
         try:
-            ws.settimeout(self._settings.receive_timeout_s)
+            ws.settimeout(self._effective_receive_timeout_s())
             self._on_event(VolcAsrEvent("status", detail="ASR 已连接，发送请求…"))
             ws.send_binary(build_full_request(self._settings))
             self._on_event(VolcAsrEvent("status", detail="ASR 正在识别"))
@@ -441,35 +449,22 @@ class VolcAsrClientThread(Thread):
             pending: list[int] = []
             chunk_samples = max(1, 16000 * self._settings.audio_chunk_ms // 1000)
             while not self._stop_event.is_set():
-                try:
-                    item = self._audio.get(timeout=0.02)
-                    if item is None:
-                        ws.send_binary(build_audio_frame(tuple(pending), final=True))
-                        self._sent_chunks += 1
-                        self._log(
-                            "asr.send_final",
-                            samples=len(pending),
-                            dropped_frames=self._dropped_frames,
-                        )
-                        pending.clear()
-                        final_sent = True
-                        final_deadline = time.monotonic() + self._settings.final_timeout_s
-                    else:
-                        pending.extend(item)
-                        while len(pending) >= chunk_samples:
-                            current = tuple(pending[:chunk_samples])
-                            del pending[:chunk_samples]
-                            ws.send_binary(build_audio_frame(current, final=False))
-                            self._sent_chunks += 1
-                            if self._sent_chunks == 1 or self._sent_chunks % 25 == 0:
-                                self._log(
-                                    "asr.send_audio",
-                                    sent_chunks=self._sent_chunks,
-                                    samples=len(current),
-                                    queue_size=self._audio.qsize(),
-                                )
-                except Empty:
-                    pass
+                drained = self._drain_audio_queue(
+                    ws,
+                    pending,
+                    chunk_samples,
+                    wait_timeout_s=0.002 if not final_sent else 0.0,
+                )
+                if drained.final_sent:
+                    final_sent = True
+                    final_deadline = time.monotonic() + self._settings.final_timeout_s
+                if drained.frames:
+                    self._log(
+                        "asr.drain",
+                        frames=drained.frames,
+                        sent_chunks=self._sent_chunks,
+                        queue_size=self._audio.qsize(),
+                    )
 
                 try:
                     message = ws.recv()
@@ -500,6 +495,74 @@ class VolcAsrClientThread(Thread):
                 ws.close()
             except Exception:
                 pass
+
+    def _drain_audio_queue(
+        self,
+        ws: object,
+        pending: list[int],
+        chunk_samples: int,
+        *,
+        wait_timeout_s: float,
+    ) -> _AsrDrainResult:
+        max_frames = 2048 if self._finish_event.is_set() else 256
+        time_budget_s = 0.25 if self._finish_event.is_set() else 0.05
+        deadline = time.monotonic() + time_budget_s
+        frames = 0
+        try:
+            item = self._audio.get(timeout=wait_timeout_s)
+        except Empty:
+            return _AsrDrainResult()
+
+        while True:
+            if item is None:
+                self._send_final_audio_frame(ws, pending)
+                return _AsrDrainResult(frames=frames, final_sent=True)
+
+            frames += 1
+            pending.extend(item)
+            self._send_ready_audio_chunks(ws, pending, chunk_samples)
+
+            if frames >= max_frames or time.monotonic() >= deadline:
+                break
+            try:
+                item = self._audio.get_nowait()
+            except Empty:
+                break
+
+        return _AsrDrainResult(frames=frames)
+
+    def _send_ready_audio_chunks(
+        self,
+        ws: object,
+        pending: list[int],
+        chunk_samples: int,
+    ) -> None:
+        while len(pending) >= chunk_samples:
+            current = tuple(pending[:chunk_samples])
+            del pending[:chunk_samples]
+            ws.send_binary(build_audio_frame(current, final=False))
+            self._sent_chunks += 1
+            if self._sent_chunks == 1 or self._sent_chunks % 25 == 0:
+                self._log(
+                    "asr.send_audio",
+                    sent_chunks=self._sent_chunks,
+                    samples=len(current),
+                    queue_size=self._audio.qsize(),
+                )
+
+    def _send_final_audio_frame(self, ws: object, pending: list[int]) -> None:
+        ws.send_binary(build_audio_frame(tuple(pending), final=True))
+        self._sent_chunks += 1
+        self._log(
+            "asr.send_final",
+            samples=len(pending),
+            dropped_frames=self._dropped_frames,
+            queue_size=self._audio.qsize(),
+        )
+        pending.clear()
+
+    def _effective_receive_timeout_s(self) -> float:
+        return min(max(self._settings.receive_timeout_s, 0.001), 0.02)
 
     def _drop_oldest_audio_frame(self) -> bool:
         try:
