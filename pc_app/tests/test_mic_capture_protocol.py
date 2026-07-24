@@ -166,8 +166,28 @@ def test_status_frame_decodes_counters() -> None:
             reserved=0,
             pcm_shift=14,
             streaming=True,
+            armed=False,
         )
     ]
+
+
+def test_status_frame_decodes_hi_esp_armed_state() -> None:
+    payload = STATUS_PAYLOAD.pack(0, 0, 0, 12, 16, ENCODING_IMA_ADPCM, 2)
+    parser = MicFrameParser()
+    frames = parser.feed(
+        make_frame(
+            frame_type=FRAME_TYPE_STATUS,
+            sequence=0,
+            sample_count=0,
+            payload=payload,
+            encoding=ENCODING_IMA_ADPCM,
+        )
+    )
+    assert len(frames) == 1
+    status = frames[0]
+    assert isinstance(status, DeviceStatusFrame)
+    assert status.armed is True
+    assert status.streaming is False
 
 
 def test_hi_esp_wake_event_decodes_count_and_sample_index() -> None:

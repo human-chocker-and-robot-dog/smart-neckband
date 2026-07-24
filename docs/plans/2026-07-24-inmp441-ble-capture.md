@@ -61,6 +61,9 @@ lossless on every Windows BLE adapter.
 Frame type 3 reports an official `Hi ESP` WakeNet event with the cumulative
 wake count, WakeNet word index, and monotonic detection sample index. `ARM`
 keeps audio local to WakeNet until this event, then starts the selected stream.
+The status payload's final state byte is 0 for stopped, 1 for streaming, and 2
+for armed. Older firmware reports only 0/1, so the PC can detect an unsupported
+`ARM` command instead of leaving the user waiting without an explanation.
 
 The small PC UI is a separate entry point, `smart-neckband-mic`. It scans for
 the experimental device, connects over BLE, starts/stops capture, plots a
@@ -181,6 +184,8 @@ blocked on a fresh explicit user instruction.
 - [x] Continuous WakeNet9s inference integrated with the I2S producer.
 - [x] BLE wake event and armed-recording protocol implemented.
 - [x] PC parser, tests, and GUI updated.
+- [x] GUI distinguishes the intentionally silent armed state from unsupported
+  old firmware and provides a manual waveform self-test.
 - [x] Firmware build and size validation completed.
 - [ ] Hardware flash and spoken `Hi ESP` test explicitly authorized.
 

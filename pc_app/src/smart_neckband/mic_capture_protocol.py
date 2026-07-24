@@ -71,6 +71,7 @@ class DeviceStatusFrame:
     reserved: int
     pcm_shift: int
     streaming: bool
+    armed: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,7 +244,7 @@ class MicFrameParser:
             reserved,
             pcm_shift,
             status_encoding,
-            streaming,
+            capture_state,
         ) = STATUS_PAYLOAD.unpack(payload)
         self.stats.status_frames += 1
         return DeviceStatusFrame(
@@ -256,7 +257,8 @@ class MicFrameParser:
             clipped_frames=clipped_frames,
             reserved=reserved,
             pcm_shift=pcm_shift,
-            streaming=bool(streaming),
+            streaming=capture_state == 1,
+            armed=capture_state == 2,
         )
 
     @staticmethod

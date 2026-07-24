@@ -295,7 +295,8 @@ static void send_status(void)
     write_le32(frame + payload_offset + 12U, s_conn_interval);
     write_le16(frame + payload_offset + 16U, s_pcm_shift);
     frame[payload_offset + 18U] = s_encoding;
-    frame[payload_offset + 19U] = s_streaming ? 1U : 0U;
+    frame[payload_offset + 19U] =
+        s_streaming ? 1U : (s_wake_armed ? 2U : 0U);
     const size_t crc_offset = payload_offset + 20U;
     write_le16(frame + crc_offset, crc16_ccitt_false(frame, crc_offset));
     if (ble_uart_tx(frame, crc_offset + MIC_CRC_SIZE) != BLE_UART_OK) {

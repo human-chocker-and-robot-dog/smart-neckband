@@ -66,6 +66,7 @@ def main() -> int:
             self.samples: deque[int] = deque(maxlen=32_000)
             self.latest_stats = None
             self.device_status: DeviceStatusFrame | None = None
+            self.capture_mode: str | None = None
 
             root = QWidget()
             layout = QVBoxLayout(root)
@@ -88,15 +89,18 @@ def main() -> int:
             self.shift = QSpinBox()
             self.shift.setRange(10, 20)
             self.shift.setValue(16)
-            self.start_button = QPushButton("等待 Hi ESP")
+            self.start_button = QPushButton("等待 Hi ESP（唤醒后录音）")
+            self.wave_test_button = QPushButton("手动测试波形")
             self.stop_button = QPushButton("停止并封装 WAV")
             self.start_button.setEnabled(False)
+            self.wave_test_button.setEnabled(False)
             self.stop_button.setEnabled(False)
             controls.addWidget(QLabel("传输格式"))
             controls.addWidget(self.encoding)
             controls.addWidget(QLabel("I2S 右移"))
             controls.addWidget(self.shift)
             controls.addWidget(self.start_button)
+            controls.addWidget(self.wave_test_button)
             controls.addWidget(self.stop_button)
             layout.addLayout(controls)
 
@@ -131,11 +135,15 @@ def main() -> int:
             self.scan_button.clicked.connect(self.scan)
             self.connect_button.clicked.connect(self.toggle_connection)
             self.start_button.clicked.connect(self.start_capture)
+            self.wave_test_button.clicked.connect(self.start_wave_test)
             self.stop_button.clicked.connect(self.stop_capture)
             self.browse_button.clicked.connect(self.choose_path)
             self.timer = QTimer(self)
             self.timer.timeout.connect(self.refresh_plot)
             self.timer.start(100)
+            self.arm_timer = QTimer(self)
+            self.arm_timer.setSingleShot(True)
+            self.arm_timer.timeout.connect(self.verify_arm_ack)
 
         def scan(self) -> None:
             self.scan_generation += 1
@@ -205,6 +213,7 @@ def main() -> int:
             self.state_label.setText(names.get(state, state))
             connected = state == "connected"
             self.start_button.setEnabled(connected and self.recorder is None)
+            self.wave_test_button.setEnabled(connected and self.recorder is None)
             self.connect_button.setText("断开" if connected else "连接")
             self.connect_button.setEnabled(True)
             if state == "disconnected":
@@ -222,22 +231,66 @@ def main() -> int:
                 self.path.setText(selected if selected.lower().endswith(".wav") else selected + ".wav")
 
         def start_capture(self) -> None:
-            if self.worker is None:
+            if not self.begin_recording("wake"):
                 return
+            self.worker.send(f"SHIFT {self.shift.value()}")
+            self.worker.send(f"ARM {self.encoding.currentData()}")
+            self.state_label.setText("正在确认 Hi ESP 固件…")
+            self.file_label.setText(
+                f"等待设备确认；唤醒前不会显示波形，唤醒后写入 {self.path.text()}"
+            )
+            self.arm_timer.start(1500)
+
+        def start_wave_test(self) -> None:
+            if not self.begin_recording("manual"):
+                return
+            self.worker.send(f"SHIFT {self.shift.value()}")
+            self.worker.send(f"START {self.encoding.currentData()}")
+            self.state_label.setText("手动波形测试中")
+            self.file_label.setText(f"无需唤醒，正在写入 {self.path.text()}")
+
+        def begin_recording(self, mode: str) -> bool:
+            if self.worker is None:
+                return False
             try:
                 self.recorder = PcmWaveRecorder(self.path.text())
             except Exception as exc:
                 QMessageBox.critical(self, "无法创建 WAV", str(exc))
-                return
+                return False
+            self.capture_mode = mode
             self.samples.clear()
+            self.curve.setData([])
             self.latest_stats = None
-            self.worker.send(f"SHIFT {self.shift.value()}")
-            self.worker.send(f"ARM {self.encoding.currentData()}")
+            self.device_status = None
             self.start_button.setEnabled(False)
+            self.wave_test_button.setEnabled(False)
             self.stop_button.setEnabled(True)
             self.encoding.setEnabled(False)
             self.shift.setEnabled(False)
-            self.file_label.setText(f"等待 Hi ESP，唤醒后写入 {self.path.text()}")
+            return True
+
+        def verify_arm_ack(self) -> None:
+            if self.capture_mode != "wake":
+                return
+            if self.device_status is not None and (
+                self.device_status.armed or self.device_status.streaming
+            ):
+                return
+            if self.worker is not None:
+                self.worker.send("STOP")
+            self.finish_recording()
+            self.state_label.setText("设备未进入 Hi ESP 等待状态")
+            self.file_label.setText(
+                "当前设备固件不支持 ARM；请先刷写 Hi ESP 固件，"
+                "也可点击“手动测试波形”检查麦克风链路。"
+            )
+            QMessageBox.warning(
+                self,
+                "Hi ESP 固件未就绪",
+                "设备没有确认 ARM 命令。当前硬件很可能仍在运行旧的麦克风测试固件。\n\n"
+                "请先刷写包含官方 Hi ESP 模型的新固件；"
+                "如果只想确认麦克风和蓝牙是否正常，可点击“手动测试波形”。",
+            )
 
         def stop_capture(self) -> None:
             if self.worker is not None:
@@ -245,15 +298,18 @@ def main() -> int:
             self.finish_recording()
 
         def finish_recording(self) -> None:
+            self.arm_timer.stop()
             if self.recorder is not None:
                 count = self.recorder.sample_count
                 self.recorder.close()
                 self.file_label.setText(f"已保存 {count} 个样本：{self.path.text()}")
                 self.recorder = None
+            self.capture_mode = None
             self.stop_button.setEnabled(False)
             self.encoding.setEnabled(True)
             self.shift.setEnabled(True)
             self.start_button.setEnabled(self.worker is not None)
+            self.wave_test_button.setEnabled(self.worker is not None)
 
         def on_frame(self, frame: object, stats: object) -> None:
             self.latest_stats = stats
@@ -274,7 +330,14 @@ def main() -> int:
                 self.level_label.setText(f"{mode} / RMS {rms:.0f} / Peak {peak}{clipped}")
             elif isinstance(frame, DeviceStatusFrame):
                 self.device_status = frame
+                if self.capture_mode == "wake" and frame.armed:
+                    self.arm_timer.stop()
+                    self.state_label.setText("已等待 Hi ESP；唤醒前不传输波形")
+                    self.file_label.setText(
+                        f"请说 Hi ESP；唤醒后写入 {self.path.text()}"
+                    )
             elif isinstance(frame, WakeEventFrame):
+                self.arm_timer.stop()
                 self.state_label.setText("Hi ESP 已唤醒，正在录音")
                 if self.recorder is not None:
                     self.file_label.setText(
@@ -297,6 +360,7 @@ def main() -> int:
                     f"TX 错误 {status.tx_errors} / "
                     f"削顶帧 {status.clipped_frames} / "
                     f"右移 {status.pcm_shift} / "
+                    f"模式 {'等待唤醒' if status.armed else '传输' if status.streaming else '停止'} / "
                     f"连接间隔 {status.reserved * 1.25:.2f} ms"
                 )
 
