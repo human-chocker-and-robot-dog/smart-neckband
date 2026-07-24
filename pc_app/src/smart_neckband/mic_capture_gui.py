@@ -4,6 +4,7 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 import sys
+from threading import Thread
 
 from .mic_capture_ble import MicBleClientThread, scan_mic_devices
 from .mic_capture_protocol import (
@@ -45,6 +46,7 @@ def main() -> int:
         frame = Signal(object, object)
         state = Signal(str)
         error = Signal(object)
+        scan_finished = Signal(int, object, object)
 
     class Window(QMainWindow):
         def __init__(self) -> None:
@@ -55,7 +57,10 @@ def main() -> int:
             self.bridge.frame.connect(self.on_frame)
             self.bridge.state.connect(self.on_state)
             self.bridge.error.connect(self.on_error)
+            self.bridge.scan_finished.connect(self.finish_scan)
             self.worker: MicBleClientThread | None = None
+            self.scan_worker: Thread | None = None
+            self.scan_generation = 0
             self.recorder: PcmWaveRecorder | None = None
             self.samples: deque[int] = deque(maxlen=32_000)
             self.latest_stats = None
@@ -132,20 +137,46 @@ def main() -> int:
             self.timer.start(100)
 
         def scan(self) -> None:
+            self.scan_generation += 1
+            generation = self.scan_generation
             self.scan_button.setEnabled(False)
             self.state_label.setText("扫描中…")
-            QApplication.processEvents()
+            self.scan_worker = Thread(
+                target=self.scan_in_background,
+                args=(generation,),
+                name="MicBleDeviceScanner",
+                daemon=True,
+            )
+            self.scan_worker.start()
+
+        def scan_in_background(self, generation: int) -> None:
             try:
-                found = scan_mic_devices()
-                self.devices.clear()
-                for device in found:
-                    self.devices.addItem(f"{device.name}  {device.address}", device.address)
-                self.state_label.setText(f"发现 {len(found)} 台")
+                found = tuple(scan_mic_devices())
+                error = None
             except Exception as exc:
-                QMessageBox.critical(self, "扫描失败", str(exc))
+                found = ()
+                error = exc
+            self.bridge.scan_finished.emit(generation, found, error)
+
+        def finish_scan(
+            self,
+            generation: int,
+            found: object,
+            error: object,
+        ) -> None:
+            if generation != self.scan_generation:
+                return
+            self.scan_worker = None
+            self.scan_button.setEnabled(True)
+            self.devices.clear()
+            if error is not None:
+                QMessageBox.critical(self, "扫描失败", str(error))
                 self.state_label.setText("扫描失败")
-            finally:
-                self.scan_button.setEnabled(True)
+                return
+            devices = tuple(found)
+            for device in devices:
+                self.devices.addItem(f"{device.name}  {device.address}", device.address)
+            self.state_label.setText(f"发现 {len(devices)} 台")
 
         def toggle_connection(self) -> None:
             if self.worker is not None:
@@ -266,6 +297,7 @@ def main() -> int:
                 self.curve.setData(list(self.samples))
 
         def closeEvent(self, event: object) -> None:
+            self.scan_generation += 1
             self.finish_recording()
             if self.worker is not None:
                 self.worker.disconnect()

@@ -137,3 +137,11 @@ One ESP-IDF integration bug was found during the hardware test:
 `pdMS_TO_TICKS(200)`. With `CONFIG_FREERTOS_HZ=100`, this became a 20 ms
 timeout, shorter than the 25 ms needed for a 400-sample block. Passing `200U`
 directly removed all I2S timeouts and restored the complete sample timeline.
+
+The first microphone GUI scan also reproduced the Windows Qt/WinRT failure
+previously fixed in the main ECG application: running `asyncio.run()` and
+Bleak directly on Qt's GUI/STA thread prevented Windows callbacks from being
+pumped. The microphone scanner now runs on a dedicated Python thread and
+returns results to the Qt thread through a signal. The complete PC suite still
+passed 76 tests, and a PySide6 application-thread smoke test discovered
+`CollarMic-2E4A` without the callback error.
