@@ -6,6 +6,15 @@ from pathlib import Path
 
 import pytest
 
+from smart_neckband.volc_asr_client import (
+    VolcAsrEvent,
+    VolcAsrSettings,
+    build_audio_frame,
+    build_client_frame,
+    build_full_request,
+    parse_server_frame,
+)
+
 
 FIXTURE = json.loads(
     (Path(__file__).parent / "fixtures" / "volc_asr_v3.json").read_text(
@@ -60,14 +69,14 @@ def _parse_server_frame(frame: bytes) -> tuple[int, int, int, bytes]:
 
 
 def test_client_golden_frames_use_official_no_compression_mode() -> None:
-    assert _client_frame(1, 0, 1, b"{}").hex() == FIXTURE[
+    assert build_client_frame(1, 0, 1, b"{}").hex() == FIXTURE[
         "full_request_no_compression_hex"
     ]
     pcm = struct.pack("<hh", 1, -2)
-    assert _client_frame(2, 0, 0, pcm).hex() == FIXTURE[
+    assert build_audio_frame((1, -2), final=False).hex() == FIXTURE[
         "audio_nonfinal_no_compression_hex"
     ]
-    assert _client_frame(2, 2, 0, pcm).hex() == FIXTURE[
+    assert build_audio_frame((1, -2), final=True).hex() == FIXTURE[
         "audio_final_no_compression_hex"
     ]
 
@@ -91,6 +100,7 @@ def test_fragmented_partial_and_final_responses() -> None:
     assert sequence < 0
     assert parsed["result"]["text"] == "打开灯"
     assert parsed["result"]["utterances"][0]["definite"] is True
+    assert parse_server_frame(reassembled) == VolcAsrEvent("final", text="打开灯")
 
     _, partial_flags, partial_sequence, partial_payload = _parse_server_frame(
         partial_frame
@@ -98,6 +108,7 @@ def test_fragmented_partial_and_final_responses() -> None:
     assert partial_flags == 1
     assert partial_sequence > 0
     assert json.loads(partial_payload)["result"]["text"] == "打开"
+    assert parse_server_frame(partial_frame) == VolcAsrEvent("partial", text="打开")
 
 
 def test_error_and_malformed_length_are_rejected() -> None:
@@ -113,3 +124,45 @@ def test_error_and_malformed_length_are_rejected() -> None:
     malformed[11] += 1
     with pytest.raises(ValueError, match="payload length"):
         _parse_server_frame(bytes(malformed))
+    with pytest.raises(ValueError, match="payload length"):
+        parse_server_frame(bytes(malformed))
+
+
+def test_full_request_carries_pc_side_bigmodel_audio_settings() -> None:
+    frame = build_full_request(
+        VolcAsrSettings(
+            api_key="key",
+            resource_id="resource",
+            uid="unit-test",
+            model_name="bigmodel",
+        )
+    )
+    message_type, flags, _sequence, payload = _parse_server_frame(frame)
+    request = json.loads(payload)
+    assert message_type == 1
+    assert flags == 0
+    assert request["user"]["uid"] == "unit-test"
+    assert request["audio"] == {
+        "format": "pcm",
+        "rate": 16000,
+        "bits": 16,
+        "channel": 1,
+        "codec": "raw",
+    }
+    assert request["request"]["model_name"] == "bigmodel"
+    assert request["request"]["show_utterances"] is True
+
+
+def test_asr_settings_validate_required_credentials() -> None:
+    VolcAsrSettings(api_key="key", resource_id="resource").validate()
+    VolcAsrSettings(
+        auth_mode="legacy",
+        app_key="app",
+        access_key="access",
+        resource_id="resource",
+    ).validate()
+
+    with pytest.raises(ValueError, match="Resource ID"):
+        VolcAsrSettings(api_key="key").validate()
+    with pytest.raises(ValueError, match="API Key"):
+        VolcAsrSettings(resource_id="resource").validate()

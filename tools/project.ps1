@@ -246,6 +246,36 @@ function Test-PythonModule {
     return $LASTEXITCODE -eq 0
 }
 
+function Get-PcVenvPythonCommand {
+    $py = Get-Command py -ErrorAction SilentlyContinue
+    if ($null -ne $py) {
+        try {
+            & py -3.12 -c "import sys" *> $null
+            if ($LASTEXITCODE -eq 0) {
+                return @{
+                    FilePath = "py"
+                    Arguments = @("-3.12", "-m", "venv")
+                }
+            }
+        }
+        catch {
+        }
+    }
+
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if ($null -ne $python) {
+        & $python.Source -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" *> $null
+        if ($LASTEXITCODE -eq 0) {
+            return @{
+                FilePath = $python.Source
+                Arguments = @("-m", "venv")
+            }
+        }
+    }
+
+    throw "Python >= 3.11 is required for the PC app, but neither 'py -3.12' nor 'python' is usable."
+}
+
 switch ($Action) {
     "doctor" {
         & (Join-Path $PSScriptRoot "doctor.ps1") -Target $Target
@@ -309,16 +339,22 @@ switch ($Action) {
             $venvPython = Join-Path $PcDir ".venv\Scripts\python.exe"
             $venvNeedsRepair = -not (Test-Path -LiteralPath $venvPython)
             if (-not $venvNeedsRepair) {
-                $venvNeedsRepair = -not (Test-PythonModule -FilePath $venvPython -ModuleName "pip")
+                try {
+                    $venvNeedsRepair = -not (Test-PythonModule -FilePath $venvPython -ModuleName "pip")
+                }
+                catch {
+                    $venvNeedsRepair = $true
+                }
             }
 
             if ($venvNeedsRepair) {
-                $venvArgs = @("-3.12", "-m", "venv")
+                $venvCommand = Get-PcVenvPythonCommand
+                $venvArgs = @($venvCommand.Arguments)
                 if (Test-Path -LiteralPath ".venv") {
                     $venvArgs += "--clear"
                 }
                 $venvArgs += ".venv"
-                Invoke-Native -FilePath "py" -Arguments $venvArgs -Description "Python virtual environment creation"
+                Invoke-Native -FilePath $venvCommand.FilePath -Arguments $venvArgs -Description "Python virtual environment creation"
             }
 
             Invoke-Native -FilePath $venvPython -Arguments @(
@@ -354,7 +390,7 @@ switch ($Action) {
         if (-not (Test-Path -LiteralPath $venvPython)) {
             throw "PC virtual environment is missing. Run '.\tools\project.ps1 pc-setup' first."
         }
-        foreach ($moduleName in @("bleak", "numpy", "pyqtgraph", "PySide6")) {
+        foreach ($moduleName in @("bleak", "numpy", "pyqtgraph", "PySide6", "websocket")) {
             if (-not (Test-PythonModule -FilePath $venvPython -ModuleName $moduleName)) {
                 throw "PC module '$moduleName' is missing from .venv. Run '.\tools\project.ps1 pc-setup' first."
             }

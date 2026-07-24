@@ -16,6 +16,7 @@ from .mic_capture_protocol import (
     PcmWaveRecorder,
     WakeEventFrame,
 )
+from .volc_asr_client import VolcAsrClientThread, VolcAsrEvent, VolcAsrSettings
 
 
 def main() -> int:
@@ -28,12 +29,15 @@ def main() -> int:
             QComboBox,
             QFileDialog,
             QFormLayout,
+            QGroupBox,
             QHBoxLayout,
             QLabel,
             QLineEdit,
             QMainWindow,
             QMessageBox,
+            QPlainTextEdit,
             QPushButton,
+            QTabWidget,
             QSpinBox,
             QVBoxLayout,
             QWidget,
@@ -48,6 +52,7 @@ def main() -> int:
         state = Signal(str)
         error = Signal(object)
         scan_finished = Signal(int, object, object)
+        asr_event = Signal(object)
 
     class Window(QMainWindow):
         def __init__(self) -> None:
@@ -59,7 +64,9 @@ def main() -> int:
             self.bridge.state.connect(self.on_state)
             self.bridge.error.connect(self.on_error)
             self.bridge.scan_finished.connect(self.finish_scan)
+            self.bridge.asr_event.connect(self.on_asr_event)
             self.worker: MicBleClientThread | None = None
+            self.asr_worker: VolcAsrClientThread | None = None
             self.scan_worker: Thread | None = None
             self.scan_generation = 0
             self.recorder: PcmWaveRecorder | None = None
@@ -81,6 +88,39 @@ def main() -> int:
             connection_row.addWidget(self.state_label)
             layout.addLayout(connection_row)
 
+            settings = VolcAsrSettings.from_environment()
+
+            tabs = QTabWidget()
+            asr_tab = QWidget()
+            asr_layout = QVBoxLayout(asr_tab)
+
+            asr_group = QGroupBox("豆包 / 火山流式 ASR")
+            asr_form = QFormLayout(asr_group)
+            self.asr_endpoint = QLineEdit(settings.endpoint)
+            self.asr_resource_id = QLineEdit(settings.resource_id)
+            self.asr_auth_mode = QComboBox()
+            self.asr_auth_mode.addItem("API Key", "api_key")
+            self.asr_auth_mode.addItem("App Key + Access Key", "legacy")
+            self.asr_auth_mode.setCurrentIndex(
+                1 if settings.auth_mode == "legacy" else 0
+            )
+            self.asr_api_key = QLineEdit(settings.api_key)
+            self.asr_api_key.setEchoMode(QLineEdit.EchoMode.Password)
+            self.asr_app_key = QLineEdit(settings.app_key)
+            self.asr_access_key = QLineEdit(settings.access_key)
+            self.asr_access_key.setEchoMode(QLineEdit.EchoMode.Password)
+            self.asr_uid = QLineEdit(settings.uid)
+            self.asr_model = QLineEdit(settings.model_name)
+            asr_form.addRow("Endpoint", self.asr_endpoint)
+            asr_form.addRow("Resource ID", self.asr_resource_id)
+            asr_form.addRow("鉴权模式", self.asr_auth_mode)
+            asr_form.addRow("API Key", self.asr_api_key)
+            asr_form.addRow("App Key", self.asr_app_key)
+            asr_form.addRow("Access Key", self.asr_access_key)
+            asr_form.addRow("UID", self.asr_uid)
+            asr_form.addRow("模型", self.asr_model)
+            asr_layout.addWidget(asr_group)
+
             controls = QHBoxLayout()
             self.encoding = QComboBox()
             self.encoding.addItem("IMA-ADPCM（推荐，16 kHz 实时传输）", "ADPCM")
@@ -89,20 +129,36 @@ def main() -> int:
             self.shift = QSpinBox()
             self.shift.setRange(10, 20)
             self.shift.setValue(16)
-            self.start_button = QPushButton("等待 Hi ESP（唤醒后录音）")
-            self.wave_test_button = QPushButton("手动测试波形")
-            self.stop_button = QPushButton("停止并封装 WAV")
+            self.start_button = QPushButton("等待 Hi ESP 并识别")
+            self.stop_button = QPushButton("停止并等待 final")
             self.start_button.setEnabled(False)
-            self.wave_test_button.setEnabled(False)
             self.stop_button.setEnabled(False)
             controls.addWidget(QLabel("传输格式"))
             controls.addWidget(self.encoding)
             controls.addWidget(QLabel("I2S 右移"))
             controls.addWidget(self.shift)
             controls.addWidget(self.start_button)
-            controls.addWidget(self.wave_test_button)
             controls.addWidget(self.stop_button)
-            layout.addLayout(controls)
+            asr_layout.addLayout(controls)
+
+            self.asr_status_label = QLabel("ASR 尚未连接")
+            self.asr_partial_label = QLabel("Partial：--")
+            self.asr_partial_label.setWordWrap(True)
+            self.asr_final_text = QPlainTextEdit()
+            self.asr_final_text.setReadOnly(True)
+            self.asr_final_text.setPlaceholderText("流式 final 文本会显示在这里")
+            asr_layout.addWidget(self.asr_status_label)
+            asr_layout.addWidget(self.asr_partial_label)
+            asr_layout.addWidget(self.asr_final_text, 1)
+
+            diagnostic_tab = QWidget()
+            diagnostic_layout = QVBoxLayout(diagnostic_tab)
+            diagnostic_controls = QHBoxLayout()
+            self.wave_test_button = QPushButton("手动测试波形")
+            self.wave_test_button.setEnabled(False)
+            diagnostic_controls.addWidget(self.wave_test_button)
+            diagnostic_controls.addStretch(1)
+            diagnostic_layout.addLayout(diagnostic_controls)
 
             path_row = QHBoxLayout()
             self.path = QLineEdit(
@@ -111,14 +167,14 @@ def main() -> int:
             self.browse_button = QPushButton("选择 WAV")
             path_row.addWidget(self.path, 1)
             path_row.addWidget(self.browse_button)
-            layout.addLayout(path_row)
+            diagnostic_layout.addLayout(path_row)
 
             self.plot = pg.PlotWidget()
             self.plot.setLabel("left", "PCM")
             self.plot.setLabel("bottom", "最近 2 秒样本")
             self.plot.setYRange(-32768, 32767)
             self.curve = self.plot.plot(pen=pg.mkPen("#42a5f5", width=1))
-            layout.addWidget(self.plot, 1)
+            diagnostic_layout.addWidget(self.plot, 1)
 
             form = QFormLayout()
             self.level_label = QLabel("RMS 0 / Peak 0")
@@ -129,7 +185,11 @@ def main() -> int:
             form.addRow("PC 链路", self.link_label)
             form.addRow("ESP 状态", self.device_label)
             form.addRow("文件", self.file_label)
-            layout.addLayout(form)
+            diagnostic_layout.addLayout(form)
+
+            tabs.addTab(asr_tab, "ASR")
+            tabs.addTab(diagnostic_tab, "诊断")
+            layout.addWidget(tabs, 1)
             self.setCentralWidget(root)
 
             self.scan_button.clicked.connect(self.scan)
@@ -231,11 +291,19 @@ def main() -> int:
                 self.path.setText(selected if selected.lower().endswith(".wav") else selected + ".wav")
 
         def start_capture(self) -> None:
+            try:
+                self.asr_settings().validate()
+            except Exception as exc:
+                QMessageBox.warning(self, "ASR 配置不完整", str(exc))
+                return
             if not self.begin_recording("wake"):
                 return
             self.worker.send(f"SHIFT {self.shift.value()}")
             self.worker.send(f"ARM {self.encoding.currentData()}")
             self.state_label.setText("正在确认 Hi ESP 固件…")
+            self.asr_status_label.setText("等待 Hi ESP 唤醒")
+            self.asr_partial_label.setText("Partial：--")
+            self.asr_final_text.clear()
             self.file_label.setText(
                 f"等待设备确认；唤醒前不会显示波形，唤醒后写入 {self.path.text()}"
             )
@@ -267,6 +335,7 @@ def main() -> int:
             self.stop_button.setEnabled(True)
             self.encoding.setEnabled(False)
             self.shift.setEnabled(False)
+            self.set_asr_settings_enabled(False)
             return True
 
         def verify_arm_ack(self) -> None:
@@ -296,6 +365,7 @@ def main() -> int:
             if self.worker is not None:
                 for _ in range(3):
                     self.worker.send("STOP")
+            self.finish_asr_session()
             self.finish_recording()
 
         def finish_recording(self) -> None:
@@ -309,8 +379,53 @@ def main() -> int:
             self.stop_button.setEnabled(False)
             self.encoding.setEnabled(True)
             self.shift.setEnabled(True)
+            self.set_asr_settings_enabled(True)
             self.start_button.setEnabled(self.worker is not None)
             self.wave_test_button.setEnabled(self.worker is not None)
+
+        def set_asr_settings_enabled(self, enabled: bool) -> None:
+            for widget in (
+                self.asr_endpoint,
+                self.asr_resource_id,
+                self.asr_auth_mode,
+                self.asr_api_key,
+                self.asr_app_key,
+                self.asr_access_key,
+                self.asr_uid,
+                self.asr_model,
+            ):
+                widget.setEnabled(enabled)
+
+        def asr_settings(self) -> VolcAsrSettings:
+            return VolcAsrSettings(
+                endpoint=self.asr_endpoint.text().strip(),
+                auth_mode=str(self.asr_auth_mode.currentData()),
+                api_key=self.asr_api_key.text().strip(),
+                app_key=self.asr_app_key.text().strip(),
+                access_key=self.asr_access_key.text().strip(),
+                resource_id=self.asr_resource_id.text().strip(),
+                uid=self.asr_uid.text().strip() or "smart-neckband-pc",
+                model_name=self.asr_model.text().strip() or "bigmodel",
+            )
+
+        def start_asr_session(self) -> None:
+            if self.asr_worker is not None:
+                return
+            try:
+                settings = self.asr_settings()
+                self.asr_worker = VolcAsrClientThread(
+                    settings,
+                    on_event=self.bridge.asr_event.emit,
+                )
+            except Exception as exc:
+                self.asr_status_label.setText(f"ASR 配置错误：{exc}")
+                return
+            self.asr_worker.start()
+
+        def finish_asr_session(self) -> None:
+            if self.asr_worker is not None:
+                self.asr_status_label.setText("ASR 等待 final…")
+                self.asr_worker.finish()
 
         def on_frame(self, frame: object, stats: object) -> None:
             self.latest_stats = stats
@@ -318,6 +433,8 @@ def main() -> int:
                 self.samples.extend(frame.samples)
                 if self.recorder is not None:
                     self.recorder.write(frame.samples)
+                if self.capture_mode == "wake" and self.asr_worker is not None:
+                    self.asr_worker.feed(frame.samples)
                 values = np.asarray(frame.samples, dtype=np.float64)
                 rms = float(np.sqrt(np.mean(values * values))) if len(values) else 0.0
                 peak = int(np.max(np.abs(values))) if len(values) else 0
@@ -340,6 +457,7 @@ def main() -> int:
             elif isinstance(frame, WakeEventFrame):
                 self.arm_timer.stop()
                 self.state_label.setText("Hi ESP 已唤醒，正在录音")
+                self.start_asr_session()
                 if self.recorder is not None:
                     self.file_label.setText(
                         f"第 {frame.wake_count} 次唤醒，正在写入 {self.path.text()}"
@@ -369,8 +487,27 @@ def main() -> int:
             if self.samples:
                 self.curve.setData(list(self.samples))
 
+        def on_asr_event(self, event: object) -> None:
+            if not isinstance(event, VolcAsrEvent):
+                return
+            if event.kind == "status":
+                self.asr_status_label.setText(event.detail)
+            elif event.kind == "partial":
+                self.asr_partial_label.setText(f"Partial：{event.text}")
+            elif event.kind == "final":
+                self.asr_status_label.setText("ASR final 已返回")
+                self.asr_partial_label.setText("Partial：--")
+                self.asr_final_text.appendPlainText(event.text)
+            elif event.kind == "error":
+                self.asr_status_label.setText(f"ASR 错误：{event.detail}")
+            elif event.kind == "closed":
+                self.asr_worker = None
+
         def closeEvent(self, event: object) -> None:
             self.scan_generation += 1
+            if self.asr_worker is not None:
+                self.asr_worker.cancel()
+                self.asr_worker.join(timeout=2.0)
             self.finish_recording()
             if self.worker is not None:
                 self.worker.disconnect()

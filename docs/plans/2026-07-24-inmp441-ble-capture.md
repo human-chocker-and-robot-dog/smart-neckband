@@ -3,11 +3,14 @@
 ## Goal
 
 Create a disposable ESP32-C3 firmware and a small Windows PC application that
-verify the INMP441 wiring, stream microphone samples over BLE UART, display the
-waveform and link counters, and save the received samples as a WAV file.
+verify the INMP441 wiring, run the official local `Hi ESP` WakeNet wake word,
+stream microphone samples over BLE UART after wake, run Volcengine/Doubao
+streaming ASR on the PC, display partial/final transcript text, and keep the
+waveform and link counters in a diagnostic tab.
 
 This experiment is intentionally separate from the production sensor firmware.
-It contains no ECG, IMU, OLED, wake-word, Wi-Fi, ASR, or Agent functionality.
+It contains no ECG, IMU, OLED, Wi-Fi, ESP-side ASR, or Agent functionality.
+ASR credentials stay on the PC and are never written to ESP Flash.
 
 ## Hardware and safety
 
@@ -69,9 +72,12 @@ for armed. Older firmware reports only 0/1, so the PC can detect an unsupported
 `ARM` command instead of leaving the user waiting without an explanation.
 
 The small PC UI is a separate entry point, `smart-neckband-mic`. It scans for
-the experimental device, connects over BLE, starts/stops capture, plots a
-rolling waveform, reports RMS/peak/link integrity, and writes a mono 16 kHz
-16-bit WAV file.
+the experimental device, connects over BLE, starts wake-gated capture, opens a
+PC-side Volcengine/Doubao V3 WebSocket ASR session after the `Hi ESP` wake
+event, streams decoded PCM16 audio to ASR, displays partial and final text, and
+sends the ASR final audio packet when the user stops the utterance. A
+diagnostic tab plots a rolling waveform, reports RMS/peak/link integrity, and
+writes a mono 16 kHz 16-bit WAV file.
 
 ## Validation
 
