@@ -442,6 +442,7 @@ def main() -> int:
             self.worker.start()
 
         def on_state(self, state: str) -> None:
+            self.debug_logger.event("ble.ui_state", state=state)
             names = {
                 "connecting": "连接中…",
                 "connected": "已连接",
@@ -464,6 +465,7 @@ def main() -> int:
                 self.finish_recording()
 
         def on_error(self, error: BaseException) -> None:
+            self.debug_logger.exception("ble.ui_error", error)
             QMessageBox.critical(self, "BLE 错误", str(error))
 
         def choose_path(self) -> None:
@@ -490,6 +492,10 @@ def main() -> int:
                 return
             self.worker.send(f"SHIFT {self.shift.value()}")
             self.worker.send(f"ARM {self.encoding.currentData()}")
+            self.debug_logger.event(
+                "wake.arm_sent",
+                encoding=str(self.encoding.currentData()),
+            )
             self.state_label.setText("正在确认 Hi ESP 固件…")
             self.asr_status_label.setText("等待 Hi ESP 唤醒")
             self.asr_partial_label.setText("Partial：--")
@@ -500,7 +506,7 @@ def main() -> int:
             self.file_label.setText(
                 f"等待设备确认；唤醒前不会显示波形，唤醒后写入 {self.path.text()}"
             )
-            self.arm_timer.start(1500)
+            self.arm_timer.start(3000)
 
         def start_wave_test(self) -> None:
             if not self.begin_recording("manual"):
@@ -592,20 +598,32 @@ def main() -> int:
                 self.device_status.armed or self.device_status.streaming
             ):
                 return
-            if self.worker is not None:
-                self.worker.send("STOP")
+            self.debug_logger.event(
+                "wake.arm_timeout",
+                worker_present=self.worker is not None,
+                has_device_status=self.device_status is not None,
+                device_armed=(
+                    self.device_status.armed if self.device_status is not None else None
+                ),
+                device_streaming=(
+                    self.device_status.streaming
+                    if self.device_status is not None
+                    else None
+                ),
+            )
             self.finish_recording()
             self.state_label.setText("设备未进入 Hi ESP 等待状态")
             self.file_label.setText(
-                "当前设备固件不支持 ARM；请先刷写 Hi ESP 固件，"
-                "也可点击“手动测试波形”检查麦克风链路。"
+                "设备未确认 ARM；可能是固件不支持，或者 BLE 连接已中断。"
+                "可重新连接后点击“手动测试波形”检查链路。"
             )
             QMessageBox.warning(
                 self,
                 "Hi ESP 固件未就绪",
-                "设备没有确认 ARM 命令。当前硬件很可能仍在运行旧的麦克风测试固件。\n\n"
-                "请先刷写包含官方 Hi ESP 模型的新固件；"
-                "如果只想确认麦克风和蓝牙是否正常，可点击“手动测试波形”。",
+                "设备在 3 秒内没有确认 ARM 命令。\n\n"
+                "可能原因：当前仍是旧版麦克风测试固件，或者 BLE 在发送命令后断开。\n"
+                "请先重新扫描并连接；如果“手动测试波形”正常、但 ARM 始终失败，"
+                "就需要重新刷写包含官方 Hi ESP 模型的测试固件。",
             )
 
         def stop_capture(self) -> None:
