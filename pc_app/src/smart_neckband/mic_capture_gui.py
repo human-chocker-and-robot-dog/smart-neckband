@@ -18,7 +18,12 @@ from .mic_capture_protocol import (
     PcmWaveRecorder,
     WakeEventFrame,
 )
-from .funasr_vad import FunAsrVadSettings, FunAsrVadThread, VadEvent
+from .audio_threshold_vad import (
+    AudioThresholdVadSettings,
+    AudioThresholdVadThread,
+    VadEvent,
+    calibrated_noise_rms,
+)
 from .volc_asr_client import (
     VolcAsrClientThread,
     VolcAsrEvent,
@@ -80,7 +85,7 @@ def main() -> int:
             self.bridge.vad_event.connect(self.on_vad_event)
             self.worker: MicBleClientThread | None = None
             self.asr_worker: VolcAsrClientThread | None = None
-            self.vad_worker: FunAsrVadThread | None = None
+            self.vad_worker: AudioThresholdVadThread | None = None
             self.scan_worker: Thread | None = None
             self.scan_generation = 0
             self.recorder: PcmWaveRecorder | None = None
@@ -88,6 +93,9 @@ def main() -> int:
             self.latest_stats = None
             self.device_status: DeviceStatusFrame | None = None
             self.capture_mode: str | None = None
+            self.calibration_rms_values: list[float] = []
+            self.calibration_peak_values: list[int] = []
+            self.calibration_samples = 0
 
             root = QWidget()
             layout = QVBoxLayout(root)
@@ -103,7 +111,7 @@ def main() -> int:
             layout.addLayout(connection_row)
 
             self.asr_settings_path = Path.cwd() / "data" / "volc_asr_settings.json"
-            self.vad_settings_path = Path.cwd() / "data" / "funasr_vad_settings.json"
+            self.vad_settings_path = Path.cwd() / "data" / "audio_threshold_vad_settings.json"
             self.debug_log_path = Path.cwd() / "data" / "mic_capture_debug.log"
             self.debug_logger = DebugLogger(self.debug_log_path)
             try:
@@ -118,7 +126,7 @@ def main() -> int:
             try:
                 vad_settings = self.load_vad_settings()
             except Exception as exc:
-                vad_settings = FunAsrVadSettings()
+                vad_settings = AudioThresholdVadSettings()
                 QMessageBox.warning(
                     self,
                     "VAD 配置读取失败",
@@ -194,37 +202,72 @@ def main() -> int:
 
             vad_group = QGroupBox("自动断句")
             vad_layout = QFormLayout(vad_group)
-            self.vad_enabled = QCheckBox("启用 FunASR FSMN-VAD 自动停止")
+            self.vad_enabled = QCheckBox("启用音频阈值自动停止")
             self.vad_enabled.setChecked(True)
-            self.vad_model = QLineEdit(vad_settings.model)
-            self.vad_device = QLineEdit(vad_settings.device)
             self.vad_sample_rate = QSpinBox()
             self.vad_sample_rate.setRange(8000, 48000)
             self.vad_sample_rate.setSingleStep(1000)
             self.vad_sample_rate.setValue(vad_settings.sample_rate)
-            self.vad_chunk_ms = QSpinBox()
-            self.vad_chunk_ms.setRange(20, 1000)
-            self.vad_chunk_ms.setSingleStep(20)
-            self.vad_chunk_ms.setValue(vad_settings.chunk_ms)
+            self.vad_analysis_window_ms = QSpinBox()
+            self.vad_analysis_window_ms.setRange(20, 1000)
+            self.vad_analysis_window_ms.setSingleStep(20)
+            self.vad_analysis_window_ms.setValue(vad_settings.analysis_window_ms)
             self.vad_queue_depth = QSpinBox()
             self.vad_queue_depth.setRange(8, 4096)
             self.vad_queue_depth.setValue(vad_settings.queue_depth)
-            self.vad_model_kwargs = QLineEdit(vad_settings.model_kwargs_json)
-            self.vad_model_kwargs.setPlaceholderText('例如 {"disable_update": true}')
-            self.vad_generate_kwargs = QLineEdit(vad_settings.generate_kwargs_json)
-            self.vad_generate_kwargs.setPlaceholderText('例如 {"max_end_silence_time": 800}')
+            self.vad_noise_rms = QDoubleSpinBox()
+            self.vad_noise_rms.setRange(0.0, 32768.0)
+            self.vad_noise_rms.setDecimals(1)
+            self.vad_noise_rms.setValue(vad_settings.noise_rms)
+            self.vad_rms_multiplier = QDoubleSpinBox()
+            self.vad_rms_multiplier.setRange(1.0, 20.0)
+            self.vad_rms_multiplier.setDecimals(2)
+            self.vad_rms_multiplier.setSingleStep(0.25)
+            self.vad_rms_multiplier.setValue(vad_settings.rms_multiplier)
+            self.vad_min_rms_delta = QDoubleSpinBox()
+            self.vad_min_rms_delta.setRange(0.0, 10000.0)
+            self.vad_min_rms_delta.setDecimals(1)
+            self.vad_min_rms_delta.setSingleStep(50.0)
+            self.vad_min_rms_delta.setValue(vad_settings.min_rms_delta)
+            self.vad_silence_ms = QSpinBox()
+            self.vad_silence_ms.setRange(100, 5000)
+            self.vad_silence_ms.setSingleStep(100)
+            self.vad_silence_ms.setValue(vad_settings.silence_ms)
+            self.vad_min_speech_ms = QSpinBox()
+            self.vad_min_speech_ms.setRange(0, 5000)
+            self.vad_min_speech_ms.setSingleStep(100)
+            self.vad_min_speech_ms.setValue(vad_settings.min_speech_ms)
+            self.vad_max_recording_ms = QSpinBox()
+            self.vad_max_recording_ms.setRange(1000, 60000)
+            self.vad_max_recording_ms.setSingleStep(1000)
+            self.vad_max_recording_ms.setValue(vad_settings.max_recording_ms)
+            self.vad_calibration_ms = QSpinBox()
+            self.vad_calibration_ms.setRange(500, 10000)
+            self.vad_calibration_ms.setSingleStep(500)
+            self.vad_calibration_ms.setValue(vad_settings.calibration_ms)
+            self.calibrate_silence_button = QPushButton("静默环境采样")
+            self.calibrate_silence_button.setEnabled(False)
             self.vad_status_label = QLabel("VAD 尚未启动")
             self.vad_status_label.setWordWrap(True)
+            self.vad_threshold_label = QLabel(
+                f"当前说话阈值 RMS：{vad_settings.speech_rms_threshold:.0f}"
+            )
+            self.vad_threshold_label.setWordWrap(True)
             self.debug_log_label = QLabel(f"调试日志：{self.debug_log_path}")
             self.debug_log_label.setWordWrap(True)
             vad_layout.addRow(self.vad_enabled)
-            vad_layout.addRow("VAD 模型", self.vad_model)
-            vad_layout.addRow("Device", self.vad_device)
             vad_layout.addRow("采样率", self.vad_sample_rate)
-            vad_layout.addRow("VAD chunk ms", self.vad_chunk_ms)
+            vad_layout.addRow("分析窗口 ms", self.vad_analysis_window_ms)
             vad_layout.addRow("VAD 队列深度", self.vad_queue_depth)
-            vad_layout.addRow("AutoModel kwargs JSON", self.vad_model_kwargs)
-            vad_layout.addRow("generate kwargs JSON", self.vad_generate_kwargs)
+            vad_layout.addRow("静默 RMS", self.vad_noise_rms)
+            vad_layout.addRow("RMS 倍数", self.vad_rms_multiplier)
+            vad_layout.addRow("最小 RMS 增量", self.vad_min_rms_delta)
+            vad_layout.addRow("停止静默 ms", self.vad_silence_ms)
+            vad_layout.addRow("最小说话 ms", self.vad_min_speech_ms)
+            vad_layout.addRow("最大录音 ms", self.vad_max_recording_ms)
+            vad_layout.addRow("静默采样 ms", self.vad_calibration_ms)
+            vad_layout.addRow("环境标定", self.calibrate_silence_button)
+            vad_layout.addRow("阈值", self.vad_threshold_label)
             vad_layout.addRow("VAD 状态", self.vad_status_label)
             vad_layout.addRow("日志", self.debug_log_label)
             asr_layout.addWidget(vad_group)
@@ -304,9 +347,13 @@ def main() -> int:
             self.connect_button.clicked.connect(self.toggle_connection)
             self.start_button.clicked.connect(self.start_capture)
             self.wave_test_button.clicked.connect(self.start_wave_test)
+            self.calibrate_silence_button.clicked.connect(self.start_silence_calibration)
             self.stop_button.clicked.connect(self.stop_capture)
             self.browse_button.clicked.connect(self.choose_path)
             self.save_asr_settings_button.clicked.connect(self.save_asr_settings)
+            self.vad_noise_rms.valueChanged.connect(self.update_vad_threshold_label)
+            self.vad_rms_multiplier.valueChanged.connect(self.update_vad_threshold_label)
+            self.vad_min_rms_delta.valueChanged.connect(self.update_vad_threshold_label)
             self.timer = QTimer(self)
             self.timer.timeout.connect(self.refresh_plot)
             self.timer.start(100)
@@ -383,6 +430,9 @@ def main() -> int:
             connected = state == "connected"
             self.start_button.setEnabled(connected and self.recorder is None)
             self.wave_test_button.setEnabled(connected and self.recorder is None)
+            self.calibrate_silence_button.setEnabled(
+                connected and self.recorder is None and self.capture_mode is None
+            )
             self.connect_button.setText("断开" if connected else "连接")
             self.connect_button.setEnabled(True)
             if state == "disconnected":
@@ -436,6 +486,41 @@ def main() -> int:
             self.state_label.setText("手动波形测试中")
             self.file_label.setText(f"无需唤醒，正在写入 {self.path.text()}")
 
+        def start_silence_calibration(self) -> None:
+            if self.worker is None or self.recorder is not None:
+                return
+            try:
+                self.vad_settings().validate()
+            except Exception as exc:
+                QMessageBox.warning(self, "音频阈值配置错误", str(exc))
+                return
+            self.capture_mode = "calibrate"
+            self.samples.clear()
+            self.curve.setData([])
+            self.calibration_rms_values.clear()
+            self.calibration_peak_values.clear()
+            self.calibration_samples = 0
+            self.latest_stats = None
+            self.device_status = None
+            self.start_button.setEnabled(False)
+            self.wave_test_button.setEnabled(False)
+            self.calibrate_silence_button.setEnabled(False)
+            self.stop_button.setEnabled(True)
+            self.encoding.setEnabled(False)
+            self.shift.setEnabled(False)
+            self.set_asr_settings_enabled(False)
+            self.worker.send(f"SHIFT {self.shift.value()}")
+            self.worker.send(f"START {self.encoding.currentData()}")
+            self.state_label.setText("静默环境采样中，请保持安静")
+            self.vad_status_label.setText(
+                f"正在采样环境噪声 {self.vad_calibration_ms.value()} ms…"
+            )
+            self.file_label.setText("静默环境采样不写 WAV，只更新音频阈值")
+            self.debug_logger.event(
+                "threshold_vad.calibration_start",
+                target_ms=int(self.vad_calibration_ms.value()),
+            )
+
         def begin_recording(self, mode: str) -> bool:
             if self.worker is None:
                 return False
@@ -451,6 +536,7 @@ def main() -> int:
             self.device_status = None
             self.start_button.setEnabled(False)
             self.wave_test_button.setEnabled(False)
+            self.calibrate_silence_button.setEnabled(False)
             self.stop_button.setEnabled(True)
             self.encoding.setEnabled(False)
             self.shift.setEnabled(False)
@@ -508,6 +594,7 @@ def main() -> int:
             self.set_asr_settings_enabled(True)
             self.start_button.setEnabled(self.worker is not None)
             self.wave_test_button.setEnabled(self.worker is not None)
+            self.calibrate_silence_button.setEnabled(self.worker is not None)
 
         def set_asr_settings_enabled(self, enabled: bool) -> None:
             for widget in (
@@ -528,15 +615,21 @@ def main() -> int:
                 self.asr_force_speech_ms,
                 self.save_asr_settings_button,
                 self.vad_enabled,
-                self.vad_model,
-                self.vad_device,
                 self.vad_sample_rate,
-                self.vad_chunk_ms,
+                self.vad_analysis_window_ms,
                 self.vad_queue_depth,
-                self.vad_model_kwargs,
-                self.vad_generate_kwargs,
+                self.vad_noise_rms,
+                self.vad_rms_multiplier,
+                self.vad_min_rms_delta,
+                self.vad_silence_ms,
+                self.vad_min_speech_ms,
+                self.vad_max_recording_ms,
+                self.vad_calibration_ms,
             ):
                 widget.setEnabled(enabled)
+            self.calibrate_silence_button.setEnabled(
+                enabled and self.worker is not None and self.capture_mode is None
+            )
 
         def asr_settings(self) -> VolcAsrSettings:
             return VolcAsrSettings(
@@ -557,26 +650,29 @@ def main() -> int:
                 force_to_speech_time_ms=int(self.asr_force_speech_ms.value()),
             )
 
-        def vad_settings(self) -> FunAsrVadSettings:
-            return FunAsrVadSettings(
-                model=self.vad_model.text().strip() or "fsmn-vad",
-                device=self.vad_device.text().strip() or "cpu",
+        def vad_settings(self) -> AudioThresholdVadSettings:
+            return AudioThresholdVadSettings(
                 sample_rate=int(self.vad_sample_rate.value()),
-                chunk_ms=int(self.vad_chunk_ms.value()),
+                analysis_window_ms=int(self.vad_analysis_window_ms.value()),
                 queue_depth=int(self.vad_queue_depth.value()),
-                model_kwargs_json=self.vad_model_kwargs.text().strip(),
-                generate_kwargs_json=self.vad_generate_kwargs.text().strip(),
+                noise_rms=float(self.vad_noise_rms.value()),
+                rms_multiplier=float(self.vad_rms_multiplier.value()),
+                min_rms_delta=float(self.vad_min_rms_delta.value()),
+                silence_ms=int(self.vad_silence_ms.value()),
+                min_speech_ms=int(self.vad_min_speech_ms.value()),
+                max_recording_ms=int(self.vad_max_recording_ms.value()),
+                calibration_ms=int(self.vad_calibration_ms.value()),
             )
 
-        def load_vad_settings(self) -> FunAsrVadSettings:
+        def load_vad_settings(self) -> AudioThresholdVadSettings:
             if not self.vad_settings_path.exists():
-                return FunAsrVadSettings()
+                return AudioThresholdVadSettings()
             data = json.loads(self.vad_settings_path.read_text(encoding="utf-8"))
-            settings = FunAsrVadSettings.from_json_dict(data)
+            settings = AudioThresholdVadSettings.from_json_dict(data)
             settings.validate()
             return settings
 
-        def save_vad_settings(self, settings: FunAsrVadSettings) -> None:
+        def save_vad_settings(self, settings: AudioThresholdVadSettings) -> None:
             self.vad_settings_path.parent.mkdir(parents=True, exist_ok=True)
             self.vad_settings_path.write_text(
                 json.dumps(settings.to_json_dict(), ensure_ascii=False, indent=2)
@@ -600,6 +696,15 @@ def main() -> int:
                 "ASR/VAD 配置已保存",
                 f"已保存到：\n{self.asr_settings_path}\n{self.vad_settings_path}",
             )
+
+        def update_vad_threshold_label(self) -> None:
+            try:
+                settings = self.vad_settings()
+                self.vad_threshold_label.setText(
+                    f"当前说话阈值 RMS：{settings.speech_rms_threshold:.0f}"
+                )
+            except Exception as exc:
+                self.vad_threshold_label.setText(f"阈值配置错误：{exc}")
 
         def start_asr_session(self) -> None:
             if self.asr_worker is not None:
@@ -630,7 +735,7 @@ def main() -> int:
                 return
             try:
                 settings = self.vad_settings()
-                self.vad_worker = FunAsrVadThread(
+                self.vad_worker = AudioThresholdVadThread(
                     settings,
                     on_event=self.bridge.vad_event.emit,
                     debug_logger=self.debug_logger,
@@ -658,6 +763,8 @@ def main() -> int:
                 values = np.asarray(frame.samples, dtype=np.float64)
                 rms = float(np.sqrt(np.mean(values * values))) if len(values) else 0.0
                 peak = int(np.max(np.abs(values))) if len(values) else 0
+                if self.capture_mode == "calibrate":
+                    self.collect_silence_calibration(frame, rms, peak)
                 clipped = " / 本帧削顶" if frame.flags & FLAG_CLIPPED else ""
                 if frame.encoding == ENCODING_PCM16:
                     mode = "PCM16"
@@ -709,6 +816,53 @@ def main() -> int:
                     f"模式 {'等待唤醒' if status.armed else '传输' if status.streaming else '停止'} / "
                     f"连接间隔 {status.reserved * 1.25:.2f} ms"
                 )
+
+        def collect_silence_calibration(
+            self,
+            frame: AudioFrame,
+            rms: float,
+            peak: int,
+        ) -> None:
+            self.calibration_rms_values.append(rms)
+            self.calibration_peak_values.append(peak)
+            self.calibration_samples += len(frame.samples)
+            target_samples = max(
+                1,
+                frame.sample_rate * int(self.vad_calibration_ms.value()) // 1000,
+            )
+            progress = min(100.0, self.calibration_samples * 100.0 / target_samples)
+            self.vad_status_label.setText(
+                f"静默环境采样中：{progress:.0f}% / RMS {rms:.0f} / Peak {peak}"
+            )
+            if self.calibration_samples >= target_samples:
+                self.finish_silence_calibration()
+
+        def finish_silence_calibration(self) -> None:
+            if self.worker is not None:
+                for _ in range(3):
+                    self.worker.send("STOP")
+            noise_rms = calibrated_noise_rms(self.calibration_rms_values)
+            peak = max(self.calibration_peak_values, default=0)
+            self.vad_noise_rms.setValue(noise_rms)
+            self.update_vad_threshold_label()
+            try:
+                settings = self.vad_settings()
+                self.save_vad_settings(settings)
+            except Exception as exc:
+                self.debug_logger.exception("threshold_vad.calibration_save_error", exc)
+            threshold = self.vad_settings().speech_rms_threshold
+            self.vad_status_label.setText(
+                f"静默采样完成：环境 RMS {noise_rms:.0f} / Peak {peak} / 说话阈值 {threshold:.0f}"
+            )
+            self.file_label.setText("静默环境采样完成，已更新本地音频阈值")
+            self.debug_logger.event(
+                "threshold_vad.calibration_done",
+                noise_rms=noise_rms,
+                peak=peak,
+                threshold=threshold,
+                windows=len(self.calibration_rms_values),
+            )
+            self.finish_recording()
 
         def refresh_plot(self) -> None:
             if self.samples:

@@ -26,11 +26,6 @@ gui = [
     "PySide6>=6.7",
     "websocket-client>=1.8",
 ]
-vad = [
-    "funasr>=1.2",
-    "torch>=2.3",
-    "torchaudio>=2.3",
-]
 serial = [
     "pyserial>=3.5",
 ]

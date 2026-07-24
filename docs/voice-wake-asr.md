@@ -96,16 +96,16 @@ wss://openspeech.bytedance.com/api/v3/sauc/bigmodel
 
 ## 当前 PC-side ASR/VAD 测试链路
 
-`test/inmp441-ble-capture` 分支的临时测试固件只负责 Hi ESP 唤醒和通过 BLE 传输 INMP441 音频；火山流式 ASR 与 FunASR FSMN-VAD 均在上位机 `smart-neckband-mic` 中运行。
+`test/inmp441-ble-capture` 分支的临时测试固件只负责 Hi ESP 唤醒和通过 BLE 传输 INMP441 音频；火山流式 ASR 与音频阈值自动断句均在上位机 `smart-neckband-mic` 中运行。
 
 上位机 ASR 页现在暴露以下调试参数：
 
 - 火山 ASR：endpoint、Resource ID、鉴权模式、密钥、UID、模型、音频队列深度、WebSocket 发送分片、连接/接收/final 超时、`end_window_size`、`force_to_speech_time`。
-- FunASR VAD：模型名或本地路径、device、采样率、chunk ms、音频队列深度、`AutoModel(...)` 高级 kwargs JSON、`generate(...)` 高级 kwargs JSON。默认 `AutoModel` kwargs 为 `{"disable_update": true}`，避免每次启动都检查 FunASR 更新。
+- 音频阈值 VAD：采样率、分析窗口、音频队列深度、静默 RMS、RMS 倍数、最小 RMS 增量、停止静默时长、最小说话时长、最大录音时长、静默采样时长。实际说话阈值为 `max(静默 RMS × 倍数, 静默 RMS + 最小增量)`。
 
-运行日志写入 `pc_app/data/mic_capture_debug.log`，包含唤醒、ASR 连接/发送/final、队列丢弃、VAD 模型加载、VAD generate 返回值和异常 traceback。日志会脱敏字段名里包含 key/token/secret/password/authorization 的值。
+运行日志写入 `pc_app/data/mic_capture_debug.log`，包含唤醒、ASR 连接/发送/final、队列丢弃、阈值 VAD chunk RMS/Peak、静默环境采样和异常 traceback。日志会脱敏字段名里包含 key/token/secret/password/authorization 的值。
 
-ASR 和 VAD 队列满时不再把本轮直接打成错误；上位机会丢弃最旧音频帧并继续处理，停止录音时也会优先腾出空间发送 final 标记。FunASR VAD 依赖 PyTorch；只安装 `funasr` 但没有 `torch/torchaudio` 时，上位机会明确报“缺少 PyTorch”，而不是笼统显示缺少 VAD。
+ASR 和 VAD 队列满时不再把本轮直接打成错误；上位机会丢弃最旧音频帧并继续处理，停止录音时也会优先腾出空间发送 final 标记。音频阈值 VAD 不依赖 FunASR、PyTorch 或本地模型；点击“静默环境采样”后，上位机会直接启动麦克风传输，采样环境噪声并自动更新静默 RMS。
 
 ## 状态与错误
 
