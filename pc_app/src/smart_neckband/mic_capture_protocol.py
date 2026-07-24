@@ -10,6 +10,7 @@ MAGIC = b"MIC1"
 VERSION = 1
 FRAME_TYPE_AUDIO = 1
 FRAME_TYPE_STATUS = 2
+FRAME_TYPE_WAKE = 3
 ENCODING_PCM16 = 1
 ENCODING_PCM8 = 2
 ENCODING_IMA_ADPCM = 3
@@ -20,6 +21,7 @@ FLAG_TX_ERROR = 1 << 2
 HEADER = struct.Struct("<4sBBBHIIQHH")
 CRC = struct.Struct("<H")
 STATUS_PAYLOAD = struct.Struct("<IIIIHBB")
+WAKE_PAYLOAD = struct.Struct("<IHH")
 MAX_PAYLOAD_BYTES = 1024
 
 ADPCM_STEP_TABLE = (
@@ -71,13 +73,24 @@ class DeviceStatusFrame:
     streaming: bool
 
 
-MicFrame = AudioFrame | DeviceStatusFrame
+@dataclass(frozen=True, slots=True)
+class WakeEventFrame:
+    encoding: int
+    sequence: int
+    sample_rate: int
+    detected_sample_index: int
+    wake_count: int
+    word_index: int
+
+
+MicFrame = AudioFrame | DeviceStatusFrame | WakeEventFrame
 
 
 @dataclass(slots=True)
 class ParserStats:
     audio_frames: int = 0
     status_frames: int = 0
+    wake_events: int = 0
     samples: int = 0
     sequence_gaps: int = 0
     crc_errors: int = 0
@@ -128,7 +141,11 @@ class MicFrameParser:
             ) = HEADER.unpack_from(self._buffer)
             if (
                 version != VERSION
-                or frame_type not in (FRAME_TYPE_AUDIO, FRAME_TYPE_STATUS)
+                or frame_type not in (
+                    FRAME_TYPE_AUDIO,
+                    FRAME_TYPE_STATUS,
+                    FRAME_TYPE_WAKE,
+                )
                 or sample_rate != 16_000
                 or payload_length > MAX_PAYLOAD_BYTES
             ):
@@ -199,6 +216,21 @@ class MicFrameParser:
                 sample_rate=sample_rate,
                 first_sample_index=first_sample_index,
                 samples=tuple(samples),
+            )
+
+        if frame_type == FRAME_TYPE_WAKE:
+            if len(payload) != WAKE_PAYLOAD.size or sample_count != 0:
+                self.stats.malformed_frames += 1
+                return None
+            wake_count, word_index, _reserved = WAKE_PAYLOAD.unpack(payload)
+            self.stats.wake_events += 1
+            return WakeEventFrame(
+                encoding=encoding,
+                sequence=sequence,
+                sample_rate=sample_rate,
+                detected_sample_index=first_sample_index,
+                wake_count=wake_count,
+                word_index=word_index,
             )
 
         if len(payload) != STATUS_PAYLOAD.size or sample_count != 0:

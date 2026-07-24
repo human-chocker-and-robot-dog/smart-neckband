@@ -10,13 +10,16 @@ from smart_neckband.mic_capture_protocol import (
     ENCODING_PCM8,
     FRAME_TYPE_AUDIO,
     FRAME_TYPE_STATUS,
+    FRAME_TYPE_WAKE,
     HEADER,
     MAGIC,
     STATUS_PAYLOAD,
+    WAKE_PAYLOAD,
     AudioFrame,
     DeviceStatusFrame,
     MicFrameParser,
     PcmWaveRecorder,
+    WakeEventFrame,
     crc16_ccitt_false,
 )
 
@@ -29,6 +32,7 @@ def make_frame(
     payload: bytes,
     flags: int = 0,
     encoding: int = ENCODING_PCM16,
+    first_sample_index: int | None = None,
 ) -> bytes:
     header = HEADER.pack(
         MAGIC,
@@ -38,7 +42,7 @@ def make_frame(
         flags,
         sequence,
         16_000,
-        sequence * sample_count,
+        sequence * sample_count if first_sample_index is None else first_sample_index,
         sample_count,
         len(payload),
     )
@@ -164,6 +168,31 @@ def test_status_frame_decodes_counters() -> None:
             streaming=True,
         )
     ]
+
+
+def test_hi_esp_wake_event_decodes_count_and_sample_index() -> None:
+    parser = MicFrameParser()
+    frames = parser.feed(
+        make_frame(
+            frame_type=FRAME_TYPE_WAKE,
+            sequence=3,
+            sample_count=0,
+            payload=WAKE_PAYLOAD.pack(3, 1, 0),
+            encoding=ENCODING_IMA_ADPCM,
+            first_sample_index=48_000,
+        )
+    )
+    assert frames == [
+        WakeEventFrame(
+            encoding=ENCODING_IMA_ADPCM,
+            sequence=3,
+            sample_rate=16_000,
+            detected_sample_index=48_000,
+            wake_count=3,
+            word_index=1,
+        )
+    ]
+    assert parser.stats.wake_events == 1
 
 
 def test_wave_recorder_writes_mono_16khz_pcm(tmp_path) -> None:

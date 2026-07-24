@@ -108,7 +108,8 @@ class MicBleClientThread(Thread):
                 except Empty:
                     await asyncio.sleep(0.03)
                     continue
-                if command.strip().upper().startswith("START "):
+                normalized = command.strip().upper()
+                if normalized.startswith("START ") or normalized.startswith("ARM "):
                     self._parser.reset()
                 await client.write_gatt_char(
                     BLE_UART_RX_UUID, command.encode("ascii"), response=True

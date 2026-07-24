@@ -1,8 +1,10 @@
 #include <limits.h>
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "ble_uart.h"
@@ -10,11 +12,14 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "esp_wn_iface.h"
+#include "esp_wn_models.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "host/ble_gap.h"
 #include "host/ble_hs.h"
+#include "model_path.h"
 #include "nvs_flash.h"
 
 #define MIC_SAMPLE_RATE_HZ 16000U
@@ -22,10 +27,12 @@
 #define MIC_BCLK_GPIO GPIO_NUM_4
 #define MIC_WS_GPIO GPIO_NUM_5
 #define MIC_SD_GPIO GPIO_NUM_20
-#define MIC_INITIAL_SHIFT 14U
+#define MIC_INITIAL_SHIFT 16U
+#define MIC_WAKE_COOLDOWN_SAMPLES (MIC_SAMPLE_RATE_HZ * 2U)
 
 #define MIC_FRAME_TYPE_AUDIO 1U
 #define MIC_FRAME_TYPE_STATUS 2U
+#define MIC_FRAME_TYPE_WAKE 3U
 #define MIC_ENCODING_PCM16 1U
 #define MIC_ENCODING_PCM8 2U
 #define MIC_ENCODING_IMA_ADPCM 3U
@@ -56,6 +63,7 @@ static i2s_chan_handle_t s_rx_channel;
 static QueueHandle_t s_command_queue;
 static QueueHandle_t s_tx_queue;
 static volatile bool s_streaming;
+static volatile bool s_wake_armed;
 static volatile uint8_t s_encoding = MIC_ENCODING_IMA_ADPCM;
 static volatile uint8_t s_pcm_shift = MIC_INITIAL_SHIFT;
 static volatile uint16_t s_conn_interval;
@@ -67,6 +75,15 @@ static uint64_t s_first_sample_index;
 static uint32_t s_i2s_error_count;
 static uint32_t s_tx_error_count;
 static uint32_t s_clipped_frame_count;
+static uint32_t s_wake_count;
+static uint64_t s_total_sample_index;
+static uint64_t s_last_wake_sample_index;
+static srmodel_list_t *s_srmodels;
+static const esp_wn_iface_t *s_wakenet;
+static model_iface_data_t *s_wakenet_data;
+static int16_t *s_wakenet_buffer;
+static size_t s_wakenet_chunk_samples;
+static size_t s_wakenet_buffered_samples;
 
 extern int ble_gap_conn_foreach_handle(
     ble_gap_conn_foreach_handle_fn *callback, void *arg);
@@ -286,6 +303,32 @@ static void send_status(void)
     }
 }
 
+static void send_wake_event(uint64_t detected_sample_index, uint16_t word_index)
+{
+    if (!ble_uart_is_connected() || !ble_uart_is_subscribed()) {
+        return;
+    }
+
+    uint8_t frame[MIC_HEADER_SIZE + 8U + MIC_CRC_SIZE] = {0};
+    const size_t payload_offset = begin_frame(
+        frame,
+        MIC_FRAME_TYPE_WAKE,
+        s_encoding,
+        0U,
+        s_wake_count,
+        detected_sample_index,
+        0U,
+        8U);
+    write_le32(frame + payload_offset, s_wake_count);
+    write_le16(frame + payload_offset + 4U, word_index);
+    write_le16(frame + payload_offset + 6U, 0U);
+    const size_t crc_offset = payload_offset + 8U;
+    write_le16(frame + crc_offset, crc16_ccitt_false(frame, crc_offset));
+    if (ble_uart_tx(frame, crc_offset + MIC_CRC_SIZE) != BLE_UART_OK) {
+        ++s_tx_error_count;
+    }
+}
+
 static void on_ble_rx(const uint8_t *data, size_t length)
 {
     if (data == NULL || length == 0U || s_command_queue == NULL) {
@@ -311,6 +354,69 @@ static void reset_capture_session(void)
     }
 }
 
+static void process_wakenet(const int16_t *pcm, size_t sample_count)
+{
+    if (s_wakenet == NULL ||
+        s_wakenet_data == NULL ||
+        s_wakenet_buffer == NULL ||
+        s_wakenet_chunk_samples == 0U) {
+        return;
+    }
+
+    size_t offset = 0U;
+    while (offset < sample_count) {
+        const size_t remaining = sample_count - offset;
+        const size_t capacity = s_wakenet_chunk_samples - s_wakenet_buffered_samples;
+        const size_t copy_count = remaining < capacity ? remaining : capacity;
+        memcpy(
+            s_wakenet_buffer + s_wakenet_buffered_samples,
+            pcm + offset,
+            copy_count * sizeof(pcm[0]));
+        offset += copy_count;
+        s_wakenet_buffered_samples += copy_count;
+
+        if (s_wakenet_buffered_samples != s_wakenet_chunk_samples) {
+            continue;
+        }
+
+        const int detected_word =
+            (int)s_wakenet->detect(s_wakenet_data, s_wakenet_buffer);
+        s_wakenet_buffered_samples = 0U;
+        if (detected_word <= 0) {
+            continue;
+        }
+
+        const uint64_t detected_sample_index = s_total_sample_index + offset;
+        if (s_wake_count != 0U &&
+            detected_sample_index - s_last_wake_sample_index <
+                MIC_WAKE_COOLDOWN_SAMPLES) {
+            continue;
+        }
+
+        s_last_wake_sample_index = detected_sample_index;
+        ++s_wake_count;
+        const char *wake_word =
+            s_wakenet->get_word_name(s_wakenet_data, detected_word);
+        ESP_LOGI(
+            TAG,
+            "wake detected: word=%s index=%d count=%" PRIu32,
+            wake_word != NULL ? wake_word : "Hi ESP",
+            detected_word,
+            s_wake_count);
+
+        if (s_wake_armed) {
+            s_wake_armed = false;
+            reset_capture_session();
+            s_streaming = true;
+            ESP_LOGI(TAG, "armed capture started after Hi ESP");
+        }
+        if (ble_uart_is_connected() && ble_uart_is_subscribed()) {
+            send_wake_event(detected_sample_index, (uint16_t)detected_word);
+            send_status();
+        }
+    }
+}
+
 static void command_task(void *arg)
 {
     (void)arg;
@@ -319,23 +425,45 @@ static void command_task(void *arg)
         if (xQueueReceive(s_command_queue, &command, portMAX_DELAY) != pdTRUE) {
             continue;
         }
-        if (strncmp(command.text, "START PCM16", 11U) == 0) {
+        if (strncmp(command.text, "ARM PCM16", 9U) == 0) {
+            s_encoding = MIC_ENCODING_PCM16;
+            s_streaming = false;
+            reset_capture_session();
+            s_wake_armed = true;
+            ESP_LOGI(TAG, "armed for Hi ESP: PCM16");
+        } else if (strncmp(command.text, "ARM PCM8", 8U) == 0) {
+            s_encoding = MIC_ENCODING_PCM8;
+            s_streaming = false;
+            reset_capture_session();
+            s_wake_armed = true;
+            ESP_LOGI(TAG, "armed for Hi ESP: PCM8");
+        } else if (strncmp(command.text, "ARM ADPCM", 9U) == 0) {
+            s_encoding = MIC_ENCODING_IMA_ADPCM;
+            s_streaming = false;
+            reset_capture_session();
+            s_wake_armed = true;
+            ESP_LOGI(TAG, "armed for Hi ESP: IMA ADPCM");
+        } else if (strncmp(command.text, "START PCM16", 11U) == 0) {
             s_encoding = MIC_ENCODING_PCM16;
             reset_capture_session();
+            s_wake_armed = false;
             s_streaming = true;
             ESP_LOGI(TAG, "capture started: PCM16");
         } else if (strncmp(command.text, "START PCM8", 10U) == 0) {
             s_encoding = MIC_ENCODING_PCM8;
             reset_capture_session();
+            s_wake_armed = false;
             s_streaming = true;
             ESP_LOGI(TAG, "capture started: PCM8");
         } else if (strncmp(command.text, "START ADPCM", 11U) == 0) {
             s_encoding = MIC_ENCODING_IMA_ADPCM;
             reset_capture_session();
+            s_wake_armed = false;
             s_streaming = true;
             ESP_LOGI(TAG, "capture started: IMA ADPCM");
         } else if (strncmp(command.text, "STOP", 4U) == 0) {
             s_streaming = false;
+            s_wake_armed = false;
             if (s_tx_queue != NULL) {
                 (void)xQueueReset(s_tx_queue);
             }
@@ -387,7 +515,7 @@ static void audio_task(void *arg)
             &bytes_read,
             200U);
         if (err != ESP_OK) {
-            if (s_streaming) {
+            if (s_streaming || s_wake_armed) {
                 ++s_i2s_error_count;
             }
             if (err != ESP_ERR_TIMEOUT) {
@@ -395,12 +523,23 @@ static void audio_task(void *arg)
             }
             continue;
         }
+
+        const size_t sample_count = bytes_read / sizeof(raw[0]);
+        bool clipped = false;
+        const uint8_t shift = s_pcm_shift;
+        for (size_t i = 0; i < sample_count; ++i) {
+            pcm[i] = pcm16_from_i2s(raw[i], shift, &clipped);
+        }
+        process_wakenet(pcm, sample_count);
+        s_total_sample_index += sample_count;
+
         const bool connected = ble_uart_is_connected();
         if (!connected) {
             s_conn_params_requested = false;
             s_conn_interval = 0U;
             s_was_connected = false;
             s_streaming = false;
+            s_wake_armed = false;
             (void)xQueueReset(s_tx_queue);
             continue;
         }
@@ -412,18 +551,13 @@ static void audio_task(void *arg)
         }
         if (!ble_uart_is_subscribed()) {
             s_streaming = false;
+            s_wake_armed = false;
             continue;
         }
         if (!s_streaming) {
             continue;
         }
 
-        const size_t sample_count = bytes_read / sizeof(raw[0]);
-        bool clipped = false;
-        const uint8_t shift = s_pcm_shift;
-        for (size_t i = 0; i < sample_count; ++i) {
-            pcm[i] = pcm16_from_i2s(raw[i], shift, &clipped);
-        }
         if (clipped) {
             ++s_clipped_frame_count;
         }
@@ -509,6 +643,67 @@ static void init_i2s(void)
     ESP_ERROR_CHECK(i2s_channel_enable(s_rx_channel));
 }
 
+static bool init_wakenet(void)
+{
+    s_srmodels = esp_srmodel_init("model");
+    if (s_srmodels == NULL) {
+        ESP_LOGE(TAG, "failed to load speech models from model partition");
+        return false;
+    }
+
+    char *model_name = esp_srmodel_filter(s_srmodels, ESP_WN_PREFIX, "hiesp");
+    if (model_name == NULL) {
+        ESP_LOGE(TAG, "wn9s_hiesp model not found");
+        return false;
+    }
+
+    s_wakenet = esp_wn_handle_from_name(model_name);
+    if (s_wakenet == NULL) {
+        ESP_LOGE(TAG, "WakeNet interface not found for %s", model_name);
+        return false;
+    }
+    s_wakenet_data = s_wakenet->create(model_name, DET_MODE_90);
+    if (s_wakenet_data == NULL) {
+        ESP_LOGE(TAG, "failed to create WakeNet model %s", model_name);
+        return false;
+    }
+
+    const int chunk_samples = s_wakenet->get_samp_chunksize(s_wakenet_data);
+    const int sample_rate = s_wakenet->get_samp_rate(s_wakenet_data);
+    const int channel_count = s_wakenet->get_channel_num(s_wakenet_data);
+    if (chunk_samples <= 0 ||
+        sample_rate != (int)MIC_SAMPLE_RATE_HZ ||
+        channel_count != 1) {
+        ESP_LOGE(
+            TAG,
+            "unsupported WakeNet format: chunk=%d rate=%d channels=%d",
+            chunk_samples,
+            sample_rate,
+            channel_count);
+        return false;
+    }
+
+    s_wakenet_chunk_samples = (size_t)chunk_samples;
+    s_wakenet_buffer =
+        calloc(s_wakenet_chunk_samples, sizeof(s_wakenet_buffer[0]));
+    if (s_wakenet_buffer == NULL) {
+        ESP_LOGE(
+            TAG,
+            "failed to allocate %u WakeNet samples",
+            (unsigned)s_wakenet_chunk_samples);
+        return false;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "WakeNet ready: model=%s word=%s chunk=%u rate=%d",
+        model_name,
+        s_wakenet->get_word_name(s_wakenet_data, 1),
+        (unsigned)s_wakenet_chunk_samples,
+        sample_rate);
+    return true;
+}
+
 void app_main(void)
 {
     ESP_ERROR_CHECK(nvs_flash_init());
@@ -541,6 +736,10 @@ void app_main(void)
     }
 
     init_i2s();
+    if (!init_wakenet()) {
+        ESP_LOGE(TAG, "Hi ESP initialization failed");
+        return;
+    }
     if (xTaskCreate(command_task, "mic_command", 3072U, NULL, 5U, NULL) != pdPASS ||
         xTaskCreate(tx_task, "mic_tx", 4096U, NULL, 5U, NULL) != pdPASS ||
         xTaskCreate(audio_task, "mic_audio", 6144U, NULL, 6U, NULL) != pdPASS) {

@@ -14,6 +14,7 @@ from .mic_capture_protocol import (
     ENCODING_PCM16,
     FLAG_CLIPPED,
     PcmWaveRecorder,
+    WakeEventFrame,
 )
 
 
@@ -87,7 +88,7 @@ def main() -> int:
             self.shift = QSpinBox()
             self.shift.setRange(10, 20)
             self.shift.setValue(16)
-            self.start_button = QPushButton("开始采集")
+            self.start_button = QPushButton("等待 Hi ESP")
             self.stop_button = QPushButton("停止并封装 WAV")
             self.start_button.setEnabled(False)
             self.stop_button.setEnabled(False)
@@ -231,12 +232,12 @@ def main() -> int:
             self.samples.clear()
             self.latest_stats = None
             self.worker.send(f"SHIFT {self.shift.value()}")
-            self.worker.send(f"START {self.encoding.currentData()}")
+            self.worker.send(f"ARM {self.encoding.currentData()}")
             self.start_button.setEnabled(False)
             self.stop_button.setEnabled(True)
             self.encoding.setEnabled(False)
             self.shift.setEnabled(False)
-            self.file_label.setText(f"正在写入 {self.path.text()}")
+            self.file_label.setText(f"等待 Hi ESP，唤醒后写入 {self.path.text()}")
 
         def stop_capture(self) -> None:
             if self.worker is not None:
@@ -273,11 +274,18 @@ def main() -> int:
                 self.level_label.setText(f"{mode} / RMS {rms:.0f} / Peak {peak}{clipped}")
             elif isinstance(frame, DeviceStatusFrame):
                 self.device_status = frame
+            elif isinstance(frame, WakeEventFrame):
+                self.state_label.setText("Hi ESP 已唤醒，正在录音")
+                if self.recorder is not None:
+                    self.file_label.setText(
+                        f"第 {frame.wake_count} 次唤醒，正在写入 {self.path.text()}"
+                    )
 
             if self.latest_stats is not None:
                 self.link_label.setText(
                     f"帧 {self.latest_stats.audio_frames} / "
                     f"样本 {self.latest_stats.samples} / "
+                    f"唤醒 {self.latest_stats.wake_events} / "
                     f"丢帧 {self.latest_stats.sequence_gaps} / "
                     f"CRC {self.latest_stats.crc_errors} / "
                     f"废弃字节 {self.latest_stats.discarded_bytes}"

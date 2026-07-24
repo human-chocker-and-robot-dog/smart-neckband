@@ -41,6 +41,9 @@ The PC sends newline-terminated ASCII controls:
 - `START PCM16`
 - `START PCM8`
 - `START ADPCM`
+- `ARM PCM16`
+- `ARM PCM8`
+- `ARM ADPCM`
 - `STOP`
 - `SHIFT <10..20>`
 - `INFO`
@@ -54,6 +57,10 @@ the audio payload to about 8 KB/s. Each independently decodable 25 ms block,
 header, and CRC fit in one notification at a 247-byte ATT MTU. PCM8 and PCM16
 are retained as explicit bandwidth stress modes and are not expected to be
 lossless on every Windows BLE adapter.
+
+Frame type 3 reports an official `Hi ESP` WakeNet event with the cumulative
+wake count, WakeNet word index, and monotonic detection sample index. `ARM`
+keeps audio local to WakeNet until this event, then starts the selected stream.
 
 The small PC UI is a separate entry point, `smart-neckband-mic`. It scans for
 the experimental device, connects over BLE, starts/stops capture, plots a
@@ -145,3 +152,40 @@ pumped. The microphone scanner now runs on a dedicated Python thread and
 returns results to the Qt thread through a signal. The complete PC suite still
 passed 76 tests, and a PySide6 application-thread smoke test discovered
 `CollarMic-2E4A` without the callback error.
+
+## Official Hi ESP wake-word extension
+
+The custom/template wake-word experiment is superseded by Espressif's
+official `Hi ESP` model. The ESP32-C3 test board uses the no-PSRAM
+`WakeNet9s` model `wn9s_hiesp` through the direct WakeNet interface; this is
+the single-microphone, lower-memory path recommended by the official
+ESP-Skainet example.
+
+The intended test flow is:
+
+1. The INMP441 continuously supplies mono 16 kHz signed PCM to WakeNet9s.
+2. The PC opens a WAV recorder and sends an `ARM` command over BLE.
+3. Saying `Hi ESP` emits a wake event and starts the existing ADPCM stream.
+4. The PC records post-wake audio and displays wake count and link integrity.
+5. `STOP` ends the stream and disarms the wake action.
+
+The wake model is stored in a dedicated `model` data partition. The temporary
+4 MB C3 partition layout keeps NVS and PHY data, allocates 1.5 MB to the
+factory application, and 640 KiB to the model. Flashing this new image remains
+blocked on a fresh explicit user instruction.
+
+### Hi ESP extension progress
+
+- [x] Official C3 model and direct WakeNet example verified.
+- [x] Component dependency, model selection, and partition layout added.
+- [x] Continuous WakeNet9s inference integrated with the I2S producer.
+- [x] BLE wake event and armed-recording protocol implemented.
+- [x] PC parser, tests, and GUI updated.
+- [x] Firmware build and size validation completed.
+- [ ] Hardware flash and spoken `Hi ESP` test explicitly authorized.
+
+The software-only Hi ESP build completed on ESP-IDF v6.0.2 with
+`esp-sr` 2.4.6. The selected `wn9s_hiesp` model is 122.83 KiB. The application
+binary is `0x98840` bytes, leaving 60% of the temporary 1.5 MiB factory
+partition free; DRAM use is 98,559 bytes (30.68%). The PC suite passed 77
+tests, including the new wake-event frame.
