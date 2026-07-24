@@ -17,6 +17,7 @@ param(
         "voice-model-provision",
         "pc-setup",
         "pc-gui",
+        "pc-mic",
         "pc-test"
     )]
     [string]$Action = "build",
@@ -343,6 +344,26 @@ switch ($Action) {
             Invoke-Native -FilePath $venvPython -Arguments @(
                 "-m", "smart_neckband"
             ) -Description "PC GUI"
+        }
+        finally {
+            Pop-Location
+        }
+    }
+    "pc-mic" {
+        $venvPython = Join-Path $PcDir ".venv\Scripts\python.exe"
+        if (-not (Test-Path -LiteralPath $venvPython)) {
+            throw "PC virtual environment is missing. Run '.\tools\project.ps1 pc-setup' first."
+        }
+        foreach ($moduleName in @("bleak", "numpy", "pyqtgraph", "PySide6")) {
+            if (-not (Test-PythonModule -FilePath $venvPython -ModuleName $moduleName)) {
+                throw "PC module '$moduleName' is missing from .venv. Run '.\tools\project.ps1 pc-setup' first."
+            }
+        }
+        Push-Location $PcDir
+        try {
+            Invoke-Native -FilePath $venvPython -Arguments @(
+                "-m", "smart_neckband.mic_capture_gui"
+            ) -Description "INMP441 BLE capture GUI"
         }
         finally {
             Pop-Location

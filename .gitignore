@@ -8,6 +8,9 @@ firmware/sdkconfig.esp32c3-voice
 firmware/sdkconfig.old
 firmware/sdkconfig.*.old
 firmware/managed_components/
+experiments/inmp441_ble_capture/firmware/build/
+experiments/inmp441_ble_capture/firmware/sdkconfig
+experiments/inmp441_ble_capture/firmware/sdkconfig.old
 
 # Local machine configuration
 config/local.ps1
@@ -36,6 +39,7 @@ dist/
 # Captured data and logs
 data/
 recordings/
+captures/
 *.ecg.bin
 *.parquet
 *.csv
