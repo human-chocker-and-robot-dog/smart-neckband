@@ -6,7 +6,8 @@ Create a disposable ESP32-C3 firmware and a small Windows PC application that
 verify the INMP441 wiring, run the official local `Hi ESP` WakeNet wake word,
 stream microphone samples over BLE UART after wake, run Volcengine/Doubao
 streaming ASR on the PC, display partial/final transcript text, and keep the
-waveform and link counters in a diagnostic tab.
+waveform and link counters in a diagnostic tab. The PC can optionally use
+FunASR `fsmn-vad` to decide when the utterance has ended.
 
 This experiment is intentionally separate from the production sensor firmware.
 It contains no ECG, IMU, OLED, Wi-Fi, ESP-side ASR, or Agent functionality.
@@ -75,9 +76,20 @@ The small PC UI is a separate entry point, `smart-neckband-mic`. It scans for
 the experimental device, connects over BLE, starts wake-gated capture, opens a
 PC-side Volcengine/Doubao V3 WebSocket ASR session after the `Hi ESP` wake
 event, streams decoded PCM16 audio to ASR, displays partial and final text, and
-sends the ASR final audio packet when the user stops the utterance. A
-diagnostic tab plots a rolling waveform, reports RMS/peak/link integrity, and
-writes a mono 16 kHz 16-bit WAV file.
+sends the ASR final audio packet when the user stops the utterance. When the
+optional FunASR `fsmn-vad` package is installed and enabled, decoded PCM16 is
+also fed to the VAD model in 200 ms chunks; a VAD speech-end event triggers the
+same stop/finalization path as the manual stop button. A diagnostic tab plots a
+rolling waveform, reports RMS/peak/link integrity, and writes a mono 16 kHz
+16-bit WAV file.
+
+FunASR VAD is intentionally a PC dependency, not an ESP dependency. It can be
+installed only for this experiment with:
+
+```powershell
+cd .\pc_app
+.\.venv\Scripts\python.exe -m pip install -e .[vad]
+```
 
 ## Validation
 

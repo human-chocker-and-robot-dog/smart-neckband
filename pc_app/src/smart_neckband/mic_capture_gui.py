@@ -16,6 +16,7 @@ from .mic_capture_protocol import (
     PcmWaveRecorder,
     WakeEventFrame,
 )
+from .funasr_vad import FunAsrVadSettings, FunAsrVadThread, VadEvent
 from .volc_asr_client import VolcAsrClientThread, VolcAsrEvent, VolcAsrSettings
 
 
@@ -26,6 +27,7 @@ def main() -> int:
         from PySide6.QtCore import QObject, QTimer, Signal
         from PySide6.QtWidgets import (
             QApplication,
+            QCheckBox,
             QComboBox,
             QFileDialog,
             QFormLayout,
@@ -53,6 +55,7 @@ def main() -> int:
         error = Signal(object)
         scan_finished = Signal(int, object, object)
         asr_event = Signal(object)
+        vad_event = Signal(object)
 
     class Window(QMainWindow):
         def __init__(self) -> None:
@@ -65,8 +68,10 @@ def main() -> int:
             self.bridge.error.connect(self.on_error)
             self.bridge.scan_finished.connect(self.finish_scan)
             self.bridge.asr_event.connect(self.on_asr_event)
+            self.bridge.vad_event.connect(self.on_vad_event)
             self.worker: MicBleClientThread | None = None
             self.asr_worker: VolcAsrClientThread | None = None
+            self.vad_worker: FunAsrVadThread | None = None
             self.scan_worker: Thread | None = None
             self.scan_generation = 0
             self.recorder: PcmWaveRecorder | None = None
@@ -120,6 +125,16 @@ def main() -> int:
             asr_form.addRow("UID", self.asr_uid)
             asr_form.addRow("模型", self.asr_model)
             asr_layout.addWidget(asr_group)
+
+            vad_group = QGroupBox("自动断句")
+            vad_layout = QVBoxLayout(vad_group)
+            self.vad_enabled = QCheckBox("启用 FunASR FSMN-VAD 自动停止")
+            self.vad_enabled.setChecked(True)
+            self.vad_status_label = QLabel("VAD 尚未启动")
+            self.vad_status_label.setWordWrap(True)
+            vad_layout.addWidget(self.vad_enabled)
+            vad_layout.addWidget(self.vad_status_label)
+            asr_layout.addWidget(vad_group)
 
             controls = QHBoxLayout()
             self.encoding = QComboBox()
@@ -303,6 +318,9 @@ def main() -> int:
             self.state_label.setText("正在确认 Hi ESP 固件…")
             self.asr_status_label.setText("等待 Hi ESP 唤醒")
             self.asr_partial_label.setText("Partial：--")
+            self.vad_status_label.setText(
+                "VAD 等待唤醒" if self.vad_enabled.isChecked() else "VAD 已关闭"
+            )
             self.asr_final_text.clear()
             self.file_label.setText(
                 f"等待设备确认；唤醒前不会显示波形，唤醒后写入 {self.path.text()}"
@@ -366,6 +384,7 @@ def main() -> int:
                 for _ in range(3):
                     self.worker.send("STOP")
             self.finish_asr_session()
+            self.finish_vad_session()
             self.finish_recording()
 
         def finish_recording(self) -> None:
@@ -393,6 +412,7 @@ def main() -> int:
                 self.asr_access_key,
                 self.asr_uid,
                 self.asr_model,
+                self.vad_enabled,
             ):
                 widget.setEnabled(enabled)
 
@@ -427,6 +447,22 @@ def main() -> int:
                 self.asr_status_label.setText("ASR 等待 final…")
                 self.asr_worker.finish()
 
+        def start_vad_session(self) -> None:
+            if not self.vad_enabled.isChecked():
+                self.vad_status_label.setText("VAD 已关闭")
+                return
+            if self.vad_worker is not None:
+                return
+            self.vad_worker = FunAsrVadThread(
+                FunAsrVadSettings(),
+                on_event=self.bridge.vad_event.emit,
+            )
+            self.vad_worker.start()
+
+        def finish_vad_session(self) -> None:
+            if self.vad_worker is not None:
+                self.vad_worker.finish()
+
         def on_frame(self, frame: object, stats: object) -> None:
             self.latest_stats = stats
             if isinstance(frame, AudioFrame):
@@ -435,6 +471,8 @@ def main() -> int:
                     self.recorder.write(frame.samples)
                 if self.capture_mode == "wake" and self.asr_worker is not None:
                     self.asr_worker.feed(frame.samples)
+                if self.capture_mode == "wake" and self.vad_worker is not None:
+                    self.vad_worker.feed(frame.samples)
                 values = np.asarray(frame.samples, dtype=np.float64)
                 rms = float(np.sqrt(np.mean(values * values))) if len(values) else 0.0
                 peak = int(np.max(np.abs(values))) if len(values) else 0
@@ -458,6 +496,7 @@ def main() -> int:
                 self.arm_timer.stop()
                 self.state_label.setText("Hi ESP 已唤醒，正在录音")
                 self.start_asr_session()
+                self.start_vad_session()
                 if self.recorder is not None:
                     self.file_label.setText(
                         f"第 {frame.wake_count} 次唤醒，正在写入 {self.path.text()}"
@@ -503,8 +542,27 @@ def main() -> int:
             elif event.kind == "closed":
                 self.asr_worker = None
 
+        def on_vad_event(self, event: object) -> None:
+            if not isinstance(event, VadEvent):
+                return
+            if event.kind == "status":
+                self.vad_status_label.setText(event.detail)
+            elif event.kind == "speech_start":
+                self.vad_status_label.setText(f"检测到开始说话：{event.detail}")
+            elif event.kind == "speech_end":
+                self.vad_status_label.setText(f"检测到说话结束：{event.detail}")
+                if self.capture_mode == "wake" and self.recorder is not None:
+                    self.stop_capture()
+            elif event.kind == "error":
+                self.vad_status_label.setText(f"VAD 错误：{event.detail}")
+            elif event.kind == "closed":
+                self.vad_worker = None
+
         def closeEvent(self, event: object) -> None:
             self.scan_generation += 1
+            if self.vad_worker is not None:
+                self.vad_worker.cancel()
+                self.vad_worker.join(timeout=2.0)
             if self.asr_worker is not None:
                 self.asr_worker.cancel()
                 self.asr_worker.join(timeout=2.0)
