@@ -11,7 +11,13 @@ from smart_neckband.ble_io import (
     _start_notify_after_bond,
 )
 from smart_neckband.serial_io import PcDataStores
-from smart_neckband.protocol import VoiceTextAckPayload, decode_packet
+from smart_neckband.protocol import (
+    VoiceTextAckPayload,
+    VoiceTextChunkPayload,
+    decode_packet,
+    encode_voice_text_chunk_packet,
+)
+from smart_neckband.source_coordinator import PacketReceipt
 from smart_neckband.webhook_store import WebhookStore
 
 
@@ -147,3 +153,69 @@ def test_voice_text_is_not_acked_when_persistence_fails() -> None:
     reader.feed_notification(packet)
 
     assert acks == []
+
+
+def test_voice_reset_candidate_is_not_persisted_or_acked_before_confirmation() -> None:
+    monotonic_values = iter((1, 2, 3))
+    events: list[str] = []
+    acks: list[bytes] = []
+
+    def make_receipt() -> PacketReceipt:
+        return PacketReceipt(
+            received_monotonic_ns=next(monotonic_values),
+            received_at_utc="2026-07-24T00:00:00.000Z",
+        )
+
+    def persist(transcript) -> bool:
+        events.append(transcript.text)
+        return True
+
+    baseline = encode_voice_text_chunk_packet(
+        packet_sequence=100,
+        timestamp_us=5_000_001,
+        chunk=VoiceTextChunkPayload(
+            utterance_id=1,
+            chunk_index=0,
+            chunk_count=1,
+            text_bytes=b"old",
+        ),
+    )
+    trigger = encode_voice_text_chunk_packet(
+        packet_sequence=1,
+        timestamp_us=1_000_000,
+        chunk=VoiceTextChunkPayload(
+            utterance_id=2,
+            chunk_index=0,
+            chunk_count=2,
+            text_bytes=b"new-",
+        ),
+    )
+    confirmation = encode_voice_text_chunk_packet(
+        packet_sequence=2,
+        timestamp_us=1_100_000,
+        chunk=VoiceTextChunkPayload(
+            utterance_id=2,
+            chunk_index=1,
+            chunk_count=2,
+            text_bytes=b"text",
+        ),
+    )
+    reader = BlePacketReader(
+        address="AA:BB:CC:DD:EE:FF",
+        voice_text_callback=persist,
+        control_write_callback=acks.append,
+        receipt_factory=make_receipt,
+    )
+
+    reader.feed_notification(baseline)
+    assert events == ["old"]
+    assert len(acks) == 1
+
+    reader.feed_notification(trigger)
+    assert events == ["old"]
+    assert len(acks) == 1
+
+    reader.feed_notification(confirmation)
+    assert events == ["old", "new-text"]
+    assert len(acks) == 2
+    assert reader.source_coordinator.stats.reset_confirmed == 1

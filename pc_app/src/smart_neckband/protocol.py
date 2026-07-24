@@ -320,6 +320,8 @@ class ParserStats:
     sequence_gap_count: int = 0
     packets_lost: int = 0
     last_sequence: int | None = None
+    duplicate_packets: int = 0
+    stale_packets: int = 0
 
 
 def _validate_u8(value: int, name: str) -> None:
@@ -691,19 +693,27 @@ class PacketParser:
             except ProtocolError:
                 self.stats.length_errors += 1
                 continue
-            self._record_sequence(parsed.header.packet_sequence)
-            self.stats.packets_ok += 1
             packets.append(parsed)
 
         return packets
 
-    def _record_sequence(self, sequence: int) -> None:
+    def commit_packet(self, packet: ParsedPacket) -> bool:
+        sequence = packet.header.packet_sequence
         last = self.stats.last_sequence
         if last is not None:
-            expected = (last + 1) & 0xFFFFFFFF
-            if sequence != expected:
+            distance = (sequence - last) & 0xFFFFFFFF
+            if distance == 0:
+                self.stats.duplicate_packets += 1
+                return False
+            if distance >= 0x80000000:
+                self.stats.stale_packets += 1
+                return False
+            if distance > 1:
                 self.stats.sequence_gap_count += 1
-                forward_distance = (sequence - expected) & 0xFFFFFFFF
-                if forward_distance < 0x80000000:
-                    self.stats.packets_lost += forward_distance
+                self.stats.packets_lost += distance - 1
         self.stats.last_sequence = sequence
+        self.stats.packets_ok += 1
+        return True
+
+    def reset_sequence_baseline(self) -> None:
+        self.stats.last_sequence = None
