@@ -9,6 +9,7 @@ from .mic_capture_ble import MicBleClientThread, scan_mic_devices
 from .mic_capture_protocol import (
     AudioFrame,
     DeviceStatusFrame,
+    ENCODING_IMA_ADPCM,
     ENCODING_PCM16,
     FLAG_CLIPPED,
     PcmWaveRecorder,
@@ -75,11 +76,12 @@ def main() -> int:
 
             controls = QHBoxLayout()
             self.encoding = QComboBox()
-            self.encoding.addItem("PCM16（音质优先）", "PCM16")
-            self.encoding.addItem("PCM8（链路优先）", "PCM8")
+            self.encoding.addItem("IMA-ADPCM（推荐，16 kHz 实时传输）", "ADPCM")
+            self.encoding.addItem("PCM8（带宽压力测试）", "PCM8")
+            self.encoding.addItem("PCM16（带宽压力测试）", "PCM16")
             self.shift = QSpinBox()
             self.shift.setRange(10, 20)
-            self.shift.setValue(14)
+            self.shift.setValue(16)
             self.start_button = QPushButton("开始采集")
             self.stop_button = QPushButton("停止并封装 WAV")
             self.start_button.setEnabled(False)
@@ -231,7 +233,12 @@ def main() -> int:
                 rms = float(np.sqrt(np.mean(values * values))) if len(values) else 0.0
                 peak = int(np.max(np.abs(values))) if len(values) else 0
                 clipped = " / 本帧削顶" if frame.flags & FLAG_CLIPPED else ""
-                mode = "PCM16" if frame.encoding == ENCODING_PCM16 else "PCM8→PCM16"
+                if frame.encoding == ENCODING_PCM16:
+                    mode = "PCM16"
+                elif frame.encoding == ENCODING_IMA_ADPCM:
+                    mode = "IMA-ADPCM→PCM16"
+                else:
+                    mode = "PCM8→PCM16"
                 self.level_label.setText(f"{mode} / RMS {rms:.0f} / Peak {peak}{clipped}")
             elif isinstance(frame, DeviceStatusFrame):
                 self.device_status = frame
@@ -250,7 +257,8 @@ def main() -> int:
                     f"I2S 错误 {status.i2s_errors} / "
                     f"TX 错误 {status.tx_errors} / "
                     f"削顶帧 {status.clipped_frames} / "
-                    f"右移 {status.pcm_shift}"
+                    f"右移 {status.pcm_shift} / "
+                    f"连接间隔 {status.reserved * 1.25:.2f} ms"
                 )
 
         def refresh_plot(self) -> None:

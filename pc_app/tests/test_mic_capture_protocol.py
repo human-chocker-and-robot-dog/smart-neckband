@@ -5,6 +5,7 @@ import wave
 
 from smart_neckband.mic_capture_protocol import (
     CRC,
+    ENCODING_IMA_ADPCM,
     ENCODING_PCM16,
     ENCODING_PCM8,
     FRAME_TYPE_AUDIO,
@@ -92,6 +93,24 @@ def test_pcm8_expands_to_pcm16_and_counts_sequence_gap() -> None:
     assert frames[0].encoding == ENCODING_PCM8
     assert frames[0].samples == (-32768, 0, 32512)
     assert parser.stats.sequence_gaps == 1
+
+
+def test_ima_adpcm_block_decodes_to_pcm16() -> None:
+    payload = struct.pack("<hBB", 0, 0, 0) + bytes((0x10, 0x32))
+    parser = MicFrameParser()
+    frames = parser.feed(
+        make_frame(
+            frame_type=FRAME_TYPE_AUDIO,
+            sequence=0,
+            sample_count=5,
+            payload=payload,
+            encoding=ENCODING_IMA_ADPCM,
+        )
+    )
+    assert len(frames) == 1
+    assert isinstance(frames[0], AudioFrame)
+    assert frames[0].encoding == ENCODING_IMA_ADPCM
+    assert frames[0].samples == (0, 0, 1, 4, 8)
 
 
 def test_crc_error_resynchronizes_to_next_frame() -> None:

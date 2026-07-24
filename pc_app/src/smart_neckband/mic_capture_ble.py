@@ -78,11 +78,14 @@ class MicBleClientThread(Thread):
 
     async def _run_async(self) -> None:
         try:
-            from bleak import BleakClient
+            from bleak import BleakClient, BleakScanner
         except ImportError as exc:
             raise RuntimeError("缺少 bleak；请先运行 .\\tools\\project.ps1 pc-setup") from exc
 
         self._on_state("connecting")
+        device = await BleakScanner.find_device_by_address(self._address, timeout=10.0)
+        if device is None:
+            raise RuntimeError(f"未找到 BLE 设备 {self._address}，请重新扫描。")
 
         def notification(_sender: object, data: bytearray) -> None:
             for frame in self._parser.feed(data):
@@ -92,7 +95,7 @@ class MicBleClientThread(Thread):
             self._stop_event.set()
 
         async with BleakClient(
-            self._address,
+            device,
             disconnected_callback=disconnected,
             timeout=20.0,
             winrt={"use_cached_services": False},

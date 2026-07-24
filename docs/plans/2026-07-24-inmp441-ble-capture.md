@@ -40,6 +40,7 @@ The PC sends newline-terminated ASCII controls:
 
 - `START PCM16`
 - `START PCM8`
+- `START ADPCM`
 - `STOP`
 - `SHIFT <10..20>`
 - `INFO`
@@ -47,8 +48,12 @@ The PC sends newline-terminated ASCII controls:
 The device sends self-synchronizing `MIC1` binary frames. Every frame includes
 version, type, encoding, flags, sequence, sample rate, first sample index,
 sample count, payload length, and CRC16-CCITT-FALSE. PCM8 transport is expanded
-back to PCM16 by the PC before plotting and WAV recording. PCM16 is the
-quality mode; PCM8 is the lower-bandwidth wiring and stability mode.
+back to PCM16 by the PC before plotting and WAV recording. IMA-ADPCM is the
+recommended real-time mode: it preserves the 16 kHz sample rate while reducing
+the audio payload to about 8 KB/s. Each independently decodable 25 ms block,
+header, and CRC fit in one notification at a 247-byte ATT MTU. PCM8 and PCM16
+are retained as explicit bandwidth stress modes and are not expected to be
+lossless on every Windows BLE adapter.
 
 The small PC UI is a separate entry point, `smart-neckband-mic`. It scans for
 the experimental device, connects over BLE, starts/stops capture, plots a
@@ -77,7 +82,7 @@ Acceptance evidence:
 
 - Firmware build and size complete for `esp32c3`.
 - PC protocol tests cover arbitrary notification fragmentation, resync, CRC,
-  sequence gaps, PCM16/PCM8 decoding, and WAV output.
+  sequence gaps, PCM16/PCM8/IMA-ADPCM decoding, and WAV output.
 - Flash completes with hash verification.
 - In the PC UI, quiet-room and speech samples are visibly different, CRC
   errors remain zero, and sequence gaps are measured rather than hidden.
@@ -90,17 +95,45 @@ Acceptance evidence:
 - [x] Standalone firmware and protocol implemented.
 - [x] PC capture UI and WAV recorder implemented.
 - [x] Software validation completed.
-- [ ] Safe hardware flash completed.
-- [ ] Live audio evidence captured.
+- [x] Safe hardware flash completed.
+- [x] Live audio evidence captured.
 
 ## Software validation result
 
 On 2026-07-24, ESP-IDF v6.0.2 built the standalone `esp32c3` firmware
-successfully. The final image was `0x7fc20` bytes, leaving 50% of the 1 MiB
-factory application partition free. The size report showed 91,871 bytes of
-DRAM use (28.59%).
+successfully. The final image was `0x80210` bytes, leaving 50% of the 1 MiB
+factory application partition free. The size report showed 91,879 bytes of
+DRAM use (28.60%).
 
-The complete PC suite passed 75 tests. The five experiment-specific tests
+The complete PC suite passed 76 tests. The six experiment-specific tests
 passed again after the final implementation change, the GUI and its BLE/Qt
 dependencies imported successfully in the existing project environment, and
 `git diff --check` passed.
+
+## Hardware flash result
+
+On 2026-07-24, after the user explicitly confirmed that no body electrodes
+were connected, the standalone image was written to the ESP32-C3 on COM21.
+The final flash run explicitly hash-verified the bootloader, partition table,
+and 524,816-byte application image, then hard-reset the board. A BLE scan found
+the firmware-specific advertisement `CollarMic-2E4A` at
+`44:B1:76:1A:2E:4A`.
+
+The first PCM8 hardware run demonstrated that the Windows adapter could not
+sustain a 16 KB/s raw stream: notifications starved control writes and caused
+sequence gaps. The final design uses 400-sample independently decodable
+IMA-ADPCM blocks, an I2S producer/BLE consumer queue, disconnect auto-stop, and
+a requested 7.5–15 ms connection interval.
+
+The final three-second hardware run received 121 frames and 48,400 samples,
+corresponding to 3.025 seconds at 16 kHz. Sequence gaps, CRC errors, malformed
+frames, discarded bytes, I2S errors, BLE TX errors, and clipped frames were
+all zero. The negotiated connection interval was 15 ms. The decoded signal
+had RMS 1,362 and peak 8,887 at PCM shift 16. The saved smoke-test file was
+verified as mono, 16-bit, 16 kHz WAV with 48,400 frames.
+
+One ESP-IDF integration bug was found during the hardware test:
+`i2s_channel_read()` takes milliseconds, but the initial implementation passed
+`pdMS_TO_TICKS(200)`. With `CONFIG_FREERTOS_HZ=100`, this became a 20 ms
+timeout, shorter than the 25 ms needed for a 400-sample block. Passing `200U`
+directly removed all I2S timeouts and restored the complete sample timeline.

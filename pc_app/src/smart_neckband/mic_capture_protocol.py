@@ -12,6 +12,7 @@ FRAME_TYPE_AUDIO = 1
 FRAME_TYPE_STATUS = 2
 ENCODING_PCM16 = 1
 ENCODING_PCM8 = 2
+ENCODING_IMA_ADPCM = 3
 FLAG_CLIPPED = 1 << 0
 FLAG_I2S_ERROR = 1 << 1
 FLAG_TX_ERROR = 1 << 2
@@ -20,6 +21,21 @@ HEADER = struct.Struct("<4sBBBHIIQHH")
 CRC = struct.Struct("<H")
 STATUS_PAYLOAD = struct.Struct("<IIIIHBB")
 MAX_PAYLOAD_BYTES = 1024
+
+ADPCM_STEP_TABLE = (
+    7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31,
+    34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130,
+    143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449,
+    494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411,
+    1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026,
+    4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442,
+    11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623,
+    27086, 29794, 32767,
+)
+ADPCM_INDEX_TABLE = (
+    -1, -1, -1, -1, 2, 4, 6, 8,
+    -1, -1, -1, -1, 2, 4, 6, 8,
+)
 
 
 def crc16_ccitt_false(data: bytes | bytearray | memoryview) -> int:
@@ -163,6 +179,11 @@ class MicFrameParser:
                 samples = struct.unpack(f"<{sample_count}h", payload)
             elif encoding == ENCODING_PCM8 and len(payload) == sample_count:
                 samples = tuple(value << 8 for value in struct.unpack(f"<{sample_count}b", payload))
+            elif encoding == ENCODING_IMA_ADPCM:
+                samples = self._decode_ima_adpcm(payload, sample_count)
+                if samples is None:
+                    self.stats.malformed_frames += 1
+                    return None
             else:
                 self.stats.malformed_frames += 1
                 return None
@@ -205,6 +226,34 @@ class MicFrameParser:
             pcm_shift=pcm_shift,
             streaming=bool(streaming),
         )
+
+    @staticmethod
+    def _decode_ima_adpcm(payload: bytes, sample_count: int) -> tuple[int, ...] | None:
+        expected_length = 4 + (sample_count // 2)
+        if sample_count == 0 or len(payload) != expected_length:
+            return None
+        predictor, index, _reserved = struct.unpack_from("<hBB", payload)
+        if index > 88:
+            return None
+
+        samples = [predictor]
+        for sample_index in range(1, sample_count):
+            nibble_index = sample_index - 1
+            encoded = payload[4 + nibble_index // 2]
+            code = encoded & 0x0F if nibble_index % 2 == 0 else encoded >> 4
+            step = ADPCM_STEP_TABLE[index]
+            delta = step >> 3
+            if code & 4:
+                delta += step
+            if code & 2:
+                delta += step >> 1
+            if code & 1:
+                delta += step >> 2
+            predictor += -delta if code & 8 else delta
+            predictor = max(-32768, min(32767, predictor))
+            index = max(0, min(88, index + ADPCM_INDEX_TABLE[code]))
+            samples.append(predictor)
+        return tuple(samples)
 
 
 class PcmWaveRecorder:
