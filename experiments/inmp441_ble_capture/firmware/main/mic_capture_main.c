@@ -339,6 +339,14 @@ static void on_ble_rx(const uint8_t *data, size_t length)
     const size_t copy_length =
         length < sizeof(command.text) - 1U ? length : sizeof(command.text) - 1U;
     memcpy(command.text, data, copy_length);
+
+    if (strncmp(command.text, "STOP", 4U) == 0) {
+        s_streaming = false;
+        s_wake_armed = false;
+        if (s_tx_queue != NULL) {
+            (void)xQueueReset(s_tx_queue);
+        }
+    }
     (void)xQueueSend(s_command_queue, &command, 0U);
 }
 

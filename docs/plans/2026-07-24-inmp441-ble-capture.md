@@ -61,6 +61,9 @@ lossless on every Windows BLE adapter.
 Frame type 3 reports an official `Hi ESP` WakeNet event with the cumulative
 wake count, WakeNet word index, and monotonic detection sample index. `ARM`
 keeps audio local to WakeNet until this event, then starts the selected stream.
+`STOP` clears both streaming and armed state immediately in the BLE RX path,
+then reports status through the normal command task so the next wake test can
+be armed without power-cycling the board.
 The status payload's final state byte is 0 for stopped, 1 for streaming, and 2
 for armed. Older firmware reports only 0/1, so the PC can detect an unsupported
 `ARM` command instead of leaving the user waiting without an explanation.

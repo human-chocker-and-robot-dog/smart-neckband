@@ -294,7 +294,8 @@ def main() -> int:
 
         def stop_capture(self) -> None:
             if self.worker is not None:
-                self.worker.send("STOP")
+                for _ in range(3):
+                    self.worker.send("STOP")
             self.finish_recording()
 
         def finish_recording(self) -> None:
