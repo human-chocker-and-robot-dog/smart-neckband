@@ -11,6 +11,8 @@ import time
 import uuid
 from typing import Callable
 
+from .mic_capture_debug import DebugLogger
+
 
 VOLC_ASR_ENDPOINT = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel"
 MESSAGE_FULL_REQUEST = 1
@@ -37,6 +39,10 @@ class VolcAsrSettings:
     connect_timeout_s: float = 10.0
     receive_timeout_s: float = 0.1
     final_timeout_s: float = 5.0
+    audio_queue_depth: int = 512
+    audio_chunk_ms: int = 200
+    end_window_size_ms: int = 800
+    force_to_speech_time_ms: int = 1000
 
     @classmethod
     def from_environment(cls) -> "VolcAsrSettings":
@@ -53,6 +59,12 @@ class VolcAsrSettings:
             or "smart-neckband-pc",
             model_name=os.getenv("VOLC_ASR_MODEL_NAME", "bigmodel").strip()
             or "bigmodel",
+            audio_queue_depth=_env_int("VOLC_ASR_AUDIO_QUEUE_DEPTH", 512),
+            audio_chunk_ms=_env_int("VOLC_ASR_AUDIO_CHUNK_MS", 200),
+            end_window_size_ms=_env_int("VOLC_ASR_END_WINDOW_SIZE_MS", 800),
+            force_to_speech_time_ms=_env_int(
+                "VOLC_ASR_FORCE_TO_SPEECH_TIME_MS", 1000
+            ),
         )
 
     def validate(self) -> None:
@@ -68,6 +80,14 @@ class VolcAsrSettings:
                 raise ValueError("App Key 和 Access Key 不能为空")
         else:
             raise ValueError(f"未知鉴权模式：{self.auth_mode}")
+        if self.audio_queue_depth < 8:
+            raise ValueError("ASR 音频队列深度至少为 8")
+        if self.audio_chunk_ms < 20:
+            raise ValueError("ASR 发送分片至少为 20 ms")
+        if self.end_window_size_ms < 0:
+            raise ValueError("ASR end_window_size 不能为负数")
+        if self.force_to_speech_time_ms < 0:
+            raise ValueError("ASR force_to_speech_time 不能为负数")
 
     def to_json_dict(self) -> dict[str, object]:
         return {
@@ -79,6 +99,13 @@ class VolcAsrSettings:
             "resource_id": self.resource_id,
             "uid": self.uid,
             "model_name": self.model_name,
+            "connect_timeout_s": self.connect_timeout_s,
+            "receive_timeout_s": self.receive_timeout_s,
+            "final_timeout_s": self.final_timeout_s,
+            "audio_queue_depth": self.audio_queue_depth,
+            "audio_chunk_ms": self.audio_chunk_ms,
+            "end_window_size_ms": self.end_window_size_ms,
+            "force_to_speech_time_ms": self.force_to_speech_time_ms,
         }
 
     @classmethod
@@ -98,6 +125,26 @@ class VolcAsrSettings:
             uid=str(data.get("uid", defaults.uid)).strip() or defaults.uid,
             model_name=str(data.get("model_name", defaults.model_name)).strip()
             or defaults.model_name,
+            connect_timeout_s=_number(
+                data.get("connect_timeout_s"), defaults.connect_timeout_s
+            ),
+            receive_timeout_s=_number(
+                data.get("receive_timeout_s"), defaults.receive_timeout_s
+            ),
+            final_timeout_s=_number(
+                data.get("final_timeout_s"), defaults.final_timeout_s
+            ),
+            audio_queue_depth=_integer(
+                data.get("audio_queue_depth"), defaults.audio_queue_depth
+            ),
+            audio_chunk_ms=_integer(data.get("audio_chunk_ms"), defaults.audio_chunk_ms),
+            end_window_size_ms=_integer(
+                data.get("end_window_size_ms"), defaults.end_window_size_ms
+            ),
+            force_to_speech_time_ms=_integer(
+                data.get("force_to_speech_time_ms"),
+                defaults.force_to_speech_time_ms,
+            ),
         )
 
 
@@ -125,6 +172,30 @@ class VolcAsrEvent:
 
 
 EventCallback = Callable[[VolcAsrEvent], None]
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name, "").strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _integer(value: object, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _number(value: object, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def build_client_frame(
@@ -162,8 +233,8 @@ def build_full_request(settings: VolcAsrSettings) -> bytes:
             "enable_punc": True,
             "enable_itn": True,
             "show_utterances": True,
-            "end_window_size": 800,
-            "force_to_speech_time": 1000,
+            "end_window_size": settings.end_window_size_ms,
+            "force_to_speech_time": settings.force_to_speech_time_ms,
         },
     }
     payload = json.dumps(
@@ -273,38 +344,68 @@ class VolcAsrClientThread(Thread):
         settings: VolcAsrSettings,
         *,
         on_event: EventCallback,
+        debug_logger: DebugLogger | None = None,
     ) -> None:
         super().__init__(name="volc-asr-client", daemon=True)
         settings.validate()
         self._settings = settings
         self._on_event = on_event
-        self._audio: Queue[tuple[int, ...] | None] = Queue(maxsize=128)
+        self._logger = debug_logger
+        self._audio: Queue[tuple[int, ...] | None] = Queue(
+            maxsize=settings.audio_queue_depth
+        )
         self._stop_event = Event()
+        self._finish_event = Event()
+        self._dropped_frames = 0
+        self._sent_chunks = 0
 
     def feed(self, samples: tuple[int, ...]) -> None:
         if self._stop_event.is_set():
             return
+        if self._finish_event.is_set():
+            return
+        item = tuple(samples)
         try:
-            self._audio.put_nowait(tuple(samples))
+            self._audio.put_nowait(item)
         except Exception:
-            self._on_event(VolcAsrEvent("error", detail="ASR 音频队列已满"))
+            self._drop_oldest_audio_frame()
+            try:
+                self._audio.put_nowait(item)
+            except Exception:
+                self._dropped_frames += 1
+            self._log_queue_drop()
 
     def finish(self) -> None:
-        try:
-            self._audio.put_nowait(None)
-        except Exception:
-            self._stop_event.set()
+        self._finish_event.set()
+        while True:
+            try:
+                self._audio.put_nowait(None)
+                self._log("asr.finish_enqueued", queue_size=self._audio.qsize())
+                return
+            except Exception:
+                if not self._drop_oldest_audio_frame():
+                    self._stop_event.set()
+                    return
 
     def cancel(self) -> None:
         self._stop_event.set()
-        self.finish()
+        try:
+            self._audio.put_nowait(None)
+        except Exception:
+            pass
 
     def run(self) -> None:
         try:
             self._run()
         except BaseException as exc:
+            self._log_exception("asr.thread_error", exc)
             self._on_event(VolcAsrEvent("error", detail=str(exc)))
         finally:
+            self._log(
+                "asr.closed",
+                dropped_frames=self._dropped_frames,
+                sent_chunks=self._sent_chunks,
+            )
             self._on_event(VolcAsrEvent("closed"))
 
     def _run(self) -> None:
@@ -316,6 +417,14 @@ class VolcAsrClientThread(Thread):
             ) from exc
 
         headers = self._headers()
+        self._log(
+            "asr.connect_start",
+            endpoint=self._settings.endpoint,
+            queue_depth=self._settings.audio_queue_depth,
+            audio_chunk_ms=self._settings.audio_chunk_ms,
+            end_window_size_ms=self._settings.end_window_size_ms,
+            force_to_speech_time_ms=self._settings.force_to_speech_time_ms,
+        )
         self._on_event(VolcAsrEvent("status", detail="ASR 连接中…"))
         ws = websocket.create_connection(
             self._settings.endpoint,
@@ -329,15 +438,36 @@ class VolcAsrClientThread(Thread):
             self._on_event(VolcAsrEvent("status", detail="ASR 正在识别"))
             final_sent = False
             final_deadline = 0.0
+            pending: list[int] = []
+            chunk_samples = max(1, 16000 * self._settings.audio_chunk_ms // 1000)
             while not self._stop_event.is_set():
                 try:
                     item = self._audio.get(timeout=0.02)
                     if item is None:
-                        ws.send_binary(build_audio_frame((), final=True))
+                        ws.send_binary(build_audio_frame(tuple(pending), final=True))
+                        self._sent_chunks += 1
+                        self._log(
+                            "asr.send_final",
+                            samples=len(pending),
+                            dropped_frames=self._dropped_frames,
+                        )
+                        pending.clear()
                         final_sent = True
                         final_deadline = time.monotonic() + self._settings.final_timeout_s
                     else:
-                        ws.send_binary(build_audio_frame(item, final=False))
+                        pending.extend(item)
+                        while len(pending) >= chunk_samples:
+                            current = tuple(pending[:chunk_samples])
+                            del pending[:chunk_samples]
+                            ws.send_binary(build_audio_frame(current, final=False))
+                            self._sent_chunks += 1
+                            if self._sent_chunks == 1 or self._sent_chunks % 25 == 0:
+                                self._log(
+                                    "asr.send_audio",
+                                    sent_chunks=self._sent_chunks,
+                                    samples=len(current),
+                                    queue_size=self._audio.qsize(),
+                                )
                 except Empty:
                     pass
 
@@ -347,6 +477,7 @@ class VolcAsrClientThread(Thread):
                     message = None
                 if message is None:
                     if final_sent and time.monotonic() >= final_deadline:
+                        self._log("asr.final_timeout")
                         self._on_event(VolcAsrEvent("error", detail="ASR final 超时"))
                         break
                     continue
@@ -355,6 +486,12 @@ class VolcAsrClientThread(Thread):
                 event = parse_server_frame(bytes(message))
                 if event is None:
                     continue
+                self._log(
+                    "asr.event",
+                    kind=event.kind,
+                    text=event.text,
+                    detail=event.detail,
+                )
                 self._on_event(event)
                 if event.kind in ("final", "error"):
                     break
@@ -363,6 +500,43 @@ class VolcAsrClientThread(Thread):
                 ws.close()
             except Exception:
                 pass
+
+    def _drop_oldest_audio_frame(self) -> bool:
+        try:
+            dropped = self._audio.get_nowait()
+        except Empty:
+            return False
+        if dropped is None:
+            try:
+                self._audio.put_nowait(None)
+            except Exception:
+                pass
+            return False
+        self._dropped_frames += 1
+        return True
+
+    def _log_queue_drop(self) -> None:
+        self._log(
+            "asr.queue_drop",
+            dropped_frames=self._dropped_frames,
+            queue_size=self._audio.qsize(),
+            queue_depth=self._settings.audio_queue_depth,
+        )
+        if self._dropped_frames == 1 or self._dropped_frames % 100 == 0:
+            self._on_event(
+                VolcAsrEvent(
+                    "status",
+                    detail=f"ASR 忙，已丢弃旧音频 {self._dropped_frames} 帧",
+                )
+            )
+
+    def _log(self, name: str, **fields: object) -> None:
+        if self._logger is not None:
+            self._logger.event(name, **fields)
+
+    def _log_exception(self, name: str, exc: BaseException, **fields: object) -> None:
+        if self._logger is not None:
+            self._logger.exception(name, exc, **fields)
 
     def _headers(self) -> list[str]:
         connection_id = str(uuid.uuid4())

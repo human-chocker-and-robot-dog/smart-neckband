@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime
+import json
 from pathlib import Path
 import sys
 from threading import Thread
 
+from .mic_capture_debug import DebugLogger
 from .mic_capture_ble import MicBleClientThread, scan_mic_devices
 from .mic_capture_protocol import (
     AudioFrame,
@@ -35,6 +37,7 @@ def main() -> int:
             QApplication,
             QCheckBox,
             QComboBox,
+            QDoubleSpinBox,
             QFileDialog,
             QFormLayout,
             QGroupBox,
@@ -100,6 +103,9 @@ def main() -> int:
             layout.addLayout(connection_row)
 
             self.asr_settings_path = Path.cwd() / "data" / "volc_asr_settings.json"
+            self.vad_settings_path = Path.cwd() / "data" / "funasr_vad_settings.json"
+            self.debug_log_path = Path.cwd() / "data" / "mic_capture_debug.log"
+            self.debug_logger = DebugLogger(self.debug_log_path)
             try:
                 settings = load_volc_asr_settings(self.asr_settings_path)
             except Exception as exc:
@@ -108,6 +114,15 @@ def main() -> int:
                     self,
                     "ASR 配置读取失败",
                     f"无法读取本地 ASR 配置，将使用环境变量/default。\n\n{exc}",
+                )
+            try:
+                vad_settings = self.load_vad_settings()
+            except Exception as exc:
+                vad_settings = FunAsrVadSettings()
+                QMessageBox.warning(
+                    self,
+                    "VAD 配置读取失败",
+                    f"无法读取本地 VAD 配置，将使用默认值。\n\n{exc}",
                 )
 
             tabs = QTabWidget()
@@ -130,6 +145,34 @@ def main() -> int:
             self.asr_access_key.setEchoMode(QLineEdit.EchoMode.Password)
             self.asr_uid = QLineEdit(settings.uid)
             self.asr_model = QLineEdit(settings.model_name)
+            self.asr_queue_depth = QSpinBox()
+            self.asr_queue_depth.setRange(8, 4096)
+            self.asr_queue_depth.setValue(settings.audio_queue_depth)
+            self.asr_chunk_ms = QSpinBox()
+            self.asr_chunk_ms.setRange(20, 1000)
+            self.asr_chunk_ms.setSingleStep(20)
+            self.asr_chunk_ms.setValue(settings.audio_chunk_ms)
+            self.asr_connect_timeout = QDoubleSpinBox()
+            self.asr_connect_timeout.setRange(1.0, 60.0)
+            self.asr_connect_timeout.setSingleStep(1.0)
+            self.asr_connect_timeout.setValue(settings.connect_timeout_s)
+            self.asr_receive_timeout = QDoubleSpinBox()
+            self.asr_receive_timeout.setRange(0.02, 5.0)
+            self.asr_receive_timeout.setSingleStep(0.02)
+            self.asr_receive_timeout.setDecimals(2)
+            self.asr_receive_timeout.setValue(settings.receive_timeout_s)
+            self.asr_final_timeout = QDoubleSpinBox()
+            self.asr_final_timeout.setRange(1.0, 30.0)
+            self.asr_final_timeout.setSingleStep(1.0)
+            self.asr_final_timeout.setValue(settings.final_timeout_s)
+            self.asr_end_window_ms = QSpinBox()
+            self.asr_end_window_ms.setRange(0, 5000)
+            self.asr_end_window_ms.setSingleStep(100)
+            self.asr_end_window_ms.setValue(settings.end_window_size_ms)
+            self.asr_force_speech_ms = QSpinBox()
+            self.asr_force_speech_ms.setRange(0, 10000)
+            self.asr_force_speech_ms.setSingleStep(100)
+            self.asr_force_speech_ms.setValue(settings.force_to_speech_time_ms)
             asr_form.addRow("Endpoint", self.asr_endpoint)
             asr_form.addRow("Resource ID", self.asr_resource_id)
             asr_form.addRow("鉴权模式", self.asr_auth_mode)
@@ -138,18 +181,52 @@ def main() -> int:
             asr_form.addRow("Access Key", self.asr_access_key)
             asr_form.addRow("UID", self.asr_uid)
             asr_form.addRow("模型", self.asr_model)
-            self.save_asr_settings_button = QPushButton("保存 ASR 配置")
+            asr_form.addRow("ASR 队列深度", self.asr_queue_depth)
+            asr_form.addRow("ASR 发送分片 ms", self.asr_chunk_ms)
+            asr_form.addRow("连接超时 s", self.asr_connect_timeout)
+            asr_form.addRow("接收轮询超时 s", self.asr_receive_timeout)
+            asr_form.addRow("final 等待超时 s", self.asr_final_timeout)
+            asr_form.addRow("end_window_size ms", self.asr_end_window_ms)
+            asr_form.addRow("force_to_speech_time ms", self.asr_force_speech_ms)
+            self.save_asr_settings_button = QPushButton("保存 ASR/VAD 配置")
             asr_form.addRow("本地配置", self.save_asr_settings_button)
             asr_layout.addWidget(asr_group)
 
             vad_group = QGroupBox("自动断句")
-            vad_layout = QVBoxLayout(vad_group)
+            vad_layout = QFormLayout(vad_group)
             self.vad_enabled = QCheckBox("启用 FunASR FSMN-VAD 自动停止")
             self.vad_enabled.setChecked(True)
+            self.vad_model = QLineEdit(vad_settings.model)
+            self.vad_device = QLineEdit(vad_settings.device)
+            self.vad_sample_rate = QSpinBox()
+            self.vad_sample_rate.setRange(8000, 48000)
+            self.vad_sample_rate.setSingleStep(1000)
+            self.vad_sample_rate.setValue(vad_settings.sample_rate)
+            self.vad_chunk_ms = QSpinBox()
+            self.vad_chunk_ms.setRange(20, 1000)
+            self.vad_chunk_ms.setSingleStep(20)
+            self.vad_chunk_ms.setValue(vad_settings.chunk_ms)
+            self.vad_queue_depth = QSpinBox()
+            self.vad_queue_depth.setRange(8, 4096)
+            self.vad_queue_depth.setValue(vad_settings.queue_depth)
+            self.vad_model_kwargs = QLineEdit(vad_settings.model_kwargs_json)
+            self.vad_model_kwargs.setPlaceholderText('例如 {"disable_update": true}')
+            self.vad_generate_kwargs = QLineEdit(vad_settings.generate_kwargs_json)
+            self.vad_generate_kwargs.setPlaceholderText('例如 {"max_end_silence_time": 800}')
             self.vad_status_label = QLabel("VAD 尚未启动")
             self.vad_status_label.setWordWrap(True)
-            vad_layout.addWidget(self.vad_enabled)
-            vad_layout.addWidget(self.vad_status_label)
+            self.debug_log_label = QLabel(f"调试日志：{self.debug_log_path}")
+            self.debug_log_label.setWordWrap(True)
+            vad_layout.addRow(self.vad_enabled)
+            vad_layout.addRow("VAD 模型", self.vad_model)
+            vad_layout.addRow("Device", self.vad_device)
+            vad_layout.addRow("采样率", self.vad_sample_rate)
+            vad_layout.addRow("VAD chunk ms", self.vad_chunk_ms)
+            vad_layout.addRow("VAD 队列深度", self.vad_queue_depth)
+            vad_layout.addRow("AutoModel kwargs JSON", self.vad_model_kwargs)
+            vad_layout.addRow("generate kwargs JSON", self.vad_generate_kwargs)
+            vad_layout.addRow("VAD 状态", self.vad_status_label)
+            vad_layout.addRow("日志", self.debug_log_label)
             asr_layout.addWidget(vad_group)
 
             controls = QHBoxLayout()
@@ -325,9 +402,16 @@ def main() -> int:
         def start_capture(self) -> None:
             try:
                 self.asr_settings().validate()
+                if self.vad_enabled.isChecked():
+                    self.vad_settings().validate()
             except Exception as exc:
                 QMessageBox.warning(self, "ASR 配置不完整", str(exc))
                 return
+            self.debug_logger.event(
+                "capture.start",
+                mode="wake",
+                log_path=str(self.debug_log_path),
+            )
             if not self.begin_recording("wake"):
                 return
             self.worker.send(f"SHIFT {self.shift.value()}")
@@ -397,6 +481,12 @@ def main() -> int:
             )
 
         def stop_capture(self) -> None:
+            self.debug_logger.event(
+                "capture.stop",
+                mode=self.capture_mode,
+                has_asr=self.asr_worker is not None,
+                has_vad=self.vad_worker is not None,
+            )
             if self.worker is not None:
                 for _ in range(3):
                     self.worker.send("STOP")
@@ -429,8 +519,22 @@ def main() -> int:
                 self.asr_access_key,
                 self.asr_uid,
                 self.asr_model,
+                self.asr_queue_depth,
+                self.asr_chunk_ms,
+                self.asr_connect_timeout,
+                self.asr_receive_timeout,
+                self.asr_final_timeout,
+                self.asr_end_window_ms,
+                self.asr_force_speech_ms,
                 self.save_asr_settings_button,
                 self.vad_enabled,
+                self.vad_model,
+                self.vad_device,
+                self.vad_sample_rate,
+                self.vad_chunk_ms,
+                self.vad_queue_depth,
+                self.vad_model_kwargs,
+                self.vad_generate_kwargs,
             ):
                 widget.setEnabled(enabled)
 
@@ -444,20 +548,57 @@ def main() -> int:
                 resource_id=self.asr_resource_id.text().strip(),
                 uid=self.asr_uid.text().strip() or "smart-neckband-pc",
                 model_name=self.asr_model.text().strip() or "bigmodel",
+                connect_timeout_s=float(self.asr_connect_timeout.value()),
+                receive_timeout_s=float(self.asr_receive_timeout.value()),
+                final_timeout_s=float(self.asr_final_timeout.value()),
+                audio_queue_depth=int(self.asr_queue_depth.value()),
+                audio_chunk_ms=int(self.asr_chunk_ms.value()),
+                end_window_size_ms=int(self.asr_end_window_ms.value()),
+                force_to_speech_time_ms=int(self.asr_force_speech_ms.value()),
+            )
+
+        def vad_settings(self) -> FunAsrVadSettings:
+            return FunAsrVadSettings(
+                model=self.vad_model.text().strip() or "fsmn-vad",
+                device=self.vad_device.text().strip() or "cpu",
+                sample_rate=int(self.vad_sample_rate.value()),
+                chunk_ms=int(self.vad_chunk_ms.value()),
+                queue_depth=int(self.vad_queue_depth.value()),
+                model_kwargs_json=self.vad_model_kwargs.text().strip(),
+                generate_kwargs_json=self.vad_generate_kwargs.text().strip(),
+            )
+
+        def load_vad_settings(self) -> FunAsrVadSettings:
+            if not self.vad_settings_path.exists():
+                return FunAsrVadSettings()
+            data = json.loads(self.vad_settings_path.read_text(encoding="utf-8"))
+            settings = FunAsrVadSettings.from_json_dict(data)
+            settings.validate()
+            return settings
+
+        def save_vad_settings(self, settings: FunAsrVadSettings) -> None:
+            self.vad_settings_path.parent.mkdir(parents=True, exist_ok=True)
+            self.vad_settings_path.write_text(
+                json.dumps(settings.to_json_dict(), ensure_ascii=False, indent=2)
+                + "\n",
+                encoding="utf-8",
             )
 
         def save_asr_settings(self) -> None:
             try:
                 settings = self.asr_settings()
+                vad_settings = self.vad_settings()
                 settings.validate()
+                vad_settings.validate()
                 save_volc_asr_settings(self.asr_settings_path, settings)
+                self.save_vad_settings(vad_settings)
             except Exception as exc:
                 QMessageBox.warning(self, "ASR 配置保存失败", str(exc))
                 return
             QMessageBox.information(
                 self,
-                "ASR 配置已保存",
-                f"已保存到：{self.asr_settings_path}",
+                "ASR/VAD 配置已保存",
+                f"已保存到：\n{self.asr_settings_path}\n{self.vad_settings_path}",
             )
 
         def start_asr_session(self) -> None:
@@ -468,9 +609,11 @@ def main() -> int:
                 self.asr_worker = VolcAsrClientThread(
                     settings,
                     on_event=self.bridge.asr_event.emit,
+                    debug_logger=self.debug_logger,
                 )
             except Exception as exc:
                 self.asr_status_label.setText(f"ASR 配置错误：{exc}")
+                self.debug_logger.exception("asr.start_error", exc)
                 return
             self.asr_worker.start()
 
@@ -485,10 +628,17 @@ def main() -> int:
                 return
             if self.vad_worker is not None:
                 return
-            self.vad_worker = FunAsrVadThread(
-                FunAsrVadSettings(),
-                on_event=self.bridge.vad_event.emit,
-            )
+            try:
+                settings = self.vad_settings()
+                self.vad_worker = FunAsrVadThread(
+                    settings,
+                    on_event=self.bridge.vad_event.emit,
+                    debug_logger=self.debug_logger,
+                )
+            except Exception as exc:
+                self.vad_status_label.setText(f"VAD 配置错误：{exc}")
+                self.debug_logger.exception("vad.start_error", exc)
+                return
             self.vad_worker.start()
 
         def finish_vad_session(self) -> None:
@@ -527,6 +677,12 @@ def main() -> int:
             elif isinstance(frame, WakeEventFrame):
                 self.arm_timer.stop()
                 self.state_label.setText("Hi ESP 已唤醒，正在录音")
+                self.debug_logger.event(
+                    "wake.detected",
+                    wake_count=frame.wake_count,
+                    detected_sample_index=frame.detected_sample_index,
+                    word_index=frame.word_index,
+                )
                 self.start_asr_session()
                 self.start_vad_session()
                 if self.recorder is not None:
@@ -561,6 +717,12 @@ def main() -> int:
         def on_asr_event(self, event: object) -> None:
             if not isinstance(event, VolcAsrEvent):
                 return
+            self.debug_logger.event(
+                "asr.ui_event",
+                kind=event.kind,
+                text=event.text,
+                detail=event.detail,
+            )
             if event.kind == "status":
                 self.asr_status_label.setText(event.detail)
             elif event.kind == "partial":
@@ -577,6 +739,11 @@ def main() -> int:
         def on_vad_event(self, event: object) -> None:
             if not isinstance(event, VadEvent):
                 return
+            self.debug_logger.event(
+                "vad.ui_event",
+                kind=event.kind,
+                detail=event.detail,
+            )
             if event.kind == "status":
                 self.vad_status_label.setText(event.detail)
             elif event.kind == "speech_start":

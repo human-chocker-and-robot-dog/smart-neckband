@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from smart_neckband.volc_asr_client import (
+    VolcAsrClientThread,
     VolcAsrEvent,
     VolcAsrSettings,
     build_audio_frame,
@@ -137,6 +138,8 @@ def test_full_request_carries_pc_side_bigmodel_audio_settings() -> None:
             resource_id="resource",
             uid="unit-test",
             model_name="bigmodel",
+            end_window_size_ms=900,
+            force_to_speech_time_ms=1200,
         )
     )
     message_type, flags, _sequence, payload = _parse_server_frame(frame)
@@ -153,6 +156,8 @@ def test_full_request_carries_pc_side_bigmodel_audio_settings() -> None:
     }
     assert request["request"]["model_name"] == "bigmodel"
     assert request["request"]["show_utterances"] is True
+    assert request["request"]["end_window_size"] == 900
+    assert request["request"]["force_to_speech_time"] == 1200
 
 
 def test_asr_settings_validate_required_credentials() -> None:
@@ -180,8 +185,54 @@ def test_asr_settings_save_and_load_local_json(tmp_path: Path) -> None:
         resource_id="resource",
         uid="unit",
         model_name="bigmodel",
+        audio_queue_depth=768,
+        audio_chunk_ms=100,
+        end_window_size_ms=900,
+        force_to_speech_time_ms=1200,
     )
 
     save_volc_asr_settings(path, settings)
 
     assert load_volc_asr_settings(path) == settings
+
+
+def test_asr_drops_old_audio_instead_of_erroring_when_queue_is_full() -> None:
+    events: list[VolcAsrEvent] = []
+    asr = VolcAsrClientThread(
+        VolcAsrSettings(
+            api_key="key",
+            resource_id="resource",
+            audio_queue_depth=8,
+        ),
+        on_event=events.append,
+    )
+
+    for value in range(9):
+        asr.feed((value,))
+
+    assert VolcAsrEvent("error", detail="ASR 音频队列已满") not in events
+    assert events == [VolcAsrEvent("status", detail="ASR 忙，已丢弃旧音频 1 帧")]
+    assert asr._audio.get_nowait() == (1,)
+    assert asr._audio.get_nowait() == (2,)
+
+
+def test_asr_finish_drops_stale_audio_until_final_marker_fits() -> None:
+    asr = VolcAsrClientThread(
+        VolcAsrSettings(
+            api_key="key",
+            resource_id="resource",
+            audio_queue_depth=8,
+        ),
+        on_event=lambda event: None,
+    )
+
+    for value in range(8):
+        asr.feed((value,))
+    asr.finish()
+
+    queued = []
+    while not asr._audio.empty():
+        queued.append(asr._audio.get_nowait())
+    assert queued[-1] is None
+    assert len(queued) == 8
+    assert queued[0] == (1,)

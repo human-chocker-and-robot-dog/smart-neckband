@@ -28,6 +28,8 @@ gui = [
 ]
 vad = [
     "funasr>=1.2",
+    "torch>=2.3",
+    "torchaudio>=2.3",
 ]
 serial = [
     "pyserial>=3.5",

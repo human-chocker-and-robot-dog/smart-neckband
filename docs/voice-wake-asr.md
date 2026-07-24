@@ -94,6 +94,19 @@ wss://openspeech.bytedance.com/api/v3/sauc/bigmodel
 
 设备最多保留 4 条待 PC ACK 的 final 文本，每 2 秒重发一次。PC 先把稳定 instruction ID `voice-<utterance_id>` 持久化到 SQLite，成功后才 ACK，并使用现有 Webhook dispatcher 自动转发给 Agent。
 
+## 当前 PC-side ASR/VAD 测试链路
+
+`test/inmp441-ble-capture` 分支的临时测试固件只负责 Hi ESP 唤醒和通过 BLE 传输 INMP441 音频；火山流式 ASR 与 FunASR FSMN-VAD 均在上位机 `smart-neckband-mic` 中运行。
+
+上位机 ASR 页现在暴露以下调试参数：
+
+- 火山 ASR：endpoint、Resource ID、鉴权模式、密钥、UID、模型、音频队列深度、WebSocket 发送分片、连接/接收/final 超时、`end_window_size`、`force_to_speech_time`。
+- FunASR VAD：模型名或本地路径、device、采样率、chunk ms、音频队列深度、`AutoModel(...)` 高级 kwargs JSON、`generate(...)` 高级 kwargs JSON。默认 `AutoModel` kwargs 为 `{"disable_update": true}`，避免每次启动都检查 FunASR 更新。
+
+运行日志写入 `pc_app/data/mic_capture_debug.log`，包含唤醒、ASR 连接/发送/final、队列丢弃、VAD 模型加载、VAD generate 返回值和异常 traceback。日志会脱敏字段名里包含 key/token/secret/password/authorization 的值。
+
+ASR 和 VAD 队列满时不再把本轮直接打成错误；上位机会丢弃最旧音频帧并继续处理，停止录音时也会优先腾出空间发送 final 标记。FunASR VAD 依赖 PyTorch；只安装 `funasr` 但没有 `torch/torchaudio` 时，上位机会明确报“缺少 PyTorch”，而不是笼统显示缺少 VAD。
+
 ## 状态与错误
 
 `VOICE_STATUS.flags`：
