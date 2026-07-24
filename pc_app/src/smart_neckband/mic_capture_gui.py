@@ -234,6 +234,13 @@ def main() -> int:
             self.vad_min_rms_delta.setDecimals(1)
             self.vad_min_rms_delta.setSingleStep(50.0)
             self.vad_min_rms_delta.setValue(vad_settings.min_rms_delta)
+            self.vad_speech_end_threshold_ratio = QDoubleSpinBox()
+            self.vad_speech_end_threshold_ratio.setRange(0.10, 1.00)
+            self.vad_speech_end_threshold_ratio.setDecimals(2)
+            self.vad_speech_end_threshold_ratio.setSingleStep(0.05)
+            self.vad_speech_end_threshold_ratio.setValue(
+                vad_settings.speech_end_threshold_ratio
+            )
             self.vad_silence_ms = QSpinBox()
             self.vad_silence_ms.setRange(100, 5000)
             self.vad_silence_ms.setSingleStep(100)
@@ -242,10 +249,6 @@ def main() -> int:
             self.vad_min_speech_ms.setRange(0, 5000)
             self.vad_min_speech_ms.setSingleStep(100)
             self.vad_min_speech_ms.setValue(vad_settings.min_speech_ms)
-            self.vad_max_recording_ms = QSpinBox()
-            self.vad_max_recording_ms.setRange(1000, 60000)
-            self.vad_max_recording_ms.setSingleStep(1000)
-            self.vad_max_recording_ms.setValue(vad_settings.max_recording_ms)
             self.vad_calibration_ms = QSpinBox()
             self.vad_calibration_ms.setRange(500, 10000)
             self.vad_calibration_ms.setSingleStep(500)
@@ -258,7 +261,8 @@ def main() -> int:
             self.vad_status_label = QLabel("VAD 尚未启动")
             self.vad_status_label.setWordWrap(True)
             self.vad_threshold_label = QLabel(
-                f"当前说话阈值 RMS：{vad_settings.speech_rms_threshold:.0f}"
+                f"起始 / 结束阈值 RMS：{vad_settings.speech_rms_threshold:.0f} / "
+                f"{vad_settings.speech_end_rms_threshold:.0f}"
             )
             self.vad_threshold_label.setWordWrap(True)
             self.debug_log_label = QLabel(f"调试日志：{self.debug_log_path}")
@@ -271,9 +275,9 @@ def main() -> int:
             vad_layout.addRow("说话 RMS", self.vad_speech_rms)
             vad_layout.addRow("RMS 倍数", self.vad_rms_multiplier)
             vad_layout.addRow("最小 RMS 增量", self.vad_min_rms_delta)
-            vad_layout.addRow("停止静默 ms", self.vad_silence_ms)
+            vad_layout.addRow("结束阈值比例", self.vad_speech_end_threshold_ratio)
+            vad_layout.addRow("低于结束阈值持续 ms", self.vad_silence_ms)
             vad_layout.addRow("最小说话 ms", self.vad_min_speech_ms)
-            vad_layout.addRow("最大录音 ms", self.vad_max_recording_ms)
             vad_layout.addRow("静默采样 ms", self.vad_calibration_ms)
             vad_layout.addRow("环境标定", self.calibrate_silence_button)
             vad_layout.addRow("说话标定", self.calibrate_speech_button)
@@ -368,6 +372,9 @@ def main() -> int:
             self.vad_speech_rms.valueChanged.connect(self.update_vad_threshold_label)
             self.vad_rms_multiplier.valueChanged.connect(self.update_vad_threshold_label)
             self.vad_min_rms_delta.valueChanged.connect(self.update_vad_threshold_label)
+            self.vad_speech_end_threshold_ratio.valueChanged.connect(
+                self.update_vad_threshold_label
+            )
             self.timer = QTimer(self)
             self.timer.timeout.connect(self.refresh_plot)
             self.timer.start(100)
@@ -659,9 +666,9 @@ def main() -> int:
                 self.vad_speech_rms,
                 self.vad_rms_multiplier,
                 self.vad_min_rms_delta,
+                self.vad_speech_end_threshold_ratio,
                 self.vad_silence_ms,
                 self.vad_min_speech_ms,
-                self.vad_max_recording_ms,
                 self.vad_calibration_ms,
             ):
                 widget.setEnabled(enabled)
@@ -701,9 +708,11 @@ def main() -> int:
                 speech_rms=float(self.vad_speech_rms.value()),
                 rms_multiplier=float(self.vad_rms_multiplier.value()),
                 min_rms_delta=float(self.vad_min_rms_delta.value()),
+                speech_end_threshold_ratio=float(
+                    self.vad_speech_end_threshold_ratio.value()
+                ),
                 silence_ms=int(self.vad_silence_ms.value()),
                 min_speech_ms=int(self.vad_min_speech_ms.value()),
-                max_recording_ms=int(self.vad_max_recording_ms.value()),
                 calibration_ms=int(self.vad_calibration_ms.value()),
             )
 
@@ -744,7 +753,8 @@ def main() -> int:
             try:
                 settings = self.vad_settings()
                 self.vad_threshold_label.setText(
-                    f"当前说话阈值 RMS：{settings.speech_rms_threshold:.0f}"
+                    f"起始 / 结束阈值 RMS：{settings.speech_rms_threshold:.0f} / "
+                    f"{settings.speech_end_rms_threshold:.0f}"
                 )
             except Exception as exc:
                 self.vad_threshold_label.setText(f"阈值配置错误：{exc}")

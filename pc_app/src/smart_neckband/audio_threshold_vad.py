@@ -19,9 +19,9 @@ class AudioThresholdVadSettings:
     speech_rms: float = 0.0
     rms_multiplier: float = 3.0
     min_rms_delta: float = 250.0
-    silence_ms: int = 800
+    speech_end_threshold_ratio: float = 0.60
+    silence_ms: int = 500
     min_speech_ms: int = 300
-    max_recording_ms: int = 15000
     calibration_ms: int = 2500
 
     @property
@@ -41,6 +41,13 @@ class AudioThresholdVadSettings:
         ceiling = self.noise_rms + gap * 0.70
         return min(max(base, calibrated), ceiling)
 
+    @property
+    def speech_end_rms_threshold(self) -> float:
+        return max(
+            self.noise_rms,
+            self.speech_rms_threshold * self.speech_end_threshold_ratio,
+        )
+
     def validate(self) -> None:
         if self.sample_rate <= 0:
             raise ValueError("音频阈值 VAD sample_rate 必须大于 0")
@@ -56,12 +63,12 @@ class AudioThresholdVadSettings:
             raise ValueError("RMS 倍数至少为 1.0")
         if self.min_rms_delta < 0:
             raise ValueError("最小 RMS 增量不能为负数")
+        if not 0.1 <= self.speech_end_threshold_ratio <= 1.0:
+            raise ValueError("VAD 结束阈值比例必须在 0.1 到 1.0 之间")
         if self.silence_ms < self.analysis_window_ms:
             raise ValueError("停止静默时间不能小于分析窗口")
         if self.min_speech_ms < 0:
             raise ValueError("最小说话时间不能为负数")
-        if self.max_recording_ms < 1000:
-            raise ValueError("最大录音时间至少为 1 秒")
         if self.calibration_ms < 500:
             raise ValueError("静默采样时长至少为 500 ms")
 
@@ -74,9 +81,9 @@ class AudioThresholdVadSettings:
             "speech_rms": self.speech_rms,
             "rms_multiplier": self.rms_multiplier,
             "min_rms_delta": self.min_rms_delta,
+            "speech_end_threshold_ratio": self.speech_end_threshold_ratio,
             "silence_ms": self.silence_ms,
             "min_speech_ms": self.min_speech_ms,
-            "max_recording_ms": self.max_recording_ms,
             "calibration_ms": self.calibration_ms,
         }
 
@@ -99,12 +106,13 @@ class AudioThresholdVadSettings:
             min_rms_delta=_number(
                 data.get("min_rms_delta"), defaults.min_rms_delta
             ),
+            speech_end_threshold_ratio=_number(
+                data.get("speech_end_threshold_ratio"),
+                defaults.speech_end_threshold_ratio,
+            ),
             silence_ms=_integer(data.get("silence_ms"), defaults.silence_ms),
             min_speech_ms=_integer(
                 data.get("min_speech_ms"), defaults.min_speech_ms
-            ),
-            max_recording_ms=_integer(
-                data.get("max_recording_ms"), defaults.max_recording_ms
             ),
             calibration_ms=_integer(
                 data.get("calibration_ms"), defaults.calibration_ms
@@ -184,19 +192,20 @@ class AudioThresholdVadThread(Thread):
             self._on_event(VadEvent("closed"))
 
     def _run(self) -> None:
-        threshold = self._settings.speech_rms_threshold
+        start_threshold = self._settings.speech_rms_threshold
+        end_threshold = self._settings.speech_end_rms_threshold
         self._log(
             "threshold_vad.start",
             noise_rms=self._settings.noise_rms,
-            speech_rms_threshold=threshold,
+            speech_rms_threshold=start_threshold,
+            speech_end_rms_threshold=end_threshold,
             silence_ms=self._settings.silence_ms,
             min_speech_ms=self._settings.min_speech_ms,
-            max_recording_ms=self._settings.max_recording_ms,
         )
         self._on_event(
             VadEvent(
                 "status",
-                f"音频阈值 VAD 已启动：静默 RMS {self._settings.noise_rms:.0f}，阈值 {threshold:.0f}",
+                f"音频阈值 VAD 已启动：静默 RMS {self._settings.noise_rms:.0f}，起始阈值 {start_threshold:.0f}，结束阈值 {end_threshold:.0f}",
             )
         )
 
@@ -204,8 +213,6 @@ class AudioThresholdVadThread(Thread):
         speech_started = False
         speech_ms = 0.0
         silence_ms = 0.0
-        elapsed_ms = 0.0
-
         while not self._stop_event.is_set():
             try:
                 item = self._audio.get(timeout=0.1)
@@ -222,9 +229,9 @@ class AudioThresholdVadThread(Thread):
                 del chunk[: self._settings.chunk_samples]
                 rms = self._handle_chunk(current, final=False)
                 duration_ms = len(current) * 1000.0 / self._settings.sample_rate
-                elapsed_ms += duration_ms
 
-                if rms >= threshold:
+                active_threshold = end_threshold if speech_started else start_threshold
+                if rms >= active_threshold:
                     speech_ms += duration_ms
                     silence_ms = 0.0
                     if not speech_started:
@@ -241,17 +248,7 @@ class AudioThresholdVadThread(Thread):
                     self._on_event(
                         VadEvent(
                             "speech_end",
-                            f"静默 {silence_ms:.0f} ms，最后 RMS {rms:.0f}",
-                        )
-                    )
-                    self._stop_event.set()
-                    break
-
-                if elapsed_ms >= self._settings.max_recording_ms:
-                    self._on_event(
-                        VadEvent(
-                            "speech_end",
-                            f"达到最大录音 {self._settings.max_recording_ms} ms",
+                            f"低于结束阈值 {silence_ms:.0f} ms，最后 RMS {rms:.0f}",
                         )
                     )
                     self._stop_event.set()
@@ -269,7 +266,8 @@ class AudioThresholdVadThread(Thread):
                 samples=len(samples),
                 rms=rms,
                 peak=peak,
-                threshold=self._settings.speech_rms_threshold,
+                start_threshold=self._settings.speech_rms_threshold,
+                end_threshold=self._settings.speech_end_rms_threshold,
             )
         return rms
 
