@@ -25,6 +25,9 @@ gui = [
 serial = [
     "pyserial>=3.5",
 ]
+health = [
+    "mcp==1.28.0",
+]
 ble = [
     "bleak>=1.0",
 ]

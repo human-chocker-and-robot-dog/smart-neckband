@@ -321,7 +321,7 @@ switch ($Action) {
             }
 
             Invoke-Native -FilePath $venvPython -Arguments @(
-                "-m", "pip", "install", "-e", ".[dev,gui,serial]"
+                "-m", "pip", "install", "-e", ".[dev,gui,serial,health]"
             ) -Description "PC application and BLE GUI dependency installation"
         }
         finally {
