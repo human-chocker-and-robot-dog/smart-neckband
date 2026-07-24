@@ -228,6 +228,9 @@ def test_stream_parser_resyncs_and_tracks_sequence_gap() -> None:
 
     assert [packet.header.packet_sequence for packet in packets] == [0x01020304, 0x01020306]
     assert parser.stats.bytes_discarded == len(b"noise")
+    assert parser.stats.packets_ok == 0
+    for packet in packets:
+        assert parser.commit_packet(packet)
     assert parser.stats.sequence_gap_count == 1
     assert parser.stats.packets_lost == 1
 
@@ -247,9 +250,13 @@ def test_stream_parser_does_not_count_stale_packet_as_billions_lost() -> None:
         samples=(2001,) * 20,
     )
 
-    assert len(parser.feed(current + stale)) == 2
-    assert parser.stats.sequence_gap_count == 1
+    packets = parser.feed(current + stale)
+    assert len(packets) == 2
+    assert parser.commit_packet(packets[0])
+    assert not parser.commit_packet(packets[1])
+    assert parser.stats.sequence_gap_count == 0
     assert parser.stats.packets_lost == 0
+    assert parser.stats.stale_packets == 1
 
 
 def test_stream_parser_rejects_crc_error() -> None:

@@ -120,9 +120,9 @@ firmware, open a serial monitor, or use body electrodes.
 
 - [x] Created `feat/health-mcp-v0` from the latest committed voice baseline.
 - [x] Imported the reviewed specification and machine contract.
-- [ ] Added contract fixtures and exact MCP SDK pin.
-- [ ] Added staged parsing, reset coordination, receipts, and ordinal extension.
-- [ ] Integrated serial/BLE and analysis provenance.
+- [x] Added contract fixtures and exact MCP SDK pin.
+- [x] Added staged parsing, reset coordination, receipts, and ordinal extension.
+- [x] Integrated serial/BLE and analysis provenance.
 - [ ] Added health state, event, and SQLite layers.
 - [ ] Added the four stdio MCP tools.
 - [ ] Added signed health webhook delivery.
@@ -136,6 +136,10 @@ firmware, open a serial monitor, or use body electrodes.
   property enumeration instead.
 - The official Python SDK stable line is `1.28.0`; v2 is still prerelease and is
   intentionally excluded.
+- Editable installation rewrites tracked setuptools `egg-info` metadata; those
+  generated diffs are excluded from feature commits.
+- Pytest temporary-directory cleanup raises `WinError 5` inside the managed
+  Windows sandbox. The same focused suite passes outside the sandbox.
 
 ## Result
 

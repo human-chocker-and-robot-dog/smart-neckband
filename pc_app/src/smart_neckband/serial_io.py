@@ -17,6 +17,12 @@ from .protocol import (
 )
 from .publisher import DataPublisher, NullPublisher
 from .recorder import RawBinaryRecorder
+from .source_coordinator import (
+    EcgSampleOrdinalExtender,
+    PacketReceipt,
+    SourceInstanceCoordinator,
+    StagedPacket,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +48,11 @@ class PcDataStores:
             status=StatusRingBuffer(),
         )
 
+    def clear(self) -> None:
+        self.ecg.clear()
+        self.imu.clear()
+        self.status.clear()
+
 
 @dataclass(frozen=True, slots=True)
 class SerialRuntimeStatus:
@@ -52,6 +63,15 @@ class SerialRuntimeStatus:
     ecg_packet_count: int
     last_packet_monotonic_s: float | None
     last_ecg_sample_index: int | None
+    source_instance_id: str
+    last_transport_packet_monotonic_ns: int | None
+    last_transport_packet_received_at_utc: str | None
+    last_ecg_packet_monotonic_ns: int | None
+    last_ecg_packet_received_at_utc: str | None
+    last_status_packet_monotonic_ns: int | None
+    last_status_packet_received_at_utc: str | None
+    last_ecg_sample_ordinal: int | None
+    last_ecg_raw_sample_index: int | None
     last_error: Exception | None
 
 
@@ -92,6 +112,8 @@ class SerialPacketReader:
         raw_log_path: str | Path | None = None,
         publisher: DataPublisher | None = None,
         raw_chunk_callback: Callable[[bytes], None] | None = None,
+        receipt_factory: Callable[[], PacketReceipt] = PacketReceipt.now,
+        source_coordinator: SourceInstanceCoordinator | None = None,
     ) -> None:
         self.port = port
         self.baudrate = baudrate
@@ -100,6 +122,9 @@ class SerialPacketReader:
         self.publisher = publisher or NullPublisher()
         self.raw_log_path = Path(raw_log_path) if raw_log_path is not None else None
         self.raw_chunk_callback = raw_chunk_callback
+        self.receipt_factory = receipt_factory
+        self.source_coordinator = source_coordinator or SourceInstanceCoordinator()
+        self.ecg_ordinal_extender = EcgSampleOrdinalExtender()
         self._stop = Event()
         self._runtime_lock = Lock()
         self._thread: Thread | None = None
@@ -111,6 +136,13 @@ class SerialPacketReader:
         self._ecg_packet_count = 0
         self._last_packet_monotonic_s: float | None = None
         self._last_ecg_sample_index: int | None = None
+        self._last_transport_packet_monotonic_ns: int | None = None
+        self._last_transport_packet_received_at_utc: str | None = None
+        self._last_ecg_packet_monotonic_ns: int | None = None
+        self._last_ecg_packet_received_at_utc: str | None = None
+        self._last_status_packet_monotonic_ns: int | None = None
+        self._last_status_packet_received_at_utc: str | None = None
+        self._last_ecg_raw_sample_index: int | None = None
 
     @property
     def stats(self) -> ParserStats:
@@ -131,6 +163,15 @@ class SerialPacketReader:
                 ecg_packet_count=self._ecg_packet_count,
                 last_packet_monotonic_s=self._last_packet_monotonic_s,
                 last_ecg_sample_index=self._last_ecg_sample_index,
+                source_instance_id=self.source_coordinator.source_instance_id,
+                last_transport_packet_monotonic_ns=self._last_transport_packet_monotonic_ns,
+                last_transport_packet_received_at_utc=self._last_transport_packet_received_at_utc,
+                last_ecg_packet_monotonic_ns=self._last_ecg_packet_monotonic_ns,
+                last_ecg_packet_received_at_utc=self._last_ecg_packet_received_at_utc,
+                last_status_packet_monotonic_ns=self._last_status_packet_monotonic_ns,
+                last_status_packet_received_at_utc=self._last_status_packet_received_at_utc,
+                last_ecg_sample_ordinal=self._last_ecg_sample_index,
+                last_ecg_raw_sample_index=self._last_ecg_raw_sample_index,
                 last_error=self._last_error,
             )
 
@@ -138,6 +179,10 @@ class SerialPacketReader:
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop.clear()
+        self.source_coordinator.start_new_reader()
+        self.parser.reset_sequence_baseline()
+        self.ecg_ordinal_extender.reset()
+        self.stores.clear()
         with self._runtime_lock:
             self._last_error = None
             self._started_at_monotonic_s = time.monotonic()
@@ -146,6 +191,13 @@ class SerialPacketReader:
             self._ecg_packet_count = 0
             self._last_packet_monotonic_s = None
             self._last_ecg_sample_index = None
+            self._last_transport_packet_monotonic_ns = None
+            self._last_transport_packet_received_at_utc = None
+            self._last_ecg_packet_monotonic_ns = None
+            self._last_ecg_packet_received_at_utc = None
+            self._last_status_packet_monotonic_ns = None
+            self._last_status_packet_received_at_utc = None
+            self._last_ecg_raw_sample_index = None
         self._thread = Thread(target=self._run, name=f"SerialPacketReader-{self.port}", daemon=True)
         self._thread.start()
 
@@ -181,7 +233,7 @@ class SerialPacketReader:
                     if self.raw_chunk_callback is not None:
                         self.raw_chunk_callback(chunk)
                     for packet in self.parser.feed(chunk):
-                        self._dispatch(packet)
+                        self._ingest(packet)
         except Exception as exc:  # pragma: no cover - hardware/OS path
             with self._runtime_lock:
                 self._last_error = exc
@@ -192,18 +244,59 @@ class SerialPacketReader:
                 self._recorder.close()
                 self._recorder = None
 
-    def _dispatch(self, packet: ParsedPacket) -> None:
+    def _ingest(self, packet: ParsedPacket) -> None:
+        staged = StagedPacket(packet=packet, receipt=self.receipt_factory())
+        result = self.source_coordinator.ingest(staged)
+        if result.rotated:
+            self.parser.reset_sequence_baseline()
+            self.ecg_ordinal_extender.reset()
+            self.stores.clear()
+        for committed in result.committed:
+            if self.parser.commit_packet(committed.packet):
+                self._dispatch(committed)
+
+    def _dispatch(self, staged: StagedPacket) -> None:
+        packet = staged.packet
+        receipt = staged.receipt
         payload = packet.payload
         if isinstance(payload, EcgPayload):
-            self.stores.ecg.append_batch(packet.header, payload)
+            try:
+                ordinal = self.ecg_ordinal_extender.extend(payload)
+            except (ValueError, OverflowError):
+                return
+            self.stores.ecg.append_batch(
+                packet.header,
+                payload,
+                source_instance_id=self.source_coordinator.source_instance_id,
+                receipt=receipt,
+                ordinal=ordinal,
+            )
             with self._runtime_lock:
                 self._ecg_packet_count += 1
-                self._last_ecg_sample_index = payload.first_sample_index + max(0, len(payload.samples) - 1)
+                self._last_ecg_sample_index = ordinal.last_sample_ordinal
+                self._last_ecg_raw_sample_index = ordinal.raw_last_sample_index
+                self._last_ecg_packet_monotonic_ns = receipt.received_monotonic_ns
+                self._last_ecg_packet_received_at_utc = receipt.received_at_utc
         elif isinstance(payload, ImuPayload):
-            self.stores.imu.append_batch(packet.header, payload)
+            self.stores.imu.append_batch(
+                packet.header,
+                payload,
+                source_instance_id=self.source_coordinator.source_instance_id,
+                receipt=receipt,
+            )
         elif isinstance(payload, DeviceStatusPayload):
-            self.stores.status.append(packet.header, payload)
+            self.stores.status.append(
+                packet.header,
+                payload,
+                source_instance_id=self.source_coordinator.source_instance_id,
+                receipt=receipt,
+            )
+            with self._runtime_lock:
+                self._last_status_packet_monotonic_ns = receipt.received_monotonic_ns
+                self._last_status_packet_received_at_utc = receipt.received_at_utc
         with self._runtime_lock:
             self._packet_count += 1
-            self._last_packet_monotonic_s = time.monotonic()
+            self._last_packet_monotonic_s = receipt.received_monotonic_ns / 1_000_000_000
+            self._last_transport_packet_monotonic_ns = receipt.received_monotonic_ns
+            self._last_transport_packet_received_at_utc = receipt.received_at_utc
         self.publisher.publish_packet(packet)
