@@ -123,10 +123,15 @@ firmware, open a serial monitor, or use body electrodes.
 - [x] Added contract fixtures and exact MCP SDK pin.
 - [x] Added staged parsing, reset coordination, receipts, and ordinal extension.
 - [x] Integrated serial/BLE and analysis provenance.
-- [ ] Added health state, event, and SQLite layers.
-- [ ] Added the four stdio MCP tools.
-- [ ] Added signed health webhook delivery.
-- [ ] Completed validation, internal review, commit, and push.
+- [x] Added source-aware health state, quality, event, and SQLite layers.
+- [x] Added the four read-only stdio MCP tools and complete wire goldens.
+- [x] Added signed health webhook delivery, receiver validation, and recovery.
+- [x] Added local non-sensitive runtime observability and administrator status.
+- [x] Completed full four-event-cycle synthetic soak diagnostics.
+- [x] Passed 158 PC tests and an offscreen GUI/Health runtime smoke test.
+- [x] Captured an uninterrupted machine-readable 30-minute synthetic PASS.
+- [x] Received final independent-agent PASS.
+- [ ] Committed and pushed the reviewed implementation.
 
 ## Discoveries
 
@@ -140,8 +145,35 @@ firmware, open a serial monitor, or use body electrodes.
   generated diffs are excluded from feature commits.
 - Pytest temporary-directory cleanup raises `WinError 5` inside the managed
   Windows sandbox. The same focused suite passes outside the sandbox.
+- The first independent review correctly found incomplete exact-wire,
+  cross-wearer isolation, device counter/clipping window, and outbox lease
+  ordering behavior. Those findings produced regression tests and fixes before
+  the second review.
+- A clipping window cannot be declared complete from sample count alone.
+  Event qualification now requires at least 5000 same-source samples and a full
+  ten seconds of immutable receipt-monotonic coverage.
+- The 30-minute run survived 3183 state commits and 19983 audited MCP calls;
+  its process was terminated by the command host after the timed run, and the
+  reopened 2.84 MB SQLite database passed `PRAGMA integrity_check`, recovered
+  76 events and 151 contiguous/hash-valid pending outbox rows.
+- A separate 75.047-second diagnostic run completed with machine-readable
+  `status=passed`, 131 revisions, 807 MCP calls, zero query exceptions, all four
+  event families opened/resolved, and eight recovered outbox rows. The runner
+  now labels all of its evidence `synthetic`/`test_mode=true` and asserts that
+  it creates zero production outbox rows.
+- The third independent review found configuration-level wearer IDs were not
+  validated and full wearer deletion could retain event hysteresis gates.
+  Configuration entry points now enforce the contract pattern; full deletion
+  removes gates while deliberately retaining persistent revision/notification
+  sequences so identifiers are never reused.
+- The final uninterrupted soak completed in 1800.031 seconds with 3208 state
+  revisions, 20325 MCP calls, zero MCP exceptions, 100 events, and zero
+  production outbox rows. The result reported `status=passed`; an independent
+  SQLite check returned `integrity_check=ok`, migration version 2, synthetic
+  test-mode state, and resolved episodes for all four event types.
 
 ## Result
 
-Implementation is in progress. No firmware or hardware operation has been
-performed.
+Implementation and software validation are complete, including an independent
+agent PASS. Git handoff remains. No firmware, flash, monitor, serial/BLE
+hardware, or body-connected operation was performed.

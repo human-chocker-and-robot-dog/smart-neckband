@@ -31,6 +31,7 @@ from .history import (
     write_compare_csv,
     y_range_for,
 )
+from .health_runtime import HealthRuntimeWorker
 from .protocol import ECG_SAMPLE_RATE_HZ, FLAG_LO_MINUS, FLAG_LO_PLUS, VoiceStatusPayload
 from .serial_io import PcDataStores, SerialPacketReader, list_serial_ports
 from .sessions import ExperimentSessionRecorder, PLACEMENT_PRESETS, WIRE_MAPS, RecordingState
@@ -211,6 +212,17 @@ class MainWindow:
         self.attitude_worker = AttitudeWorker(self.stores)
         self.ecg_worker.start()
         self.attitude_worker.start()
+        try:
+            self.health_worker = HealthRuntimeWorker.from_environment(
+                stores=self.stores,
+                reader_provider=lambda: self.reader,
+                analysis_provider=self.ecg_worker.latest,
+            )
+        except ValueError:
+            LOGGER.exception("Health runtime configuration rejected")
+            self.health_worker = None
+        if self.health_worker is not None:
+            self.health_worker.start()
 
         self.window = QtWidgets.QMainWindow()
         self.window.setWindowTitle("AI 智能颈环 V0 上位机")
@@ -625,6 +637,8 @@ class MainWindow:
     def close(self) -> None:
         self.webhook_tab.close()
         self.disconnect_serial()
+        if self.health_worker is not None:
+            self.health_worker.stop()
         self.ecg_worker.stop()
         self.attitude_worker.stop()
 
@@ -718,12 +732,26 @@ class MainWindow:
                 voice_text_callback=self.webhook_tab.enqueue_voice_text,
                 voice_status_callback=self._queue_voice_status,
             )
+            self.reader.health_transport = "ble"
         else:
             self.reader = SerialPacketReader(
                 port=endpoint,
                 stores=self.stores,
                 raw_log_path=raw_path,
                 raw_chunk_callback=self._record_raw_chunk,
+            )
+            selected = next(
+                (
+                    port
+                    for port in list_serial_ports()
+                    if port.device == endpoint
+                ),
+                None,
+            )
+            self.reader.health_transport = (
+                "spp"
+                if selected is not None and selected.is_bluetooth_candidate
+                else "uart"
             )
         self.reader.start()
         self.connection_label.setText(f"正在连接 {endpoint}……")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from smart_neckband.protocol import (
     DeviceStatusPayload,
     ImuPoint,
@@ -13,6 +15,7 @@ from smart_neckband.protocol import (
 from smart_neckband.source_coordinator import (
     EcgSampleOrdinalExtender,
     PacketReceipt,
+    RESET_MAX_BUFFERED_RAW_BYTES,
     SourceInstanceCoordinator,
     StagedPacket,
 )
@@ -101,6 +104,32 @@ def test_timestamp_rollback_threshold_is_exclusive() -> None:
     assert exactly.dropped
     assert not coordinator.pending
     assert coordinator.stats.reset_candidates == 0
+
+
+def test_timestamp_rollback_one_microsecond_beyond_threshold_is_candidate() -> None:
+    coordinator = SourceInstanceCoordinator()
+    assert coordinator.ingest(staged(ecg(100, 5_000_001), 1)).committed
+
+    result = coordinator.ingest(staged(ecg(1, 4_000_000), 2))
+
+    assert not result.committed
+    assert coordinator.pending
+    assert coordinator.stats.reset_candidates == 1
+
+
+def test_normal_packet_sequence_wrap_is_forward_progress() -> None:
+    coordinator = SourceInstanceCoordinator()
+
+    results = [
+        coordinator.ingest(staged(ecg(sequence, index + 1), index + 1))
+        for index, sequence in enumerate(
+            (0xFFFFFFFE, 0xFFFFFFFF, 0, 1)
+        )
+    ]
+
+    assert all(result.committed for result in results)
+    assert coordinator.stats.reset_candidates == 0
+    assert coordinator.stats.stale_packets == 0
 
 
 def test_reset_buffers_interleaved_packets_and_rotates_once() -> None:
@@ -193,6 +222,65 @@ def test_pending_capacity_rejects_trigger_without_rotation() -> None:
     assert coordinator.source_instance_id == "source-a"
     assert coordinator.stats.reset_candidate_rejected == 1
     assert not coordinator.pending
+
+
+def test_pending_timeout_and_raw_byte_limits_are_exclusive() -> None:
+    coordinator = SourceInstanceCoordinator()
+    assert coordinator.ingest(staged(ecg(100, 5_000_001), 1)).committed
+    assert not coordinator.ingest(
+        staged(ecg(1, 1_000_000), 10)
+    ).committed
+
+    assert not coordinator.flush_expired(
+        10 + 2_000_000_000
+    ).committed
+    assert coordinator.pending
+    rejected = coordinator.flush_expired(10 + 2_000_000_001)
+    assert rejected.dropped
+    assert not coordinator.pending
+
+    coordinator = SourceInstanceCoordinator()
+    assert coordinator.ingest(staged(ecg(100, 5_000_001), 1)).committed
+    trigger = staged(ecg(1, 1_000_000), 10)
+    trigger = replace(
+        trigger,
+        packet=replace(trigger.packet, raw=b"x" * 100),
+    )
+    coordinator.ingest(trigger)
+    filler = staged(imu(2, 1_050_000), 11)
+    filler = replace(
+        filler,
+        packet=replace(
+            filler.packet,
+            raw=b"x" * (RESET_MAX_BUFFERED_RAW_BYTES - 100),
+        ),
+    )
+    coordinator.ingest(filler)
+    assert coordinator.pending
+
+    overflow = staged(status(3, 1_100_000), 12)
+    overflow = replace(
+        overflow,
+        packet=replace(overflow.packet, raw=b"x"),
+    )
+    result = coordinator.ingest(overflow)
+    assert not coordinator.pending
+    assert coordinator.stats.reset_candidate_rejected == 1
+    assert len(result.dropped) == 3
+    assert not result.rotated
+
+
+def test_normal_voice_retransmit_does_not_create_reset_candidate() -> None:
+    coordinator = SourceInstanceCoordinator()
+    first = staged(voice(10, 2_000_000, utterance_id=7), 1)
+    duplicate = staged(voice(10, 2_000_000, utterance_id=7), 2)
+    next_header = staged(voice(11, 2_000_000, utterance_id=7), 3)
+
+    assert coordinator.ingest(first).committed
+    assert coordinator.ingest(duplicate).dropped
+    assert coordinator.ingest(next_header).committed
+    assert coordinator.stats.duplicate_packets == 1
+    assert coordinator.stats.reset_candidates == 0
 
 
 def test_ecg_sample_ordinal_extends_across_uint32_wrap() -> None:

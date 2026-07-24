@@ -18,6 +18,7 @@ from .protocol import (
 from .publisher import DataPublisher, NullPublisher
 from .recorder import RawBinaryRecorder
 from .source_coordinator import (
+    CoordinatorResult,
     EcgSampleOrdinalExtender,
     PacketReceipt,
     SourceInstanceCoordinator,
@@ -113,6 +114,7 @@ class SerialPacketReader:
         publisher: DataPublisher | None = None,
         raw_chunk_callback: Callable[[bytes], None] | None = None,
         receipt_factory: Callable[[], PacketReceipt] = PacketReceipt.now,
+        monotonic_ns: Callable[[], int] = time.monotonic_ns,
         source_coordinator: SourceInstanceCoordinator | None = None,
     ) -> None:
         self.port = port
@@ -123,6 +125,7 @@ class SerialPacketReader:
         self.raw_log_path = Path(raw_log_path) if raw_log_path is not None else None
         self.raw_chunk_callback = raw_chunk_callback
         self.receipt_factory = receipt_factory
+        self.monotonic_ns = monotonic_ns
         self.source_coordinator = source_coordinator or SourceInstanceCoordinator()
         self.ecg_ordinal_extender = EcgSampleOrdinalExtender()
         self._stop = Event()
@@ -209,6 +212,19 @@ class SerialPacketReader:
             self._recorder.close()
             self._recorder = None
 
+    def feed_bytes(self, data: bytes) -> None:
+        """Feed one arbitrary transport chunk for deterministic tests/replay."""
+
+        if not data:
+            self._flush_pending()
+            return
+        if self._recorder is not None:
+            self._recorder.write(data)
+        if self.raw_chunk_callback is not None:
+            self.raw_chunk_callback(data)
+        for packet in self.parser.feed(data):
+            self._ingest(packet)
+
     def _run(self) -> None:
         try:
             import serial
@@ -226,14 +242,7 @@ class SerialPacketReader:
                     self._serial_open = True
                 while not self._stop.is_set():
                     chunk = serial_port.read(4096)
-                    if not chunk:
-                        continue
-                    if self._recorder is not None:
-                        self._recorder.write(chunk)
-                    if self.raw_chunk_callback is not None:
-                        self.raw_chunk_callback(chunk)
-                    for packet in self.parser.feed(chunk):
-                        self._ingest(packet)
+                    self.feed_bytes(chunk)
         except Exception as exc:  # pragma: no cover - hardware/OS path
             with self._runtime_lock:
                 self._last_error = exc
@@ -246,7 +255,14 @@ class SerialPacketReader:
 
     def _ingest(self, packet: ParsedPacket) -> None:
         staged = StagedPacket(packet=packet, receipt=self.receipt_factory())
-        result = self.source_coordinator.ingest(staged)
+        self._apply_coordinator_result(self.source_coordinator.ingest(staged))
+
+    def _flush_pending(self) -> None:
+        self._apply_coordinator_result(
+            self.source_coordinator.flush_expired(self.monotonic_ns())
+        )
+
+    def _apply_coordinator_result(self, result: CoordinatorResult) -> None:
         if result.rotated:
             self.parser.reset_sequence_baseline()
             self.ecg_ordinal_extender.reset()
@@ -263,20 +279,21 @@ class SerialPacketReader:
             try:
                 ordinal = self.ecg_ordinal_extender.extend(payload)
             except (ValueError, OverflowError):
-                return
-            self.stores.ecg.append_batch(
-                packet.header,
-                payload,
-                source_instance_id=self.source_coordinator.source_instance_id,
-                receipt=receipt,
-                ordinal=ordinal,
-            )
-            with self._runtime_lock:
-                self._ecg_packet_count += 1
-                self._last_ecg_sample_index = ordinal.last_sample_ordinal
-                self._last_ecg_raw_sample_index = ordinal.raw_last_sample_index
-                self._last_ecg_packet_monotonic_ns = receipt.received_monotonic_ns
-                self._last_ecg_packet_received_at_utc = receipt.received_at_utc
+                ordinal = None
+            if ordinal is not None:
+                self.stores.ecg.append_batch(
+                    packet.header,
+                    payload,
+                    source_instance_id=self.source_coordinator.source_instance_id,
+                    receipt=receipt,
+                    ordinal=ordinal,
+                )
+                with self._runtime_lock:
+                    self._ecg_packet_count += 1
+                    self._last_ecg_sample_index = ordinal.last_sample_ordinal
+                    self._last_ecg_raw_sample_index = ordinal.raw_last_sample_index
+                    self._last_ecg_packet_monotonic_ns = receipt.received_monotonic_ns
+                    self._last_ecg_packet_received_at_utc = receipt.received_at_utc
         elif isinstance(payload, ImuPayload):
             self.stores.imu.append_batch(
                 packet.header,

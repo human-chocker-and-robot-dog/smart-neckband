@@ -25,6 +25,7 @@ from .publisher import DataPublisher, NullPublisher
 from .recorder import RawBinaryRecorder
 from .serial_io import PcDataStores, SerialRuntimeStatus
 from .source_coordinator import (
+    CoordinatorResult,
     EcgSampleOrdinalExtender,
     PacketReceipt,
     SourceInstanceCoordinator,
@@ -132,6 +133,7 @@ class BlePacketReader:
         voice_status_callback: Callable[[VoiceStatusPayload], None] | None = None,
         control_write_callback: Callable[[bytes], None] | None = None,
         receipt_factory: Callable[[], PacketReceipt] = PacketReceipt.now,
+        monotonic_ns: Callable[[], int] = time.monotonic_ns,
         source_coordinator: SourceInstanceCoordinator | None = None,
     ) -> None:
         self.address = address
@@ -146,6 +148,7 @@ class BlePacketReader:
         self.voice_status_callback = voice_status_callback
         self.control_write_callback = control_write_callback
         self.receipt_factory = receipt_factory
+        self.monotonic_ns = monotonic_ns
         self.source_coordinator = source_coordinator or SourceInstanceCoordinator()
         self.ecg_ordinal_extender = EcgSampleOrdinalExtender()
         self.voice_assembler = VoiceTextAssembler()
@@ -248,6 +251,7 @@ class BlePacketReader:
         """Feed one ATT notification; public to allow deterministic tests."""
 
         if not data:
+            self._flush_pending()
             return
         if self._recorder is not None:
             self._recorder.write(data)
@@ -329,6 +333,7 @@ class BlePacketReader:
 
             while not self._stop.is_set() and client.is_connected:
                 await self._drain_control_writes(client)
+                self._flush_pending()
                 await asyncio.sleep(0.1)
 
             if client.is_connected:
@@ -364,7 +369,14 @@ class BlePacketReader:
 
     def _ingest(self, packet: ParsedPacket) -> None:
         staged = StagedPacket(packet=packet, receipt=self.receipt_factory())
-        result = self.source_coordinator.ingest(staged)
+        self._apply_coordinator_result(self.source_coordinator.ingest(staged))
+
+    def _flush_pending(self) -> None:
+        self._apply_coordinator_result(
+            self.source_coordinator.flush_expired(self.monotonic_ns())
+        )
+
+    def _apply_coordinator_result(self, result: CoordinatorResult) -> None:
         if result.rotated:
             self.parser.reset_sequence_baseline()
             self.ecg_ordinal_extender.reset()
@@ -382,20 +394,21 @@ class BlePacketReader:
             try:
                 ordinal = self.ecg_ordinal_extender.extend(payload)
             except (ValueError, OverflowError):
-                return
-            self.stores.ecg.append_batch(
-                packet.header,
-                payload,
-                source_instance_id=self.source_coordinator.source_instance_id,
-                receipt=receipt,
-                ordinal=ordinal,
-            )
-            with self._runtime_lock:
-                self._ecg_packet_count += 1
-                self._last_ecg_sample_index = ordinal.last_sample_ordinal
-                self._last_ecg_raw_sample_index = ordinal.raw_last_sample_index
-                self._last_ecg_packet_monotonic_ns = receipt.received_monotonic_ns
-                self._last_ecg_packet_received_at_utc = receipt.received_at_utc
+                ordinal = None
+            if ordinal is not None:
+                self.stores.ecg.append_batch(
+                    packet.header,
+                    payload,
+                    source_instance_id=self.source_coordinator.source_instance_id,
+                    receipt=receipt,
+                    ordinal=ordinal,
+                )
+                with self._runtime_lock:
+                    self._ecg_packet_count += 1
+                    self._last_ecg_sample_index = ordinal.last_sample_ordinal
+                    self._last_ecg_raw_sample_index = ordinal.raw_last_sample_index
+                    self._last_ecg_packet_monotonic_ns = receipt.received_monotonic_ns
+                    self._last_ecg_packet_received_at_utc = receipt.received_at_utc
         elif isinstance(payload, ImuPayload):
             self.stores.imu.append_batch(
                 packet.header,

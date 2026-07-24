@@ -17,6 +17,9 @@ param(
         "voice-model-provision",
         "pc-setup",
         "pc-gui",
+        "pc-health-mcp",
+        "pc-health-status",
+        "pc-health-soak",
         "pc-test"
     )]
     [string]$Action = "build",
@@ -26,7 +29,12 @@ param(
 
     [switch]$Voice,
 
-    [string]$WakeNetModelPath
+    [string]$WakeNetModelPath,
+
+    [ValidateRange(1, 1440)]
+    [int]$HealthSoakMinutes = 30,
+
+    [string]$HealthSoakDbPath
 )
 
 Set-StrictMode -Version Latest
@@ -347,6 +355,86 @@ switch ($Action) {
         finally {
             Pop-Location
         }
+    }
+    "pc-health-mcp" {
+        $venvPython = Join-Path $PcDir ".venv\Scripts\python.exe"
+        if (-not (Test-Path -LiteralPath $venvPython)) {
+            throw "PC virtual environment is missing. Run '.\tools\project.ps1 pc-setup' first."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:SMART_COLLAR_WEARER_ID)) {
+            throw "SMART_COLLAR_WEARER_ID must be set before starting Health MCP."
+        }
+        Push-Location $PcDir
+        try {
+            & $venvPython -m smart_neckband.health_mcp --transport stdio
+            if ($LASTEXITCODE -ne 0) {
+                throw "Health MCP exited with code $LASTEXITCODE."
+            }
+        }
+        finally {
+            Pop-Location
+        }
+    }
+    "pc-health-status" {
+        $venvPython = Join-Path $PcDir ".venv\Scripts\python.exe"
+        if (-not (Test-Path -LiteralPath $venvPython)) {
+            throw "PC virtual environment is missing. Run '.\tools\project.ps1 pc-setup' first."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:SMART_COLLAR_WEARER_ID)) {
+            throw "SMART_COLLAR_WEARER_ID must be set before reading Health status."
+        }
+        Push-Location $PcDir
+        try {
+            $statusArguments = @("-m", "smart_neckband.health_admin")
+            if (-not [string]::IsNullOrWhiteSpace($env:SMART_COLLAR_HEALTH_DB_PATH)) {
+                $statusArguments += @("--db", $env:SMART_COLLAR_HEALTH_DB_PATH)
+            }
+            $statusArguments += @(
+                "status",
+                "--wearer-id", $env:SMART_COLLAR_WEARER_ID
+            )
+            & $venvPython @statusArguments
+            if ($LASTEXITCODE -ne 0) {
+                throw "Health status exited with code $LASTEXITCODE."
+            }
+        }
+        finally {
+            Pop-Location
+        }
+    }
+    "pc-health-soak" {
+        $venvPython = Join-Path $PcDir ".venv\Scripts\python.exe"
+        if (-not (Test-Path -LiteralPath $venvPython)) {
+            throw "PC virtual environment is missing. Run '.\tools\project.ps1 pc-setup' first."
+        }
+        $healthDir = Join-Path $Root "data\health"
+        New-Item -ItemType Directory -Force -Path $healthDir | Out-Null
+        $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+        $dbPath = if ([string]::IsNullOrWhiteSpace($HealthSoakDbPath)) {
+            Join-Path $healthDir "soak-$stamp.sqlite3"
+        }
+        else {
+            $HealthSoakDbPath
+        }
+        if (-not [System.IO.Path]::IsPathRooted($dbPath)) {
+            $dbPath = Join-Path $Root $dbPath
+        }
+        $resultPath = "$dbPath.result.json"
+        Push-Location $PcDir
+        try {
+            Invoke-Native -FilePath $venvPython -Arguments @(
+                "-m", "smart_neckband.health_soak",
+                "--db", $dbPath,
+                "--duration-s", ($HealthSoakMinutes * 60),
+                "--interval-s", "0.5",
+                "--result-path", $resultPath
+            ) -Description "Health MCP synthetic soak"
+        }
+        finally {
+            Pop-Location
+        }
+        Write-Host "Health soak database: $dbPath"
+        Write-Host "Health soak result: $resultPath"
     }
     "pc-test" {
         $venvPython = Join-Path $PcDir ".venv\Scripts\python.exe"
