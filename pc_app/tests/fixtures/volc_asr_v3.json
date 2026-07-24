@@ -1,0 +1,31 @@
+{
+  "full_request_no_compression_hex": "11101000000000027b7d",
+  "audio_nonfinal_no_compression_hex": "11200000000000040100feff",
+  "audio_final_no_compression_hex": "11220000000000040100feff",
+  "partial_response": {
+    "sequence": 7,
+    "payload": {
+      "result": {
+        "text": "打开"
+      }
+    }
+  },
+  "final_response": {
+    "sequence": -8,
+    "payload": {
+      "result": {
+        "text": "打开灯",
+        "utterances": [
+          {
+            "definite": true,
+            "text": "打开灯"
+          }
+        ]
+      }
+    }
+  },
+  "error_response": {
+    "code": 45000001,
+    "message": "fixture error"
+  }
+}

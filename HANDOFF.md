@@ -1,223 +1,463 @@
-# AI Smart Collar Handoff
+# Smart Collar Health MCP Handoff
 
-Last updated: 2026-07-23.
+Last updated: 2026-07-25.
 
-## Current Branch State
+This handoff is for the upcoming large integration pass. Its purpose is to let
+another agent merge the Health MCP work by reusing the existing repository
+implementation, not by rewriting the feature from prose.
 
-- Current checked-out branch: `main`.
-- Current checked-out commit: `42274f9 fix(ble): align Just Works GATT permissions`.
-- Main branch includes the ESP32-C3 SuperMini migration work from `feat/esp32c3-supermini-migration`.
-- Separate Live Beta test branch: `fix/live-fb892fa-reliability` at `39dc916 fix(live): adapt mobile ECG and settings`.
-- Canonical GitHub remote: `origin` -> `https://github.com/human-chocker-and-robot-dog/smart-neckband.git`.
-
-Important branch note:
-
-`fix/live-fb892fa-reliability` is an experimental Live Beta webpage branch. It is not the primary V0 firmware, Bluetooth SPP, PC parser, ECG, or IMU task branch. Treat it as a test branch for the public/web viewer experience. Do not use it as evidence that the core V0 hardware or medical-adjacent acquisition path has been validated.
-
-## Repository Rules To Keep
-
-- Read `AGENTS.md` before changing code or running commands.
-- On Windows or PowerShell work, use the checked-in `powershell-command-runner` Skill under `.agents/skills/powershell-command-runner/`.
-- Do not flash, erase flash, open a blocking monitor, change eFuses, or perform body-connected acquisition without explicit user instruction.
-- Do not connect desktop USB, wall power, a charging power bank, or grounded bench instruments while electrodes are attached to a person.
-- Do not claim body-connected behavior is validated unless battery-powered wireless test logs are supplied.
-- Keep raw ECG as raw ADC counts in firmware. Filtering, R peaks, HR, RR, HRV, and SQI belong in the PC application.
-- Commit coherent validated changes with Conventional Commits. After each successful commit, push the committed branch to `origin` and set upstream when needed, unless the user explicitly says not to push.
-
-## Hardware Baseline
-
-- Board profiles: classic ESP32 / ESP-WROOM-32 and ESP32-C3 SuperMini, not ESP32-S3.
-- ESP-IDF: v6.0.2.
-- Flash: 4 MB.
-- Target: `esp32`.
-- ESP32-C3 SuperMini bench USB port: `COM21`.
-- Historical classic ESP32 bench USB port: `COM18`; do not assume it for the C3.
-- Windows Bluetooth SPP outgoing COM observed: `COM19`.
-- Windows Bluetooth local placeholder COM observed: `COM20`.
-- ECG input: GPIO34 / ADC1_CH6.
-- AD8232 LO-: GPIO25.
-- AD8232 LO+: GPIO26.
-- I2C SDA: GPIO21.
-- I2C SCL: GPIO22.
-- OLED: `0x3C`.
-- MPU6050-compatible IMU: `0x68`, observed `WHO_AM_I=0x72`.
-- ECG sample rate: 500 Hz.
-- IMU sample rate: 50 Hz.
-
-Recent hardware discovery:
-
-The AD8232 output was accidentally plugged into the wrong interface, VN. After correcting the wiring away from VN, the PC app showed a real ECG waveform. This strongly indicates the previous all-zero ADC trace was wiring, not Bluetooth or parser corruption.
-
-## Core V0 Firmware And PC App Status
-
-The main V0 path implemented so far is:
+The reviewed Health MCP implementation baseline captured by this handoff is
+`feat/health-mcp-v0` at:
 
 ```text
-ESP32 sensor sampling
--> Bluetooth Classic SPP
--> Windows virtual COM
--> Python binary parser
--> raw binary log
--> ECG/IMU buffers
--> PySide6 + PyQtGraph GUI
+e8373bcc315b0523a0a53e11adde575c0a59b6cf
 ```
 
-Implemented firmware pieces:
+The branch has already been pushed to `origin/feat/health-mcp-v0`. This file may
+be followed by a docs-only handoff commit on the same branch.
 
-- Board configuration in `firmware/main/board_config.h`.
-- 500 Hz ECG sampling on GPIO34 / ADC1_CH6 via GPTimer notification and `adc_oneshot_read()` in the sampling task.
-- 50 Hz MPU6050 raw six-axis readout.
-- Lead-off GPIO state from GPIO25/GPIO26.
-- Independent ECG and IMU ring buffers.
-- Binary V0 protocol packets for `ECG_BATCH`, `IMU_BATCH`, and `DEVICE_STATUS`.
-- Bluetooth Classic SPP acceptor named `SmartCollar-V0`.
-- SPP TX queue with write-complete/congestion handling.
-- OLED status pages, refreshed outside sampling and SPP callbacks.
+## Merge Intent
 
-Implemented PC pieces:
+Keep the Health MCP implementation as the source of truth for all PC-side
+health-state, event, SQLite, MCP, and signed health-webhook behavior.
 
-- `pyserial` COM reader.
-- Binary stream parser with magic resync, length checks, CRC checks, and sequence gap tracking.
-- Raw binary recording.
-- ECG and IMU ring buffers.
-- PySide6 + PyQtGraph GUI.
-- NeuroKit2 ECG analysis worker off the GUI thread.
-- Raw ECG display, cleaned ECG display, R-peak markers, HR, RR, SQI, lead-off, packet loss, and CRC counters.
-- IMU roll/pitch/yaw complementary filter and OpenGL cuboid display.
-- `Calibrate Flat` control that zeroes current orientation and captures stationary gyro bias.
+Do not reimplement these features during the large merge. Reuse the modules,
+tests, contracts, and documented commands listed below. If a target branch has
+newer microphone, ASR, BLE, or GUI work, merge those newer user-facing changes
+around the Health MCP files instead of replacing the Health MCP design with a
+new copy.
 
-## Known Fixes Already Applied
+The Health MCP server is not a device reader. The GUI/acquisition process owns
+serial or BLE input, builds committed Health state, and writes SQLite. The MCP
+process is a read-only stdio child that reads that SQLite database.
 
-- OLED `ERR` no longer counts expected disconnected Bluetooth drops.
-- OLED page switching restored to readable speed, 3 second page interval.
-- Classic BT discoverability fixed with later scan-mode setup, EIR, and no-input/no-output pairing behavior.
-- SPP stale TX packets are dropped on connect/disconnect so reconnects do not masquerade as current data.
-- PC COM list prioritizes outgoing Bluetooth SPP ports, for example `COM19 ... BT OUT`.
-- PyOpenGL was added to the GUI extra for the 3D view.
-- NeuroKit2 and NumPy warnings are suppressed or avoided for too-few-peaks and no-finite-SQI windows.
-- ECG clipping windows report `ECG clipped` instead of attempting HR.
-- MPU6050 all-zero 14-byte samples are rejected in firmware and trigger the existing 1 Hz IMU reinitialization path.
-- HR display uses a median of recent physiologically plausible RR intervals rather than only the last two R peaks.
-- IMU flat calibration subtracts current gyro zero-rate bias before integration.
+## Branch And Commit Context
 
-## Current Validation Snapshot
-
-Most recent documented validation on the V0 path:
-
-- `.\tools\project.ps1 pc-test`: 18 tests passed.
-- `.\tools\project.ps1 build`: passed.
-- `.\tools\project.ps1 size`: passed.
-- `git diff --check`: passed.
-- `idf.py -C firmware -p COM18 -b 460800 flash`: previously passed with bootloader, partition table, and app hash verification.
-
-Important caveat:
-
-The latest PC-only HR smoothing and gyro-bias calibration did not require a firmware flash. The later firmware-side all-zero IMU rejection was built and size-checked, but only flash it when the user explicitly requests it and body electrodes are not connected to a USB-powered setup.
-
-## How To Run The PC GUI
-
-Use the outgoing Bluetooth SPP COM port, not the local placeholder port.
-
-```powershell
-cd C:\Users\XWen1024\Documents\smart-neckband\pc_app
-py -3.12 -m smart_neckband
-```
-
-In the GUI:
-
-- Select the port marked `BT OUT`, usually `COM19`.
-- Use `Calibrate Flat` only when the IMU is physically still and flat.
-- Expect yaw to drift over time because MPU6050 has no magnetometer. The software can reduce gyro bias, but it cannot provide absolute yaw.
-
-## How To Build And Flash Firmware
-
-Build and size:
-
-```powershell
-. 'C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1'
-.\tools\project.ps1 build
-.\tools\project.ps1 size
-```
-
-Reliable direct flash shape observed on this machine:
-
-```powershell
-. 'C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1'
-idf.py -C firmware -p COM18 -b 460800 flash
-```
-
-Do not flash while body electrodes are attached to a person through a USB-powered setup.
-
-## Live Beta Web Branch
-
-There is a separate Live Beta web effort in this repository. It is useful, but it is not the core hardware task.
-
-Branches:
-
-- `main`: contains the current core V0 work, PC app, Live Beta baseline, and ESP32-C3 SuperMini migration.
-- `fix/live-fb892fa-reliability`: experimental Live Beta webpage branch with mobile ECG/settings adaptations.
-
-Live Beta files include:
-
-- `api/`
-- `lib/`
-- `src/`
-- `tests/live-heartbeat.test.ts`
-- `docs/live-heartbeat-vercel.md`
-- `docs/plans/2026-07-15-vercel-live-heartbeat.md`
-- `package.json`
-- `vercel.json`
-
-Live Beta purpose:
+Canonical repository:
 
 ```text
-Windows uploader
--> Vercel WebSocket Function
--> Redis Pub/Sub/snapshot
--> public browser viewer
+https://github.com/human-chocker-and-robot-dog/smart-neckband.git
 ```
 
-The Live Beta service uploads PC-derived clean ECG, R peaks, HR, SQI, and lead-off/status data. It must not replace the raw firmware protocol, the local PC raw binary log, or the safety rules for body-connected testing.
+Important commits:
 
-Live Beta validation commands:
+| Purpose | Commit |
+|---|---|
+| Main baseline before webhook/voice/health | `88b841be6f1dc1fdc7f5071769d7a919effbb290` |
+| Ordinary Agent webhook baseline inherited by Health branch | `c08e696` |
+| Reliable voice text transport inherited by Health branch | `17fc0df` |
+| Offline wake and streaming ASR baseline inherited by Health branch | `abe97defef27bda47b6b1a2163e8908eb1df6d6d` |
+| Health contract fixtures | `1425d55` |
+| Staged packet handling, reset coordination, receipts, ECG ordinals | `0f96a8b` |
+| Health MCP runtime, SQLite store, stdio MCP, health webhook | `340c5ea` |
+| Final Health delivery record | `e8373bc` |
+
+Current other large-merge peer observed locally:
+
+```text
+test/inmp441-ble-capture
+e1814c54ada449321a30b710b914687ef5e1a7f3
+```
+
+`feat/health-mcp-v0` and `test/inmp441-ble-capture` both diverge from
+`abe97de`. The microphone branch has newer voice, ASR, and INMP441 work after
+that point. Do not let the Health branch roll those newer microphone changes
+back.
+
+`git merge-tree HEAD test/inmp441-ble-capture` reported one content conflict:
+
+```text
+tools/project.ps1
+```
+
+Other shared files may auto-merge but still require review, especially
+`pc_app/pyproject.toml`, `pc_app/src/smart_neckband/gui.py`,
+`pc_app/src/smart_neckband/ble_io.py`, `pc_app/src/smart_neckband/serial_io.py`,
+`pc_app/src/smart_neckband/protocol.py`, `pc_app/src/smart_neckband/buffers.py`,
+and their tests.
+
+## Contract Files
+
+These files are the contract authority. Reuse them as committed artifacts.
+
+| File | Role | SHA-256 |
+|---|---|---|
+| `docs/specs/Smart_Collar_Health_MCP_Spec_v0.2.md` | Human-readable v0.2 spec | `E1D035EDE3040689AEB0F887EE79E0B35E76D3D80A062AC74566215AE60D5533` |
+| `docs/specs/health-mcp-v0.2.contract.json` | Machine contract, schemas, goldens | `D9EC1619A14A0A7E38F2384C9B7F248B1D9EE3147DB9BD2AFF5C8DC8057F3626` |
+| `docs/health-mcp.md` | Operator guide | `5B1762A04004673B2EE75188F9E01F407942FA88C968BBFFC036E081BD850B1D` |
+
+The runtime loads the machine contract through
+`pc_app/src/smart_neckband/health_contract.py`. Tool schemas exposed by
+`tools/list` come from `x-mcp-tools` in the JSON contract. Do not manually
+duplicate those schemas elsewhere.
+
+Fixed contract facts:
+
+| Item | Value |
+|---|---|
+| Health schema version | `0.2.0` |
+| MCP protocol baseline | `2025-11-25` |
+| Python MCP SDK pin | `mcp==1.28.0` |
+| Transport in this branch | stdio only |
+| MCP resources/prompts/sampling | not implemented in P0 |
+| Health event webhook path | `/v1/health-events` |
+| Health event types | `lead_off`, `adc_clipping`, `input_stale`, `input_offline` |
+
+## Architecture
+
+The intended data flow is:
+
+```text
+serial/BLE reader
+-> PacketParser staged decode
+-> SourceInstanceCoordinator commit gate
+-> PC ring buffers and NeuroKit2 analysis provenance
+-> HealthRuntimeWorker every 500 ms
+-> HealthStore SQLite WAL database
+-> read-only Health MCP stdio process
+-> optional signed health-event webhook dispatcher
+```
+
+The raw transport recorder still records inbound chunks before parse or reset
+decisions. Health state must never replace the raw ECG evidence path.
+
+The Health MCP implementation is PC-side only. It does not change firmware,
+packet wire format, GPIO, sample rates, flash layout, or hardware validation.
+
+## Source Map
+
+Reuse these files directly.
+
+| Area | Files |
+|---|---|
+| Contract loader and wearer validation | `pc_app/src/smart_neckband/health_contract.py` |
+| MCP stdio server and tool service | `pc_app/src/smart_neckband/health_mcp.py` |
+| GUI-side runtime worker | `pc_app/src/smart_neckband/health_runtime.py` |
+| State document builder | `pc_app/src/smart_neckband/health_state.py` |
+| Signal quality and 10-second windows | `pc_app/src/smart_neckband/health_quality.py` |
+| SQLite migrations, state/events/outbox/audit/admin deletion | `pc_app/src/smart_neckband/health_store.py` |
+| Signed webhook sender, dispatcher, mock receiver | `pc_app/src/smart_neckband/health_webhook.py` |
+| Local status and deletion CLI | `pc_app/src/smart_neckband/health_admin.py` |
+| Synthetic no-hardware soak runner | `pc_app/src/smart_neckband/health_soak.py` |
+| Source reset and ECG ordinal ownership | `pc_app/src/smart_neckband/source_coordinator.py` |
+| Receipt-aware buffers | `pc_app/src/smart_neckband/buffers.py` |
+| Staged parser commit accounting | `pc_app/src/smart_neckband/protocol.py` |
+| Serial integration | `pc_app/src/smart_neckband/serial_io.py` |
+| BLE integration | `pc_app/src/smart_neckband/ble_io.py` |
+| Analysis provenance fields | `pc_app/src/smart_neckband/analysis.py` |
+| GUI worker startup | `pc_app/src/smart_neckband/gui.py` |
+| Project wrapper commands | `tools/project.ps1` |
+| Dependency pin | `pc_app/pyproject.toml` |
+| Environment examples | `.env.example` |
+
+The `health_*` modules are not enough by themselves. Health correctness also
+depends on `source_coordinator.py` plus the staged parser, receipt-aware buffer,
+serial/BLE, analysis, and GUI changes.
+
+## Runtime Responsibilities
+
+`HealthRuntimeWorker.from_environment()` is called from
+`pc_app/src/smart_neckband/gui.py`. It starts only when
+`SMART_COLLAR_WEARER_ID` is set. Invalid wearer IDs fail before the worker or
+MCP service starts.
+
+The runtime writes:
+
+| Output | Rule |
+|---|---|
+| Device snapshot | Can exist before the first ECG packet |
+| Wearer state | Created only after a valid ECG packet exists |
+| Events | Four fixed P0 event families only |
+| Health outbox | Enqueued in the same transaction as event transitions |
+| Observability | Parser, analysis, delivery, MCP audit, migration status |
+
+The wearer ID pattern is:
+
+```text
+[A-Za-z0-9][A-Za-z0-9._-]{0,63}
+```
+
+Use a stable pseudonymous ID, not a real name.
+
+## MCP Surface
+
+The MCP server is launched as a child process. Recommended host configuration:
+
+```text
+command = C:\path\to\smart-neckband\pc_app\.venv\Scripts\python.exe
+args    = -m smart_neckband.health_mcp --transport stdio --db C:\path\to\health_state.db --wearer-id xwen
+```
+
+The wrapper command is:
 
 ```powershell
-npm test
-npm run lint
-npm run typecheck
-npm run build
-git diff --check
+.\tools\project.ps1 pc-health-mcp
 ```
 
-Known Live Beta facts:
+The four fixed tools are:
 
-- Vercel WebSockets are Public Beta.
-- Redis is required for durable session state, sequence, snapshot, and Pub/Sub.
-- The fixed public page is `/live`.
-- The PC uploader is `smart_neckband.live_uploader`.
-- A production smoke test previously reached `https://heart.xwenlabs.com/live` with acknowledged batches and zero CRC/packet loss in that run.
-- This is an electronics transport/web test, not medical validation.
+| Tool | Purpose |
+|---|---|
+| `health.get_current_state` | Latest full wearer state |
+| `health.get_event_details` | Authoritative event by `event_id` |
+| `health.get_recent_events` | Paged event history |
+| `health.get_device_status` | Device and transport status without requiring HR/SQI |
 
-## Open Issues And Next Steps
+All tools are read-only, idempotent, non-destructive, and closed-world. They do
+not return raw ECG arrays, cleaned ECG arrays, R-peak arrays, secrets,
+signatures, or webhook bodies.
 
-Core V0:
+Errors inside valid tool execution are returned in the contract envelope with
+`isError=true`. Unknown tools and malformed JSON-RPC requests return JSON-RPC
+errors. This distinction is tested and should not be simplified.
 
-- Confirm whether the latest firmware all-zero IMU rejection has been flashed to the ESP32.
-- Run a battery-powered wireless-only ECG session before making any body-connected claims.
-- Continue evaluating HR stability using real clean ECG after the VN wiring correction.
-- If HR still jumps, log detected R peaks and RR intervals per analysis window so false positives/false negatives are visible.
-- If yaw still spins after `Calibrate Flat`, collect 10 seconds of stationary gyro data and estimate bias variance. Without a magnetometer, long-term yaw drift cannot be eliminated.
-- Improve GUI status visibility for ADC clipping, sample missed, IMU offline, and analysis state.
+Rate limits per MCP process:
 
-Live Beta:
+| Tool | Calls per minute |
+|---|---|
+| `health.get_current_state` | 120 |
+| `health.get_event_details` | 120 |
+| `health.get_recent_events` | 30 |
+| `health.get_device_status` | 60 |
 
-- Keep `fix/live-fb892fa-reliability` isolated unless the user explicitly asks to merge or port specific web changes.
-- If continuing Live Beta, validate on the target branch with `npm test`, `npm run lint`, `npm run typecheck`, `npm run build`, and `git diff --check`.
-- Do not commit `.env.local`, real Redis URLs, tokens, captured ECG data, or production secrets.
+## SQLite Store
 
-## Do Not Infer
+The Health database is local SQLite in WAL mode. Default ignored path:
 
-- Do not infer medical correctness from Heart Monitor LED behavior.
-- Do not infer safe body-connected behavior from USB bench tests.
-- Do not infer Bluetooth health from Windows paired status alone. SPP is connected only when an RFCOMM COM client opens the outgoing port.
-- Do not treat the Live Beta webpage branch as the source of truth for V0 firmware acceptance.
+```text
+data/health/health_state.db
+```
+
+Recommended explicit environment:
+
+```text
+SMART_COLLAR_WEARER_ID=xwen
+SMART_COLLAR_HEALTH_DB_PATH=C:\path\outside\Git\health_state.db
+```
+
+Important tables are created by `HealthStore._initialize()`:
+
+| Table | Purpose |
+|---|---|
+| `health_schema` | Migration version |
+| `health_wearer_sequences` | Per-wearer state and notification counters |
+| `health_states` | Latest contract-versioned state |
+| `health_device_snapshots` | Device status even before ECG |
+| `health_events` | Active/resolved events |
+| `health_event_gates` | Event hysteresis gates |
+| `health_webhook_outbox` | Pending signed notifications |
+| `health_webhook_dead_letters` | Terminal delivery failures |
+| `health_webhook_deliveries` | Delivery success audit |
+| `health_mcp_audit` | MCP calls, latency, outcome |
+| `health_runtime_observability` | Parser and analysis status |
+| `health_deletion_audit` | Local deletion audit without physiology |
+
+Local deletion is intentionally not exposed through MCP. Use
+`pc_app/src/smart_neckband/health_admin.py` through the documented plan/delete
+flow in `docs/health-mcp.md`.
+
+## Health Webhook
+
+The health webhook is separate from the ordinary Agent instruction/reply
+webhook. Do not reuse:
+
+- ordinary Agent endpoint paths;
+- ordinary Agent queues;
+- ordinary Agent deduplication keys;
+- Live Web upload tokens;
+- MCP credentials.
+
+Optional sender environment requires all three variables together:
+
+```text
+SMART_COLLAR_HEALTH_WEBHOOK_URL=http://127.0.0.1:8766/v1/health-events
+SMART_COLLAR_HEALTH_WEBHOOK_KEY_ID=<health-key-id>
+SMART_COLLAR_HEALTH_WEBHOOK_SECRET_HEX=<64-lowercase-hex>
+```
+
+The secret must decode to exactly 32 bytes. HTTP is allowed only for loopback;
+other endpoints must use HTTPS.
+
+The sender persists canonical UTF-8 body bytes and a SHA-256 before first
+attempt, then signs `timestamp + "." + raw_body` with HMAC-SHA256 on each
+delivery attempt. Redirects are disabled. Per-wearer notification ordering is
+enforced by the store.
+
+Synthetic and replay data must use `data_source=synthetic` or `replay` with
+`test_mode=true`; those states must not create production outbox rows.
+
+Receiver-side reference behavior is implemented for tests in
+`HealthWebhookReceiver` and `HealthWebhookReceiverStore` inside
+`pc_app/src/smart_neckband/health_webhook.py`.
+
+## Packet And Source Boundary Changes
+
+Do not remove the staged packet path during merge.
+
+Key ownership:
+
+| Owner | Responsibility |
+|---|---|
+| `PacketParser.feed()` | Decode CRC-valid frames without committing sequence/loss accounting |
+| `PacketParser.commit_packet()` | Commit parser stats only after source coordinator acceptance |
+| `SourceInstanceCoordinator` | Detect and confirm source resets, buffer/replay packets, rotate `source_instance_id` |
+| `EcgSampleOrdinalExtender` | Extend uint32 ECG indices to JSON-safe monotonic ordinals exactly once |
+| Serial/BLE readers | Preserve raw chunks first, create `PacketReceipt`, pass `StagedPacket` through coordinator, then dispatch |
+| Buffers and analysis | Carry `source_instance_id`, received monotonic time, received UTC time, and ECG ordinal provenance |
+
+This is required so stale packets, resets, replayed packets, and analysis
+windows cannot make old physiology look fresh.
+
+## Commands
+
+Install/update PC environment:
+
+```powershell
+.\tools\project.ps1 pc-setup
+```
+
+Run GUI acquisition owner:
+
+```powershell
+.\tools\project.ps1 pc-gui
+```
+
+Run MCP server through wrapper:
+
+```powershell
+.\tools\project.ps1 pc-health-mcp
+```
+
+Read local non-sensitive status:
+
+```powershell
+.\tools\project.ps1 pc-health-status
+```
+
+Run no-hardware soak:
+
+```powershell
+.\tools\project.ps1 pc-health-soak -HealthSoakMinutes 30
+```
+
+Run PC tests:
+
+```powershell
+.\tools\project.ps1 pc-test
+```
+
+For MCP host config, prefer the absolute virtual-environment interpreter under
+`pc_app\.venv\Scripts\python.exe`. Equivalent Python 3.12+ interpreters are
+acceptable only if the project and exact `mcp==1.28.0` are installed and the
+absolute interpreter path is frozen.
+
+## Test Map
+
+Reuse these tests instead of creating new parallel fixtures unless the merge
+changes behavior.
+
+| Test file | Coverage |
+|---|---|
+| `pc_app/tests/test_health_contract.py` | JSON schema, exact four tools, goldens, canonical webhook digest/signature |
+| `pc_app/tests/test_health_mcp.py` | Tool envelopes, stale/offline failures, rate limits, official client stdio, JSON-RPC errors |
+| `pc_app/tests/test_health_runtime.py` | Worker persistence, disconnect handling, environment validation, device-only snapshots |
+| `pc_app/tests/test_health_state.py` | Freshness, quality, clipping windows, counters, analysis provenance, contract validation |
+| `pc_app/tests/test_health_store.py` | Event lifecycle, hysteresis, outbox ordering, restart recovery, deletion, observability |
+| `pc_app/tests/test_health_webhook.py` | Secret/URL policy, HMAC, receiver validation, idempotency, redirects, retry/dead-letter |
+| `pc_app/tests/test_source_coordinator.py` | Reset detection, buffering, voice reset behavior, pending limits, ECG ordinal wrap |
+| `pc_app/tests/test_serial_io.py` | Raw chunk preservation, commit gate, pending reset flush |
+| `pc_app/tests/test_ble_io.py` | BLE reader integration, voice persistence/ACK with reset candidate handling |
+| `pc_app/tests/test_protocol_v0.py` | Shared packet goldens and staged parser accounting |
+
+## Validation Already Completed
+
+The Health MCP branch delivery record in
+`docs/plans/2026-07-24-health-mcp-implementation.md` reports:
+
+| Validation | Result |
+|---|---|
+| PC test suite | 158 passed |
+| Synthetic Health soak | 1800.031 seconds |
+| State revisions in soak | 3208 |
+| MCP calls in soak | 20325 |
+| MCP exceptions in soak | 0 |
+| Production outbox rows in synthetic soak | 0 |
+| SQLite integrity check | `ok` |
+| Independent implementation review | PASS |
+
+No firmware flashing, serial/BLE hardware validation, or body-connected
+acquisition was performed for the Health MCP branch.
+
+## Merge Checklist
+
+Use this as the minimum merge checklist:
+
+1. Start from the final integration target branch, not from `main` unless the
+   goal is only to replay history.
+2. Merge or cherry-pick the three Health commits in order:
+   `1425d55`, `0f96a8b`, `340c5ea`, then keep `e8373bc` as delivery
+   documentation.
+3. Keep `docs/specs/*health-mcp*`, `docs/health-mcp.md`, and the Health tests
+   intact unless intentionally updating the contract.
+4. Resolve `tools/project.ps1` manually so it contains both Health commands and
+   the newer microphone/ASR commands from the target branch.
+5. In `pc_app/pyproject.toml`, keep `health = ["mcp==1.28.0"]` while preserving
+   target-branch extras for mic/ASR.
+6. In `gui.py`, preserve HealthRuntimeWorker startup and target-branch mic/ASR
+   UI startup. The Health worker should remain optional and env-gated.
+7. In `ble_io.py` and `serial_io.py`, keep raw recording before parse decisions,
+   `PacketReceipt`, `SourceInstanceCoordinator`, staged packet commit, and
+   delayed voice ACK semantics.
+8. In `protocol.py`, keep `commit_packet()` and avoid counting parser stats
+   before coordinator acceptance.
+9. In `buffers.py` and `analysis.py`, keep source/receipt/ordinal provenance.
+10. Run `.\tools\project.ps1 pc-test`.
+11. Run `.\tools\project.ps1 pc-health-soak -HealthSoakMinutes 30` if the
+    integration changed parser, store, runtime, or MCP behavior.
+12. Run `git diff --check`.
+13. Do not report hardware or body-connected validation unless new actual logs
+    are supplied.
+
+## Known Integration Risks
+
+Do not downgrade the microphone branch from `e1814c5` back to the older voice
+baseline inside `feat/health-mcp-v0`. The Health branch inherits voice work only
+through `abe97de`.
+
+Do not collapse the health webhook into the ordinary Agent webhook. The two
+systems have different endpoint paths, payloads, secrets, queues, and safety
+meaning.
+
+Do not start the MCP server as the data owner. The data owner is the GUI/runtime
+process writing SQLite.
+
+Do not expose delete, raw ECG, cleaned ECG, R peaks, webhook bodies, secrets, or
+signatures through MCP.
+
+Do not label synthetic/replay state as live. Synthetic/replay must be
+`test_mode=true` and must not enqueue production webhook notifications.
+
+Do not infer medical correctness, robot-motion authorization, or emergency
+semantics from Health MCP state or events.
+
+## Safety Boundaries
+
+The Health MCP implementation is an engineering status interface. It is not a
+medical device, diagnosis, emergency service, or authorization for robot
+movement.
+
+USB debugging is electronics-only without body electrodes. Human ECG
+acquisition requires independent battery power and wireless transport. Do not
+connect desktop USB, wall power, a charging power bank, or grounded bench
+instruments while electrodes are attached to a person.
+
+Firmware flash, flash erase, eFuse changes, serial monitor sessions, and
+body-connected acquisition require explicit user instruction.
+
+## Final Handoff Rule
+
+For the large merge, treat this branch as containing already-reviewed,
+repository-matched Health MCP code. Prefer adapting call sites and resolving
+conflicts over rewriting the feature. If a conflict appears to require changing
+contract behavior, update the spec, machine contract, goldens, tests, and
+operator docs in the same change.

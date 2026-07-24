@@ -92,6 +92,50 @@
       "i2c_error_count": 5,
       "crc16_ccitt_false": "0xbde8",
       "packet_hex": "534e01032000060302010008060504030201010f190a28006100030000000100000002000000030000000400000005000000e8bd"
+    },
+    {
+      "name": "voice_text_final_single_chunk",
+      "packet_type": 4,
+      "packet_type_name": "VOICE_TEXT_CHUNK",
+      "packet_sequence": 16909063,
+      "timestamp_us": 72623859790383360,
+      "payload_length": 48,
+      "utterance_id": 1234605616436508552,
+      "chunk_index": 0,
+      "chunk_count": 1,
+      "text_length": 27,
+      "flags": 1,
+      "text_utf8": "主人主人，向前走。",
+      "crc16_ccitt_false": "0x6ecf",
+      "packet_hex": "534e01043000070302010009060504030201887766554433221100011b01e4b8bbe4babae4b8bbe4babaefbc8ce59091e5898de8b5b0e38082000000000000000000cf6e"
+    },
+    {
+      "name": "voice_status_wait_final",
+      "packet_type": 5,
+      "packet_type_name": "VOICE_STATUS",
+      "packet_sequence": 16909064,
+      "timestamp_us": 72623859790383616,
+      "payload_length": 20,
+      "state": 4,
+      "flags": 3,
+      "last_error": 0,
+      "wake_count": 7,
+      "asr_success_count": 5,
+      "asr_error_count": 1,
+      "text_drop_count": 2,
+      "crc16_ccitt_false": "0x2132",
+      "packet_hex": "534e0105140008030201000a06050403020104030000070000000500000001000000020000003221"
+    },
+    {
+      "name": "voice_text_ack",
+      "packet_type": 6,
+      "packet_type_name": "VOICE_TEXT_ACK",
+      "packet_sequence": 168496141,
+      "timestamp_us": 72623859790383872,
+      "payload_length": 8,
+      "utterance_id": 1234605616436508552,
+      "crc16_ccitt_false": "0x2881",
+      "packet_hex": "534e010608000d0c0b0a000b06050403020188776655443322118128"
     }
   ]
 }

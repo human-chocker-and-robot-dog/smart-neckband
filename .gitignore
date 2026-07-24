@@ -4,9 +4,14 @@ firmware/build-*/
 firmware/sdkconfig
 firmware/sdkconfig.esp32
 firmware/sdkconfig.esp32c3
+firmware/sdkconfig.esp32c3-voice
 firmware/sdkconfig.old
 firmware/sdkconfig.*.old
 firmware/managed_components/
+experiments/inmp441_ble_capture/firmware/build/
+experiments/inmp441_ble_capture/firmware/managed_components/
+experiments/inmp441_ble_capture/firmware/sdkconfig
+experiments/inmp441_ble_capture/firmware/sdkconfig.old
 
 # Local machine configuration
 config/local.ps1
@@ -35,10 +40,13 @@ dist/
 # Captured data and logs
 data/
 recordings/
+captures/
 *.ecg.bin
 *.parquet
 *.csv
 !firmware/partitions.csv
+!firmware/partitions_voice.csv
+!experiments/inmp441_ble_capture/firmware/partitions.csv
 *.log
 
 # Editors and OS

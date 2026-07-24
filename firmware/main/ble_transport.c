@@ -26,7 +26,9 @@ typedef struct {
 } v0_ble_tx_item_t;
 
 static QueueHandle_t s_tx_queue = NULL;
+static QueueHandle_t s_low_priority_tx_queue = NULL;
 static TaskHandle_t s_tx_task_handle = NULL;
+static v0_transport_rx_callback_t s_rx_callback = NULL;
 
 static volatile bool s_connected = false;
 static volatile bool s_congested = false;
@@ -67,13 +69,21 @@ static void drop_pending_tx_queue(const char *reason)
     }
 
     const UBaseType_t queued = uxQueueMessagesWaiting(s_tx_queue);
-    if (queued == 0U) {
+    const UBaseType_t low_priority_queued =
+        s_low_priority_tx_queue == NULL ? 0U :
+        uxQueueMessagesWaiting(s_low_priority_tx_queue);
+    if (queued == 0U && low_priority_queued == 0U) {
         return;
     }
 
     (void)xQueueReset(s_tx_queue);
-    add_disconnected_drops((uint32_t)queued);
-    ESP_LOGI(TAG, "dropped %u stale BLE TX packet(s) on %s", (unsigned)queued, reason);
+    if (s_low_priority_tx_queue != NULL) {
+        (void)xQueueReset(s_low_priority_tx_queue);
+    }
+    add_disconnected_drops((uint32_t)(queued + low_priority_queued));
+    ESP_LOGI(TAG, "dropped %u stale BLE TX packet(s) on %s",
+             (unsigned)(queued + low_priority_queued),
+             reason);
 }
 
 static void update_connection_state(void)
@@ -107,8 +117,13 @@ static void tx_task(void *arg)
             continue;
         }
 
-        if (xQueueReceive(s_tx_queue, &item, pdMS_TO_TICKS(50U)) != pdTRUE) {
-            continue;
+        if (xQueueReceive(s_tx_queue, &item, 0U) != pdTRUE) {
+            if (s_low_priority_tx_queue == NULL ||
+                xQueueReceive(s_low_priority_tx_queue,
+                              &item,
+                              pdMS_TO_TICKS(50U)) != pdTRUE) {
+                continue;
+            }
         }
 
         update_connection_state();
@@ -150,10 +165,8 @@ static esp_err_t init_nvs_for_ble(void)
 
 static void on_ble_rx(const uint8_t *data, size_t length)
 {
-    (void)data;
-    if (length > 0U) {
-        ESP_LOGI(TAG, "ignored %u-byte BLE control write (not defined in V0)",
-                 (unsigned)length);
+    if (data != NULL && length > 0U && s_rx_callback != NULL) {
+        s_rx_callback(data, length);
     }
 }
 
@@ -176,6 +189,12 @@ esp_err_t v0_transport_start(void)
     if (s_tx_queue == NULL) {
         s_tx_queue = xQueueCreate(BOARD_TRANSPORT_TX_QUEUE_DEPTH, sizeof(v0_ble_tx_item_t));
         if (s_tx_queue == NULL) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    if (s_low_priority_tx_queue == NULL) {
+        s_low_priority_tx_queue = xQueueCreate(4U, sizeof(v0_ble_tx_item_t));
+        if (s_low_priority_tx_queue == NULL) {
             return ESP_ERR_NO_MEM;
         }
     }
@@ -264,6 +283,35 @@ bool v0_transport_enqueue(const uint8_t *data, size_t length)
 
     add_disconnected_drops(1U);
     return false;
+}
+
+bool v0_transport_enqueue_low_priority(const uint8_t *data, size_t length)
+{
+    if (data == NULL || length == 0U || length > PROTOCOL_V0_MAX_PACKET_SIZE ||
+        s_low_priority_tx_queue == NULL) {
+        return false;
+    }
+
+    update_connection_state();
+    if (!s_connected) {
+        add_disconnected_drops(1U);
+        return false;
+    }
+
+    v0_ble_tx_item_t item = {
+        .length = (uint16_t)length,
+    };
+    memcpy(item.data, data, length);
+    if (xQueueSend(s_low_priority_tx_queue, &item, 0U) == pdTRUE) {
+        return true;
+    }
+    add_queue_overflow();
+    return false;
+}
+
+void v0_transport_set_rx_callback(v0_transport_rx_callback_t callback)
+{
+    s_rx_callback = callback;
 }
 
 void v0_transport_get_status(v0_transport_status_t *out_status)

@@ -13,6 +13,7 @@
 | AD8232 `LO+` | GPIO26 | GPIO10 | 从 26 改接 10 |
 | I2C `SDA` | GPIO21 | GPIO6 | 从 21 改接 6 |
 | I2C `SCL` | GPIO22 | GPIO7 | 从 22 改接 7 |
+| INMP441 `SCK/WS/SD` | 未配置 | GPIO4 / GPIO5 / GPIO20 | 仅 Voice 构建；先确认 GPIO20 引出 |
 | AD8232 `SDN` | 3.3 V | 3.3 V | 不变，V0 不由 MCU 控制 |
 | AD8232 / MPU6050 / OLED 电源 | 3.3 V、GND | 3V3、GND | 共地；GPIO 禁止接 5 V |
 | 无线链路 | Bluetooth Classic SPP | BLE GATT | PC 端改选 BLE |
@@ -29,6 +30,10 @@
 4. AD8232 `SDN` 继续接 3.3 V。
 5. MPU6050 与 OLED 共用 I2C：两者 `SDA` 接 `GPIO6`，`SCL` 接 `GPIO7`。
 6. 上电前用万用表确认 3V3 与 GND 没有短路，并确认没有把 5 V 接到任何 GPIO。
+
+Voice 候选接线还包括 INMP441：`VDD->3V3`、`GND/L/R->GND`、
+`SCK->GPIO4`、`WS->GPIO5`、`SD->GPIO20`。详情和模型/凭据安全门见
+[离线唤醒与火山 ASR 指南](../voice-wake-asr.md)。
 
 不要把丝印 `0` 误当成物理排针序号；这里的数字全部是芯片 GPIO 编号。
 
