@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from queue import Empty, Queue
+from queue import Empty, Full, Queue
 from threading import Event, Thread
 from typing import Callable
 
@@ -11,7 +11,7 @@ class FunAsrVadSettings:
     model: str = "fsmn-vad"
     sample_rate: int = 16000
     chunk_ms: int = 200
-    queue_depth: int = 96
+    queue_depth: int = 512
 
     @property
     def chunk_samples(self) -> int:
@@ -39,20 +39,45 @@ class FunAsrVadThread(Thread):
         self._on_event = on_event
         self._audio: Queue[tuple[int, ...] | None] = Queue(maxsize=settings.queue_depth)
         self._stop_event = Event()
+        self._dropped_frames = 0
 
     def feed(self, samples: tuple[int, ...]) -> None:
         if self._stop_event.is_set():
             return
+        item = tuple(samples)
         try:
-            self._audio.put_nowait(tuple(samples))
-        except Exception:
-            self._on_event(VadEvent("error", "VAD 音频队列已满"))
+            self._audio.put_nowait(item)
+        except Full:
+            self._drop_oldest_audio_frame()
+            try:
+                self._audio.put_nowait(item)
+            except Full:
+                self._dropped_frames += 1
+
+    def _drop_oldest_audio_frame(self) -> None:
+        try:
+            dropped = self._audio.get_nowait()
+        except Empty:
+            return
+        if dropped is None:
+            self.finish()
+            return
+        self._dropped_frames += 1
+        if self._dropped_frames == 1 or self._dropped_frames % 100 == 0:
+            self._on_event(
+                VadEvent(
+                    "status",
+                    f"VAD 忙，已丢弃旧音频 {self._dropped_frames} 帧",
+                )
+            )
 
     def finish(self) -> None:
-        try:
-            self._audio.put_nowait(None)
-        except Exception:
-            self._stop_event.set()
+        while not self._stop_event.is_set():
+            try:
+                self._audio.put_nowait(None)
+                return
+            except Full:
+                self._drop_oldest_audio_frame()
 
     def cancel(self) -> None:
         self._stop_event.set()
