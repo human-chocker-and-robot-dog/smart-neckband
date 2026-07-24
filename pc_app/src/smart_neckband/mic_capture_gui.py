@@ -205,10 +205,7 @@ def main() -> int:
             vad_layout = QFormLayout(vad_group)
             self.vad_enabled = QCheckBox("启用音频阈值自动停止")
             self.vad_enabled.setChecked(True)
-            self.vad_sample_rate = QSpinBox()
-            self.vad_sample_rate.setRange(8000, 48000)
-            self.vad_sample_rate.setSingleStep(1000)
-            self.vad_sample_rate.setValue(vad_settings.sample_rate)
+            self.vad_sample_rate_label = QLabel("16000 Hz（固件固定）")
             self.vad_analysis_window_ms = QSpinBox()
             self.vad_analysis_window_ms.setRange(20, 1000)
             self.vad_analysis_window_ms.setSingleStep(20)
@@ -234,13 +231,6 @@ def main() -> int:
             self.vad_min_rms_delta.setDecimals(1)
             self.vad_min_rms_delta.setSingleStep(50.0)
             self.vad_min_rms_delta.setValue(vad_settings.min_rms_delta)
-            self.vad_speech_end_threshold_ratio = QDoubleSpinBox()
-            self.vad_speech_end_threshold_ratio.setRange(0.10, 1.00)
-            self.vad_speech_end_threshold_ratio.setDecimals(2)
-            self.vad_speech_end_threshold_ratio.setSingleStep(0.05)
-            self.vad_speech_end_threshold_ratio.setValue(
-                vad_settings.speech_end_threshold_ratio
-            )
             self.vad_silence_ms = QSpinBox()
             self.vad_silence_ms.setRange(100, 5000)
             self.vad_silence_ms.setSingleStep(100)
@@ -268,15 +258,14 @@ def main() -> int:
             self.debug_log_label = QLabel(f"调试日志：{self.debug_log_path}")
             self.debug_log_label.setWordWrap(True)
             vad_layout.addRow(self.vad_enabled)
-            vad_layout.addRow("采样率", self.vad_sample_rate)
+            vad_layout.addRow("采样率", self.vad_sample_rate_label)
             vad_layout.addRow("分析窗口 ms", self.vad_analysis_window_ms)
             vad_layout.addRow("VAD 队列深度", self.vad_queue_depth)
             vad_layout.addRow("静默 RMS", self.vad_noise_rms)
             vad_layout.addRow("说话 RMS", self.vad_speech_rms)
             vad_layout.addRow("RMS 倍数", self.vad_rms_multiplier)
             vad_layout.addRow("最小 RMS 增量", self.vad_min_rms_delta)
-            vad_layout.addRow("结束阈值比例", self.vad_speech_end_threshold_ratio)
-            vad_layout.addRow("低于结束阈值持续 ms", self.vad_silence_ms)
+            vad_layout.addRow("回落到环境音持续 ms", self.vad_silence_ms)
             vad_layout.addRow("最小说话 ms", self.vad_min_speech_ms)
             vad_layout.addRow("静默采样 ms", self.vad_calibration_ms)
             vad_layout.addRow("环境标定", self.calibrate_silence_button)
@@ -372,9 +361,6 @@ def main() -> int:
             self.vad_speech_rms.valueChanged.connect(self.update_vad_threshold_label)
             self.vad_rms_multiplier.valueChanged.connect(self.update_vad_threshold_label)
             self.vad_min_rms_delta.valueChanged.connect(self.update_vad_threshold_label)
-            self.vad_speech_end_threshold_ratio.valueChanged.connect(
-                self.update_vad_threshold_label
-            )
             self.timer = QTimer(self)
             self.timer.timeout.connect(self.refresh_plot)
             self.timer.start(100)
@@ -677,14 +663,12 @@ def main() -> int:
                 self.asr_force_speech_ms,
                 self.save_asr_settings_button,
                 self.vad_enabled,
-                self.vad_sample_rate,
                 self.vad_analysis_window_ms,
                 self.vad_queue_depth,
                 self.vad_noise_rms,
                 self.vad_speech_rms,
                 self.vad_rms_multiplier,
                 self.vad_min_rms_delta,
-                self.vad_speech_end_threshold_ratio,
                 self.vad_silence_ms,
                 self.vad_min_speech_ms,
                 self.vad_calibration_ms,
@@ -719,16 +703,13 @@ def main() -> int:
 
         def vad_settings(self) -> AudioThresholdVadSettings:
             return AudioThresholdVadSettings(
-                sample_rate=int(self.vad_sample_rate.value()),
+                sample_rate=16000,
                 analysis_window_ms=int(self.vad_analysis_window_ms.value()),
                 queue_depth=int(self.vad_queue_depth.value()),
                 noise_rms=float(self.vad_noise_rms.value()),
                 speech_rms=float(self.vad_speech_rms.value()),
                 rms_multiplier=float(self.vad_rms_multiplier.value()),
                 min_rms_delta=float(self.vad_min_rms_delta.value()),
-                speech_end_threshold_ratio=float(
-                    self.vad_speech_end_threshold_ratio.value()
-                ),
                 silence_ms=int(self.vad_silence_ms.value()),
                 min_speech_ms=int(self.vad_min_speech_ms.value()),
                 calibration_ms=int(self.vad_calibration_ms.value()),

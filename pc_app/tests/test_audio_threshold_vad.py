@@ -37,22 +37,34 @@ def test_audio_threshold_settings_roundtrip_keeps_speech_sample() -> None:
     assert AudioThresholdVadSettings.from_json_dict(settings.to_json_dict()) == settings
 
 
-def test_audio_threshold_uses_lower_threshold_after_speech_starts() -> None:
+def test_audio_threshold_ends_when_audio_returns_to_environment_level() -> None:
     settings = AudioThresholdVadSettings(
         noise_rms=100.0,
         rms_multiplier=3.0,
-        min_rms_delta=0.0,
-        speech_end_threshold_ratio=0.60,
+        min_rms_delta=50.0,
     )
 
     assert settings.speech_rms_threshold == 300.0
-    assert settings.speech_end_rms_threshold == 180.0
+    assert settings.speech_end_rms_threshold == 150.0
+
+
+def test_audio_threshold_migrates_legacy_timing_and_sample_rate() -> None:
+    settings = AudioThresholdVadSettings.from_json_dict(
+        {
+            "sample_rate": 15000,
+            "speech_end_threshold_ratio": 0.60,
+            "silence_ms": 500,
+        }
+    )
+
+    assert settings.sample_rate == 16000
+    assert settings.silence_ms == 1000
 
 
 def test_audio_threshold_vad_detects_speech_end_after_silence() -> None:
     events: list[VadEvent] = []
     settings = AudioThresholdVadSettings(
-        sample_rate=1000,
+        sample_rate=16000,
         analysis_window_ms=100,
         noise_rms=10.0,
         rms_multiplier=2.0,
@@ -62,10 +74,10 @@ def test_audio_threshold_vad_detects_speech_end_after_silence() -> None:
     )
     vad = AudioThresholdVadThread(settings, on_event=events.append)
 
-    assert vad._handle_chunk((40,) * 100, final=False) == 40.0
-    vad.feed((40,) * 100)
-    vad.feed((0,) * 100)
-    vad.feed((0,) * 100)
+    assert vad._handle_chunk((40,) * 1600, final=False) == 40.0
+    vad.feed((40,) * 1600)
+    vad.feed((0,) * 1600)
+    vad.feed((0,) * 1600)
     vad.finish()
     vad.start()
     vad.join(timeout=2.0)
@@ -77,20 +89,19 @@ def test_audio_threshold_vad_detects_speech_end_after_silence() -> None:
 def test_audio_threshold_vad_does_not_cut_quiet_speech_at_start_threshold() -> None:
     events: list[VadEvent] = []
     settings = AudioThresholdVadSettings(
-        sample_rate=1000,
+        sample_rate=16000,
         analysis_window_ms=100,
         noise_rms=10.0,
         rms_multiplier=3.0,
         min_rms_delta=0.0,
-        speech_end_threshold_ratio=0.60,
         min_speech_ms=100,
         silence_ms=200,
     )
     vad = AudioThresholdVadThread(settings, on_event=events.append)
 
-    vad.feed((40,) * 100)
-    vad.feed((20,) * 100)
-    vad.feed((20,) * 100)
+    vad.feed((40,) * 1600)
+    vad.feed((20,) * 1600)
+    vad.feed((20,) * 1600)
     vad.finish()
     vad.start()
     vad.join(timeout=2.0)
