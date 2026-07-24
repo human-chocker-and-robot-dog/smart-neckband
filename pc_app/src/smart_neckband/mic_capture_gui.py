@@ -96,6 +96,7 @@ def main() -> int:
             self.calibration_rms_values: list[float] = []
             self.calibration_peak_values: list[int] = []
             self.calibration_samples = 0
+            self.calibration_kind: str | None = None
 
             root = QWidget()
             layout = QVBoxLayout(root)
@@ -219,6 +220,10 @@ def main() -> int:
             self.vad_noise_rms.setRange(0.0, 32768.0)
             self.vad_noise_rms.setDecimals(1)
             self.vad_noise_rms.setValue(vad_settings.noise_rms)
+            self.vad_speech_rms = QDoubleSpinBox()
+            self.vad_speech_rms.setRange(0.0, 32768.0)
+            self.vad_speech_rms.setDecimals(1)
+            self.vad_speech_rms.setValue(vad_settings.speech_rms)
             self.vad_rms_multiplier = QDoubleSpinBox()
             self.vad_rms_multiplier.setRange(1.0, 20.0)
             self.vad_rms_multiplier.setDecimals(2)
@@ -247,6 +252,9 @@ def main() -> int:
             self.vad_calibration_ms.setValue(vad_settings.calibration_ms)
             self.calibrate_silence_button = QPushButton("静默环境采样")
             self.calibrate_silence_button.setEnabled(False)
+            self.calibrate_speech_button = QPushButton("说话声音采样")
+            self.calibrate_speech_button.setEnabled(False)
+            self.save_sampling_button = QPushButton("保存采样")
             self.vad_status_label = QLabel("VAD 尚未启动")
             self.vad_status_label.setWordWrap(True)
             self.vad_threshold_label = QLabel(
@@ -260,6 +268,7 @@ def main() -> int:
             vad_layout.addRow("分析窗口 ms", self.vad_analysis_window_ms)
             vad_layout.addRow("VAD 队列深度", self.vad_queue_depth)
             vad_layout.addRow("静默 RMS", self.vad_noise_rms)
+            vad_layout.addRow("说话 RMS", self.vad_speech_rms)
             vad_layout.addRow("RMS 倍数", self.vad_rms_multiplier)
             vad_layout.addRow("最小 RMS 增量", self.vad_min_rms_delta)
             vad_layout.addRow("停止静默 ms", self.vad_silence_ms)
@@ -267,6 +276,8 @@ def main() -> int:
             vad_layout.addRow("最大录音 ms", self.vad_max_recording_ms)
             vad_layout.addRow("静默采样 ms", self.vad_calibration_ms)
             vad_layout.addRow("环境标定", self.calibrate_silence_button)
+            vad_layout.addRow("说话标定", self.calibrate_speech_button)
+            vad_layout.addRow("采样配置", self.save_sampling_button)
             vad_layout.addRow("阈值", self.vad_threshold_label)
             vad_layout.addRow("VAD 状态", self.vad_status_label)
             vad_layout.addRow("日志", self.debug_log_label)
@@ -348,10 +359,13 @@ def main() -> int:
             self.start_button.clicked.connect(self.start_capture)
             self.wave_test_button.clicked.connect(self.start_wave_test)
             self.calibrate_silence_button.clicked.connect(self.start_silence_calibration)
+            self.calibrate_speech_button.clicked.connect(self.start_speech_calibration)
+            self.save_sampling_button.clicked.connect(self.save_sampling_settings)
             self.stop_button.clicked.connect(self.stop_capture)
             self.browse_button.clicked.connect(self.choose_path)
             self.save_asr_settings_button.clicked.connect(self.save_asr_settings)
             self.vad_noise_rms.valueChanged.connect(self.update_vad_threshold_label)
+            self.vad_speech_rms.valueChanged.connect(self.update_vad_threshold_label)
             self.vad_rms_multiplier.valueChanged.connect(self.update_vad_threshold_label)
             self.vad_min_rms_delta.valueChanged.connect(self.update_vad_threshold_label)
             self.timer = QTimer(self)
@@ -433,6 +447,9 @@ def main() -> int:
             self.calibrate_silence_button.setEnabled(
                 connected and self.recorder is None and self.capture_mode is None
             )
+            self.calibrate_speech_button.setEnabled(
+                connected and self.recorder is None and self.capture_mode is None
+            )
             self.connect_button.setText("断开" if connected else "连接")
             self.connect_button.setEnabled(True)
             if state == "disconnected":
@@ -487,6 +504,12 @@ def main() -> int:
             self.file_label.setText(f"无需唤醒，正在写入 {self.path.text()}")
 
         def start_silence_calibration(self) -> None:
+            self.start_audio_calibration("silence")
+
+        def start_speech_calibration(self) -> None:
+            self.start_audio_calibration("speech")
+
+        def start_audio_calibration(self, kind: str) -> None:
             if self.worker is None or self.recorder is not None:
                 return
             try:
@@ -494,7 +517,8 @@ def main() -> int:
             except Exception as exc:
                 QMessageBox.warning(self, "音频阈值配置错误", str(exc))
                 return
-            self.capture_mode = "calibrate"
+            self.capture_mode = f"calibrate_{kind}"
+            self.calibration_kind = kind
             self.samples.clear()
             self.curve.setData([])
             self.calibration_rms_values.clear()
@@ -505,19 +529,29 @@ def main() -> int:
             self.start_button.setEnabled(False)
             self.wave_test_button.setEnabled(False)
             self.calibrate_silence_button.setEnabled(False)
+            self.calibrate_speech_button.setEnabled(False)
+            self.save_sampling_button.setEnabled(False)
             self.stop_button.setEnabled(True)
             self.encoding.setEnabled(False)
             self.shift.setEnabled(False)
             self.set_asr_settings_enabled(False)
             self.worker.send(f"SHIFT {self.shift.value()}")
             self.worker.send(f"START {self.encoding.currentData()}")
-            self.state_label.setText("静默环境采样中，请保持安静")
-            self.vad_status_label.setText(
-                f"正在采样环境噪声 {self.vad_calibration_ms.value()} ms…"
-            )
-            self.file_label.setText("静默环境采样不写 WAV，只更新音频阈值")
+            if kind == "speech":
+                self.state_label.setText("说话声音采样中，请用正常音量说一句话")
+                self.vad_status_label.setText(
+                    f"正在采样说话声音 {self.vad_calibration_ms.value()} ms…"
+                )
+                self.file_label.setText("说话声音采样不写 WAV，只更新说话 RMS")
+            else:
+                self.state_label.setText("静默环境采样中，请保持安静")
+                self.vad_status_label.setText(
+                    f"正在采样环境噪声 {self.vad_calibration_ms.value()} ms…"
+                )
+                self.file_label.setText("静默环境采样不写 WAV，只更新静默 RMS")
             self.debug_logger.event(
                 "threshold_vad.calibration_start",
+                kind=kind,
                 target_ms=int(self.vad_calibration_ms.value()),
             )
 
@@ -537,6 +571,7 @@ def main() -> int:
             self.start_button.setEnabled(False)
             self.wave_test_button.setEnabled(False)
             self.calibrate_silence_button.setEnabled(False)
+            self.calibrate_speech_button.setEnabled(False)
             self.stop_button.setEnabled(True)
             self.encoding.setEnabled(False)
             self.shift.setEnabled(False)
@@ -588,6 +623,7 @@ def main() -> int:
                 self.file_label.setText(f"已保存 {count} 个样本：{self.path.text()}")
                 self.recorder = None
             self.capture_mode = None
+            self.calibration_kind = None
             self.stop_button.setEnabled(False)
             self.encoding.setEnabled(True)
             self.shift.setEnabled(True)
@@ -595,6 +631,7 @@ def main() -> int:
             self.start_button.setEnabled(self.worker is not None)
             self.wave_test_button.setEnabled(self.worker is not None)
             self.calibrate_silence_button.setEnabled(self.worker is not None)
+            self.calibrate_speech_button.setEnabled(self.worker is not None)
 
         def set_asr_settings_enabled(self, enabled: bool) -> None:
             for widget in (
@@ -619,6 +656,7 @@ def main() -> int:
                 self.vad_analysis_window_ms,
                 self.vad_queue_depth,
                 self.vad_noise_rms,
+                self.vad_speech_rms,
                 self.vad_rms_multiplier,
                 self.vad_min_rms_delta,
                 self.vad_silence_ms,
@@ -630,6 +668,10 @@ def main() -> int:
             self.calibrate_silence_button.setEnabled(
                 enabled and self.worker is not None and self.capture_mode is None
             )
+            self.calibrate_speech_button.setEnabled(
+                enabled and self.worker is not None and self.capture_mode is None
+            )
+            self.save_sampling_button.setEnabled(enabled)
 
         def asr_settings(self) -> VolcAsrSettings:
             return VolcAsrSettings(
@@ -656,6 +698,7 @@ def main() -> int:
                 analysis_window_ms=int(self.vad_analysis_window_ms.value()),
                 queue_depth=int(self.vad_queue_depth.value()),
                 noise_rms=float(self.vad_noise_rms.value()),
+                speech_rms=float(self.vad_speech_rms.value()),
                 rms_multiplier=float(self.vad_rms_multiplier.value()),
                 min_rms_delta=float(self.vad_min_rms_delta.value()),
                 silence_ms=int(self.vad_silence_ms.value()),
@@ -705,6 +748,26 @@ def main() -> int:
                 )
             except Exception as exc:
                 self.vad_threshold_label.setText(f"阈值配置错误：{exc}")
+
+        def save_sampling_settings(self) -> None:
+            try:
+                settings = self.vad_settings()
+                settings.validate()
+                self.save_vad_settings(settings)
+            except Exception as exc:
+                QMessageBox.warning(self, "采样保存失败", str(exc))
+                return
+            self.vad_status_label.setText(
+                f"采样已保存：静默 RMS {settings.noise_rms:.0f} / "
+                f"说话 RMS {settings.speech_rms:.0f} / 阈值 {settings.speech_rms_threshold:.0f}"
+            )
+            self.debug_logger.event(
+                "threshold_vad.samples_saved",
+                noise_rms=settings.noise_rms,
+                speech_rms=settings.speech_rms,
+                threshold=settings.speech_rms_threshold,
+                path=str(self.vad_settings_path),
+            )
 
         def start_asr_session(self) -> None:
             if self.asr_worker is not None:
@@ -763,8 +826,8 @@ def main() -> int:
                 values = np.asarray(frame.samples, dtype=np.float64)
                 rms = float(np.sqrt(np.mean(values * values))) if len(values) else 0.0
                 peak = int(np.max(np.abs(values))) if len(values) else 0
-                if self.capture_mode == "calibrate":
-                    self.collect_silence_calibration(frame, rms, peak)
+                if self.capture_mode in ("calibrate_silence", "calibrate_speech"):
+                    self.collect_audio_calibration(frame, rms, peak)
                 clipped = " / 本帧削顶" if frame.flags & FLAG_CLIPPED else ""
                 if frame.encoding == ENCODING_PCM16:
                     mode = "PCM16"
@@ -817,7 +880,7 @@ def main() -> int:
                     f"连接间隔 {status.reserved * 1.25:.2f} ms"
                 )
 
-        def collect_silence_calibration(
+        def collect_audio_calibration(
             self,
             frame: AudioFrame,
             rms: float,
@@ -831,33 +894,37 @@ def main() -> int:
                 frame.sample_rate * int(self.vad_calibration_ms.value()) // 1000,
             )
             progress = min(100.0, self.calibration_samples * 100.0 / target_samples)
+            name = "说话声音" if self.calibration_kind == "speech" else "静默环境"
             self.vad_status_label.setText(
-                f"静默环境采样中：{progress:.0f}% / RMS {rms:.0f} / Peak {peak}"
+                f"{name}采样中：{progress:.0f}% / RMS {rms:.0f} / Peak {peak}"
             )
             if self.calibration_samples >= target_samples:
-                self.finish_silence_calibration()
+                self.finish_audio_calibration()
 
-        def finish_silence_calibration(self) -> None:
+        def finish_audio_calibration(self) -> None:
             if self.worker is not None:
                 for _ in range(3):
                     self.worker.send("STOP")
-            noise_rms = calibrated_noise_rms(self.calibration_rms_values)
+            sampled_rms = calibrated_noise_rms(self.calibration_rms_values)
             peak = max(self.calibration_peak_values, default=0)
-            self.vad_noise_rms.setValue(noise_rms)
+            if self.calibration_kind == "speech":
+                self.vad_speech_rms.setValue(sampled_rms)
+            else:
+                self.vad_noise_rms.setValue(sampled_rms)
             self.update_vad_threshold_label()
-            try:
-                settings = self.vad_settings()
-                self.save_vad_settings(settings)
-            except Exception as exc:
-                self.debug_logger.exception("threshold_vad.calibration_save_error", exc)
             threshold = self.vad_settings().speech_rms_threshold
+            name = "说话" if self.calibration_kind == "speech" else "静默"
             self.vad_status_label.setText(
-                f"静默采样完成：环境 RMS {noise_rms:.0f} / Peak {peak} / 说话阈值 {threshold:.0f}"
+                f"{name}采样完成：静默 RMS {self.vad_noise_rms.value():.0f} / "
+                f"说话 RMS {self.vad_speech_rms.value():.0f} / Peak {peak} / 阈值 {threshold:.0f}"
             )
-            self.file_label.setText("静默环境采样完成，已更新本地音频阈值")
+            self.file_label.setText(f"{name}采样完成；点击“保存采样”可写入本地配置")
             self.debug_logger.event(
                 "threshold_vad.calibration_done",
-                noise_rms=noise_rms,
+                kind=self.calibration_kind,
+                sampled_rms=sampled_rms,
+                noise_rms=float(self.vad_noise_rms.value()),
+                speech_rms=float(self.vad_speech_rms.value()),
                 peak=peak,
                 threshold=threshold,
                 windows=len(self.calibration_rms_values),

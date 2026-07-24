@@ -16,6 +16,7 @@ class AudioThresholdVadSettings:
     analysis_window_ms: int = 100
     queue_depth: int = 512
     noise_rms: float = 300.0
+    speech_rms: float = 0.0
     rms_multiplier: float = 3.0
     min_rms_delta: float = 250.0
     silence_ms: int = 800
@@ -29,10 +30,16 @@ class AudioThresholdVadSettings:
 
     @property
     def speech_rms_threshold(self) -> float:
-        return max(
+        base = max(
             self.noise_rms * self.rms_multiplier,
             self.noise_rms + self.min_rms_delta,
         )
+        if self.speech_rms <= self.noise_rms:
+            return base
+        gap = self.speech_rms - self.noise_rms
+        calibrated = self.noise_rms + gap * 0.35
+        ceiling = self.noise_rms + gap * 0.70
+        return min(max(base, calibrated), ceiling)
 
     def validate(self) -> None:
         if self.sample_rate <= 0:
@@ -43,6 +50,8 @@ class AudioThresholdVadSettings:
             raise ValueError("音频阈值 VAD 队列深度至少为 8")
         if self.noise_rms < 0:
             raise ValueError("静默 RMS 不能为负数")
+        if self.speech_rms < 0:
+            raise ValueError("说话 RMS 不能为负数")
         if self.rms_multiplier < 1.0:
             raise ValueError("RMS 倍数至少为 1.0")
         if self.min_rms_delta < 0:
@@ -62,6 +71,7 @@ class AudioThresholdVadSettings:
             "analysis_window_ms": self.analysis_window_ms,
             "queue_depth": self.queue_depth,
             "noise_rms": self.noise_rms,
+            "speech_rms": self.speech_rms,
             "rms_multiplier": self.rms_multiplier,
             "min_rms_delta": self.min_rms_delta,
             "silence_ms": self.silence_ms,
@@ -82,6 +92,7 @@ class AudioThresholdVadSettings:
             ),
             queue_depth=_integer(data.get("queue_depth"), defaults.queue_depth),
             noise_rms=_number(data.get("noise_rms"), defaults.noise_rms),
+            speech_rms=_number(data.get("speech_rms"), defaults.speech_rms),
             rms_multiplier=_number(
                 data.get("rms_multiplier"), defaults.rms_multiplier
             ),

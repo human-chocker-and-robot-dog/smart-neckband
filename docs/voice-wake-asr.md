@@ -101,13 +101,13 @@ wss://openspeech.bytedance.com/api/v3/sauc/bigmodel
 上位机 ASR 页现在暴露以下调试参数：
 
 - 火山 ASR：endpoint、Resource ID、鉴权模式、密钥、UID、模型、音频队列深度、WebSocket 发送分片、连接/接收/final 超时、`end_window_size`、`force_to_speech_time`。
-- 音频阈值 VAD：采样率、分析窗口、音频队列深度、静默 RMS、RMS 倍数、最小 RMS 增量、停止静默时长、最小说话时长、最大录音时长、静默采样时长。实际说话阈值为 `max(静默 RMS × 倍数, 静默 RMS + 最小增量)`。
+- 音频阈值 VAD：采样率、分析窗口、音频队列深度、静默 RMS、说话 RMS、RMS 倍数、最小 RMS 增量、停止静默时长、最小说话时长、最大录音时长、采样时长。未采说话声音时，实际说话阈值为 `max(静默 RMS × 倍数, 静默 RMS + 最小增量)`；采过说话声音后，阈值会夹在静默 RMS 与说话 RMS 之间，避免旧公式把阈值推得过低或过高。
 
 ASR 默认使用 100 ms 音频分片和 20 ms 接收轮询上限。发送循环会先快速 drain 已缓存音频并连续发出多个 WebSocket audio frame，然后再短暂读取服务端消息；VAD 停止后会扩大 drain 时间片，尽快发送尾部音频和 final 标记，避免队列被 `recv` 超时节流。
 
-运行日志写入 `pc_app/data/mic_capture_debug.log`，包含唤醒、ASR 连接/发送/final、队列丢弃、阈值 VAD chunk RMS/Peak、静默环境采样和异常 traceback。日志会脱敏字段名里包含 key/token/secret/password/authorization 的值。
+运行日志写入 `pc_app/data/mic_capture_debug.log`，包含唤醒、ASR 连接/发送/final、队列丢弃、阈值 VAD chunk RMS/Peak、静默环境采样、说话声音采样、保存采样和异常 traceback。日志会脱敏字段名里包含 key/token/secret/password/authorization 的值。
 
-ASR 和 VAD 队列满时不再把本轮直接打成错误；上位机会丢弃最旧音频帧并继续处理，停止录音时也会优先腾出空间发送 final 标记。音频阈值 VAD 不依赖 FunASR、PyTorch 或本地模型；点击“静默环境采样”后，上位机会直接启动麦克风传输，采样环境噪声并自动更新静默 RMS。
+ASR 和 VAD 队列满时不再把本轮直接打成错误；上位机会丢弃最旧音频帧并继续处理，停止录音时也会优先腾出空间发送 final 标记。音频阈值 VAD 不依赖 FunASR、PyTorch 或本地模型；点击“静默环境采样”或“说话声音采样”后，上位机会直接启动麦克风传输，采样完成后更新界面数值。点击“保存采样”会把静默 RMS 与说话 RMS 写入 `pc_app/data/audio_threshold_vad_settings.json`，下次启动自动加载。
 
 ## 状态与错误
 

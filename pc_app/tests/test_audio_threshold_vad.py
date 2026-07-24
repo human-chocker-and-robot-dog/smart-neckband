@@ -20,6 +20,23 @@ def test_audio_threshold_settings_compute_robust_speech_threshold() -> None:
     assert settings.speech_rms_threshold == 350.0
 
 
+def test_audio_threshold_uses_speech_sample_when_available() -> None:
+    settings = AudioThresholdVadSettings(
+        noise_rms=100.0,
+        speech_rms=1000.0,
+        rms_multiplier=3.0,
+        min_rms_delta=250.0,
+    )
+
+    assert settings.speech_rms_threshold == 415.0
+
+
+def test_audio_threshold_settings_roundtrip_keeps_speech_sample() -> None:
+    settings = AudioThresholdVadSettings(noise_rms=120.0, speech_rms=980.0)
+
+    assert AudioThresholdVadSettings.from_json_dict(settings.to_json_dict()) == settings
+
+
 def test_audio_threshold_vad_detects_speech_end_after_silence() -> None:
     events: list[VadEvent] = []
     settings = AudioThresholdVadSettings(
