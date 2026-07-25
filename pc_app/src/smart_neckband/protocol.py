@@ -14,11 +14,17 @@ class PacketType(IntEnum):
     ECG_BATCH = 1
     IMU_BATCH = 2
     DEVICE_STATUS = 3
+    VOICE_TEXT_CHUNK = 4
+    VOICE_STATUS = 5
+    VOICE_TEXT_ACK = 6
 
 
 PACKET_TYPE_ECG_BATCH = PacketType.ECG_BATCH
 PACKET_TYPE_IMU_BATCH = PacketType.IMU_BATCH
 PACKET_TYPE_DEVICE_STATUS = PacketType.DEVICE_STATUS
+PACKET_TYPE_VOICE_TEXT_CHUNK = PacketType.VOICE_TEXT_CHUNK
+PACKET_TYPE_VOICE_STATUS = PacketType.VOICE_STATUS
+PACKET_TYPE_VOICE_TEXT_ACK = PacketType.VOICE_TEXT_ACK
 PACKET_TYPE_ECG = PACKET_TYPE_ECG_BATCH
 
 ECG_SAMPLE_RATE_HZ = 500
@@ -46,16 +52,36 @@ ECG_PREFIX_STRUCT = struct.Struct("<IHBB")
 IMU_PREFIX_STRUCT = struct.Struct("<IHBB")
 IMU_POINT_STRUCT = struct.Struct("<hhhhhh")
 DEVICE_STATUS_STRUCT = struct.Struct("<BBBBBBHIIIIII")
+VOICE_TEXT_CHUNK_PREFIX_STRUCT = struct.Struct("<QBBBB")
+VOICE_STATUS_STRUCT = struct.Struct("<BBHIIII")
+VOICE_TEXT_ACK_STRUCT = struct.Struct("<Q")
 CRC_STRUCT = struct.Struct("<H")
+
+VOICE_TEXT_CHUNK_DATA_SIZE = 36
+VOICE_TEXT_MAX_BYTES = 512
+VOICE_TEXT_FLAG_FINAL = 1 << 0
+VOICE_TEXT_FLAG_RETRANSMIT = 1 << 1
 
 HEADER_SIZE = HEADER_STRUCT.size
 ECG_PAYLOAD_SIZE = ECG_PREFIX_STRUCT.size + (ECG_SAMPLE_COUNT * 2)
 IMU_PAYLOAD_SIZE = IMU_PREFIX_STRUCT.size + (IMU_SAMPLE_COUNT * IMU_POINT_STRUCT.size)
 DEVICE_STATUS_PAYLOAD_SIZE = DEVICE_STATUS_STRUCT.size
+VOICE_TEXT_CHUNK_PAYLOAD_SIZE = (
+    VOICE_TEXT_CHUNK_PREFIX_STRUCT.size + VOICE_TEXT_CHUNK_DATA_SIZE
+)
+VOICE_STATUS_PAYLOAD_SIZE = VOICE_STATUS_STRUCT.size
+VOICE_TEXT_ACK_PAYLOAD_SIZE = VOICE_TEXT_ACK_STRUCT.size
 ECG_PACKET_SIZE = HEADER_SIZE + ECG_PAYLOAD_SIZE + CRC_STRUCT.size
 IMU_PACKET_SIZE = HEADER_SIZE + IMU_PAYLOAD_SIZE + CRC_STRUCT.size
 DEVICE_STATUS_PACKET_SIZE = HEADER_SIZE + DEVICE_STATUS_PAYLOAD_SIZE + CRC_STRUCT.size
-MAX_PAYLOAD_SIZE = max(ECG_PAYLOAD_SIZE, IMU_PAYLOAD_SIZE, DEVICE_STATUS_PAYLOAD_SIZE)
+MAX_PAYLOAD_SIZE = max(
+    ECG_PAYLOAD_SIZE,
+    IMU_PAYLOAD_SIZE,
+    DEVICE_STATUS_PAYLOAD_SIZE,
+    VOICE_TEXT_CHUNK_PAYLOAD_SIZE,
+    VOICE_STATUS_PAYLOAD_SIZE,
+    VOICE_TEXT_ACK_PAYLOAD_SIZE,
+)
 MAX_PACKET_SIZE = HEADER_SIZE + MAX_PAYLOAD_SIZE + CRC_STRUCT.size
 
 
@@ -196,9 +222,90 @@ class DeviceStatusPayload:
 
 
 @dataclass(frozen=True, slots=True)
+class VoiceTextChunkPayload:
+    utterance_id: int
+    chunk_index: int
+    chunk_count: int
+    text_bytes: bytes
+    flags: int = VOICE_TEXT_FLAG_FINAL
+
+    def to_bytes(self) -> bytes:
+        if not 0 <= self.utterance_id <= 0xFFFFFFFFFFFFFFFF:
+            raise ProtocolError(f"utterance_id out of uint64 range: {self.utterance_id}")
+        if not 1 <= self.chunk_count <= 0xFF:
+            raise ProtocolError(f"chunk_count out of range: {self.chunk_count}")
+        if not 0 <= self.chunk_index < self.chunk_count:
+            raise ProtocolError(
+                f"chunk_index {self.chunk_index} outside chunk_count {self.chunk_count}"
+            )
+        if not 0 < len(self.text_bytes) <= VOICE_TEXT_CHUNK_DATA_SIZE:
+            raise ProtocolError(
+                f"voice text chunk must contain 1..{VOICE_TEXT_CHUNK_DATA_SIZE} bytes"
+            )
+        _validate_u8(self.flags, "flags")
+        prefix = VOICE_TEXT_CHUNK_PREFIX_STRUCT.pack(
+            self.utterance_id,
+            self.chunk_index,
+            self.chunk_count,
+            len(self.text_bytes),
+            self.flags,
+        )
+        return prefix + self.text_bytes.ljust(VOICE_TEXT_CHUNK_DATA_SIZE, b"\x00")
+
+
+@dataclass(frozen=True, slots=True)
+class VoiceStatusPayload:
+    state: int
+    flags: int
+    last_error: int
+    wake_count: int
+    asr_success_count: int
+    asr_error_count: int
+    text_drop_count: int
+
+    def to_bytes(self) -> bytes:
+        _validate_u8(self.state, "state")
+        _validate_u8(self.flags, "flags")
+        if not 0 <= self.last_error <= 0xFFFF:
+            raise ProtocolError(f"last_error out of uint16 range: {self.last_error}")
+        counters = (
+            self.wake_count,
+            self.asr_success_count,
+            self.asr_error_count,
+            self.text_drop_count,
+        )
+        for counter in counters:
+            if not 0 <= counter <= 0xFFFFFFFF:
+                raise ProtocolError(f"voice status counter out of uint32 range: {counter}")
+        return VOICE_STATUS_STRUCT.pack(
+            self.state,
+            self.flags,
+            self.last_error,
+            *counters,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class VoiceTextAckPayload:
+    utterance_id: int
+
+    def to_bytes(self) -> bytes:
+        if not 0 <= self.utterance_id <= 0xFFFFFFFFFFFFFFFF:
+            raise ProtocolError(f"utterance_id out of uint64 range: {self.utterance_id}")
+        return VOICE_TEXT_ACK_STRUCT.pack(self.utterance_id)
+
+
+@dataclass(frozen=True, slots=True)
 class ParsedPacket:
     header: PacketHeader
-    payload: EcgPayload | ImuPayload | DeviceStatusPayload
+    payload: (
+        EcgPayload
+        | ImuPayload
+        | DeviceStatusPayload
+        | VoiceTextChunkPayload
+        | VoiceStatusPayload
+        | VoiceTextAckPayload
+    )
     crc16_ccitt_false: int
     raw: bytes
 
@@ -213,6 +320,8 @@ class ParserStats:
     sequence_gap_count: int = 0
     packets_lost: int = 0
     last_sequence: int | None = None
+    duplicate_packets: int = 0
+    stale_packets: int = 0
 
 
 def _validate_u8(value: int, name: str) -> None:
@@ -303,6 +412,48 @@ def encode_device_status_packet(
     )
 
 
+def encode_voice_text_chunk_packet(
+    *,
+    packet_sequence: int,
+    timestamp_us: int,
+    chunk: VoiceTextChunkPayload,
+) -> bytes:
+    return _encode_packet(
+        packet_type=PacketType.VOICE_TEXT_CHUNK,
+        packet_sequence=packet_sequence,
+        timestamp_us=timestamp_us,
+        payload=chunk.to_bytes(),
+    )
+
+
+def encode_voice_status_packet(
+    *,
+    packet_sequence: int,
+    timestamp_us: int,
+    status: VoiceStatusPayload,
+) -> bytes:
+    return _encode_packet(
+        packet_type=PacketType.VOICE_STATUS,
+        packet_sequence=packet_sequence,
+        timestamp_us=timestamp_us,
+        payload=status.to_bytes(),
+    )
+
+
+def encode_voice_text_ack_packet(
+    *,
+    packet_sequence: int,
+    timestamp_us: int,
+    utterance_id: int,
+) -> bytes:
+    return _encode_packet(
+        packet_type=PacketType.VOICE_TEXT_ACK,
+        packet_sequence=packet_sequence,
+        timestamp_us=timestamp_us,
+        payload=VoiceTextAckPayload(utterance_id=utterance_id).to_bytes(),
+    )
+
+
 def decode_header(packet: bytes) -> PacketHeader:
     if len(packet) < HEADER_SIZE:
         raise ProtocolError(f"packet too short for V0 header: {len(packet)}")
@@ -342,6 +493,12 @@ def decode_packet(packet: bytes) -> ParsedPacket:
         payload = decode_imu_payload(payload_bytes)
     elif header.packet_type == PacketType.DEVICE_STATUS:
         payload = decode_device_status_payload(payload_bytes)
+    elif header.packet_type == PacketType.VOICE_TEXT_CHUNK:
+        payload = decode_voice_text_chunk_payload(payload_bytes)
+    elif header.packet_type == PacketType.VOICE_STATUS:
+        payload = decode_voice_status_payload(payload_bytes)
+    elif header.packet_type == PacketType.VOICE_TEXT_ACK:
+        payload = decode_voice_text_ack_payload(payload_bytes)
     else:
         raise ProtocolError(f"unsupported packet type {header.packet_type}")
 
@@ -430,6 +587,52 @@ def decode_device_status_payload(payload: bytes) -> DeviceStatusPayload:
     )
 
 
+def decode_voice_text_chunk_payload(payload: bytes) -> VoiceTextChunkPayload:
+    if len(payload) != VOICE_TEXT_CHUNK_PAYLOAD_SIZE:
+        raise ProtocolError(
+            "voice text chunk payload length must be "
+            f"{VOICE_TEXT_CHUNK_PAYLOAD_SIZE}, got {len(payload)}"
+        )
+    utterance_id, chunk_index, chunk_count, text_length, flags = (
+        VOICE_TEXT_CHUNK_PREFIX_STRUCT.unpack(
+            payload[: VOICE_TEXT_CHUNK_PREFIX_STRUCT.size]
+        )
+    )
+    if chunk_count == 0 or chunk_index >= chunk_count:
+        raise ProtocolError(
+            f"invalid voice chunk index/count: {chunk_index}/{chunk_count}"
+        )
+    if not 0 < text_length <= VOICE_TEXT_CHUNK_DATA_SIZE:
+        raise ProtocolError(f"invalid voice chunk text_length: {text_length}")
+    text_bytes = payload[
+        VOICE_TEXT_CHUNK_PREFIX_STRUCT.size :
+        VOICE_TEXT_CHUNK_PREFIX_STRUCT.size + text_length
+    ]
+    return VoiceTextChunkPayload(
+        utterance_id=utterance_id,
+        chunk_index=chunk_index,
+        chunk_count=chunk_count,
+        text_bytes=text_bytes,
+        flags=flags,
+    )
+
+
+def decode_voice_status_payload(payload: bytes) -> VoiceStatusPayload:
+    if len(payload) != VOICE_STATUS_PAYLOAD_SIZE:
+        raise ProtocolError(
+            f"voice status payload length must be {VOICE_STATUS_PAYLOAD_SIZE}, got {len(payload)}"
+        )
+    return VoiceStatusPayload(*VOICE_STATUS_STRUCT.unpack(payload))
+
+
+def decode_voice_text_ack_payload(payload: bytes) -> VoiceTextAckPayload:
+    if len(payload) != VOICE_TEXT_ACK_PAYLOAD_SIZE:
+        raise ProtocolError(
+            f"voice ACK payload length must be {VOICE_TEXT_ACK_PAYLOAD_SIZE}, got {len(payload)}"
+        )
+    return VoiceTextAckPayload(utterance_id=VOICE_TEXT_ACK_STRUCT.unpack(payload)[0])
+
+
 class PacketParser:
     """Streaming V0 parser for arbitrary serial chunks."""
 
@@ -490,19 +693,27 @@ class PacketParser:
             except ProtocolError:
                 self.stats.length_errors += 1
                 continue
-            self._record_sequence(parsed.header.packet_sequence)
-            self.stats.packets_ok += 1
             packets.append(parsed)
 
         return packets
 
-    def _record_sequence(self, sequence: int) -> None:
+    def commit_packet(self, packet: ParsedPacket) -> bool:
+        sequence = packet.header.packet_sequence
         last = self.stats.last_sequence
         if last is not None:
-            expected = (last + 1) & 0xFFFFFFFF
-            if sequence != expected:
+            distance = (sequence - last) & 0xFFFFFFFF
+            if distance == 0:
+                self.stats.duplicate_packets += 1
+                return False
+            if distance >= 0x80000000:
+                self.stats.stale_packets += 1
+                return False
+            if distance > 1:
                 self.stats.sequence_gap_count += 1
-                forward_distance = (sequence - expected) & 0xFFFFFFFF
-                if forward_distance < 0x80000000:
-                    self.stats.packets_lost += forward_distance
+                self.stats.packets_lost += distance - 1
         self.stats.last_sequence = sequence
+        self.stats.packets_ok += 1
+        return True
+
+    def reset_sequence_baseline(self) -> None:
+        self.stats.last_sequence = None

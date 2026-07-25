@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("esp32", "esp32c3")]
+    [ValidateSet("esp32c3")]
     [string]$Target
 )
 
@@ -19,6 +19,9 @@ if (-not (Test-Path -LiteralPath $LocalConfig)) {
 if ([string]::IsNullOrWhiteSpace($Target)) {
     $Target = $ExpectedTarget
 }
+if ($Target -ne "esp32c3") {
+    throw "Unsupported target '$Target'. Expected esp32c3."
+}
 
 function Assert-Command {
     param([Parameter(Mandatory)][string]$Name)
@@ -35,14 +38,29 @@ Write-Host "PowerShell: $($PSVersionTable.PSVersion)"
 Write-Host "Git: $(Assert-Command -Name git)"
 Write-Host "Python launcher: $(Assert-Command -Name py)"
 
+$idfPython = $null
+$idfScript = $null
+if (-not [string]::IsNullOrWhiteSpace($env:IDF_PATH) -and
+    -not [string]::IsNullOrWhiteSpace($env:IDF_PYTHON_ENV_PATH)) {
+    $candidatePython = Join-Path $env:IDF_PYTHON_ENV_PATH "Scripts\python.exe"
+    $candidateScript = Join-Path $env:IDF_PATH "tools\idf.py"
+    if ((Test-Path -LiteralPath $candidatePython) -and
+        (Test-Path -LiteralPath $candidateScript)) {
+        $idfPython = $candidatePython
+        $idfScript = $candidateScript
+    }
+}
+
 $idf = Get-Command idf.py -ErrorAction SilentlyContinue
 $eim = Get-Command eim -ErrorAction SilentlyContinue
 
-if ($null -eq $idf -and $null -eq $eim) {
+if ($null -eq $idfPython -and $null -eq $idf -and $null -eq $eim) {
     throw "Neither idf.py nor eim is available in PATH. Open an ESP-IDF PowerShell or install EIM."
 }
 
-if ($null -ne $idf) {
+if ($null -ne $idfPython) {
+    $idfVersion = (& $idfPython $idfScript --version | Out-String).Trim()
+} elseif ($null -ne $idf) {
     $idfVersion = (& idf.py --version | Out-String).Trim()
 } else {
     $idfVersion = (& eim run "idf.py --version" | Out-String).Trim()

@@ -374,7 +374,7 @@ def run_live_upload(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Upload PC-cleaned SmartCollar ECG to the Vercel live heartbeat service.")
-    parser.add_argument("--port", required=True, help="Windows Bluetooth SPP COM port, for example COM19.")
+    parser.add_argument("--port", required=True, help="Windows USB serial COM port, for example COM21.")
     parser.add_argument("--ws-url", required=True, help="Live ingest WebSocket URL.")
     parser.add_argument("--session-id", required=True, help="Configured LIVE_SESSION_ID.")
     parser.add_argument("--ingest-token", required=True, help="Configured LIVE_INGEST_TOKEN.")

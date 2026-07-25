@@ -15,6 +15,9 @@ from smart_neckband.protocol import (
     FLAG_TRANSPORT_OVERFLOW,
     IMU_PACKET_SIZE,
     IMU_PAYLOAD_SIZE,
+    VOICE_STATUS_PAYLOAD_SIZE,
+    VOICE_TEXT_ACK_PAYLOAD_SIZE,
+    VOICE_TEXT_CHUNK_PAYLOAD_SIZE,
     DeviceStatusPayload,
     EcgPayload,
     ImuPayload,
@@ -23,12 +26,18 @@ from smart_neckband.protocol import (
     PacketType,
     PROTOCOL_VERSION,
     ProtocolError,
+    VoiceStatusPayload,
+    VoiceTextAckPayload,
+    VoiceTextChunkPayload,
     crc16_ccitt_false,
     decode_header,
     decode_packet,
     encode_device_status_packet,
     encode_ecg_packet,
     encode_imu_packet,
+    encode_voice_status_packet,
+    encode_voice_text_ack_packet,
+    encode_voice_text_chunk_packet,
 )
 
 
@@ -103,12 +112,51 @@ def test_encode_device_status_packet_matches_shared_golden_vector() -> None:
     assert int.from_bytes(packet[-2:], "little") == int(vector["crc16_ccitt_false"], 16)
 
 
+def test_encode_voice_packets_match_shared_golden_vectors() -> None:
+    vectors = load_vectors()
+    text_packet = encode_voice_text_chunk_packet(
+        packet_sequence=0x01020307,
+        timestamp_us=0x0102030405060900,
+        chunk=VoiceTextChunkPayload(
+            utterance_id=0x1122334455667788,
+            chunk_index=0,
+            chunk_count=1,
+            text_bytes="主人主人，向前走。".encode(),
+        ),
+    )
+    status_packet = encode_voice_status_packet(
+        packet_sequence=0x01020308,
+        timestamp_us=0x0102030405060A00,
+        status=VoiceStatusPayload(
+            state=4,
+            flags=3,
+            last_error=0,
+            wake_count=7,
+            asr_success_count=5,
+            asr_error_count=1,
+            text_drop_count=2,
+        ),
+    )
+    ack_packet = encode_voice_text_ack_packet(
+        packet_sequence=0x0A0B0C0D,
+        timestamp_us=0x0102030405060B00,
+        utterance_id=0x1122334455667788,
+    )
+
+    assert text_packet.hex() == vectors["voice_text_final_single_chunk"]["packet_hex"]
+    assert status_packet.hex() == vectors["voice_status_wait_final"]["packet_hex"]
+    assert ack_packet.hex() == vectors["voice_text_ack"]["packet_hex"]
+
+
 @pytest.mark.parametrize(
     ("name", "packet_type", "payload_length"),
     [
         ("ecg_batch_20_samples_lo_minus_adc_clipping", PacketType.ECG_BATCH, ECG_PAYLOAD_SIZE),
         ("imu_batch_two_raw_samples", PacketType.IMU_BATCH, IMU_PAYLOAD_SIZE),
         ("device_status_lead_off_and_overflow", PacketType.DEVICE_STATUS, DEVICE_STATUS_PAYLOAD_SIZE),
+        ("voice_text_final_single_chunk", PacketType.VOICE_TEXT_CHUNK, VOICE_TEXT_CHUNK_PAYLOAD_SIZE),
+        ("voice_status_wait_final", PacketType.VOICE_STATUS, VOICE_STATUS_PAYLOAD_SIZE),
+        ("voice_text_ack", PacketType.VOICE_TEXT_ACK, VOICE_TEXT_ACK_PAYLOAD_SIZE),
     ],
 )
 def test_decode_header_from_golden_vectors(name: str, packet_type: PacketType, payload_length: int) -> None:
@@ -134,6 +182,18 @@ def test_decode_packet_returns_typed_payloads() -> None:
     assert isinstance(
         decode_packet(bytes.fromhex(vectors["device_status_lead_off_and_overflow"]["packet_hex"])).payload,
         DeviceStatusPayload,
+    )
+    assert isinstance(
+        decode_packet(bytes.fromhex(vectors["voice_text_final_single_chunk"]["packet_hex"])).payload,
+        VoiceTextChunkPayload,
+    )
+    assert isinstance(
+        decode_packet(bytes.fromhex(vectors["voice_status_wait_final"]["packet_hex"])).payload,
+        VoiceStatusPayload,
+    )
+    assert isinstance(
+        decode_packet(bytes.fromhex(vectors["voice_text_ack"]["packet_hex"])).payload,
+        VoiceTextAckPayload,
     )
 
 
@@ -168,6 +228,9 @@ def test_stream_parser_resyncs_and_tracks_sequence_gap() -> None:
 
     assert [packet.header.packet_sequence for packet in packets] == [0x01020304, 0x01020306]
     assert parser.stats.bytes_discarded == len(b"noise")
+    assert parser.stats.packets_ok == 0
+    for packet in packets:
+        assert parser.commit_packet(packet)
     assert parser.stats.sequence_gap_count == 1
     assert parser.stats.packets_lost == 1
 
@@ -187,9 +250,13 @@ def test_stream_parser_does_not_count_stale_packet_as_billions_lost() -> None:
         samples=(2001,) * 20,
     )
 
-    assert len(parser.feed(current + stale)) == 2
-    assert parser.stats.sequence_gap_count == 1
+    packets = parser.feed(current + stale)
+    assert len(packets) == 2
+    assert parser.commit_packet(packets[0])
+    assert not parser.commit_packet(packets[1])
+    assert parser.stats.sequence_gap_count == 0
     assert parser.stats.packets_lost == 0
+    assert parser.stats.stale_packets == 1
 
 
 def test_stream_parser_rejects_crc_error() -> None:

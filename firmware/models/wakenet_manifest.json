@@ -1,0 +1,13 @@
+{
+  "format_version": 1,
+  "target": "esp32c3",
+  "engine": "WakeNet9s",
+  "wake_phrase": "主人主人",
+  "model_status": "required_not_supplied",
+  "artifact_format": "ESP-SR srmodels.bin partition image",
+  "model_partition_max_bytes": 1048576,
+  "sha256": null,
+  "license": null,
+  "source": "Espressif official custom wake-word service",
+  "notes": "Do not substitute an ESP-SR built-in wake word for final acceptance."
+}

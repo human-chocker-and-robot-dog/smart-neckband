@@ -53,30 +53,32 @@ The Skill does not override project permissions. The agent may build, inspect, l
 
 ## 3. Confirmed hardware baseline
 
-- Chip family: classic ESP32, not ESP32-S3.
-- Module: ESP-WROOM-32.
-- CPU: dual-core.
-- Chip revision: v3.0.
-- Radio: Wi-Fi + Bluetooth Classic + BLE.
+- Chip family: ESP32-C3, not classic ESP32 and not ESP32-S3.
+- Board: ESP32-C3 SuperMini.
+- CPU: single-core RISC-V, 160 MHz.
+- Observed chip revision: v1.1.
+- Radio: Wi-Fi + BLE; Bluetooth Classic is not supported.
 - Physical flash: 4 MB.
-- ESP-IDF target: `esp32`.
-- Current Hello World was configured as 2 MB; this project must use 4 MB defaults.
+- ESP-IDF target: `esp32c3` only.
 - No PSRAM is assumed.
 
 ## 4. Pin assignment
 
 Keep all pins centralized in one board configuration header.
 
-- ECG ADC input: GPIO34, ADC1_CH6.
-- AD8232 LO-: GPIO25.
-- AD8232 LO+: GPIO26.
-- I2C SDA: GPIO21.
-- I2C SCL: GPIO22.
+- ECG ADC input: GPIO0, ADC1_CH0.
+- AD8232 LO-: GPIO3.
+- AD8232 LO+: GPIO10.
+- I2C SDA: GPIO6.
+- I2C SCL: GPIO7.
+- INMP441 BCLK: GPIO4.
+- INMP441 WS: GPIO5.
+- INMP441 SD: GPIO20.
 - AD8232 SDN: tied to 3.3 V in V0 hardware.
 - MPU6050 expected address: `0x68`.
 - OLED expected address: usually `0x3C`, but scan and report the actual address.
 
-Do not move ECG to ADC2 pins. ADC2 is shared with Wi-Fi and creates avoidable conflicts. GPIO34 is input-only, which is suitable for AD8232 OUTPUT.
+Do not move ECG to ADC2. Keep ECG on the configured ESP32-C3 ADC1 GPIO. GPIO2, GPIO8, and GPIO9 are strapping pins; GPIO18 and GPIO19 are reserved for native USB; do not assign those pins to sensors.
 
 ## 5. Sampling architecture
 
@@ -89,7 +91,7 @@ Do not move ECG to ADC2 pins. ADC2 is shared with Wi-Fi and creates avoidable co
 - Timestamp every sample or packet with the same monotonic device clock.
 - Track timer overruns, missed notifications, queue overflow, transport overflow, clipping, and lead-off state.
 
-Do not configure the classic ESP32 ADC continuous/DMA driver at 500 Hz. Its continuous driver is intended for substantially higher sampling frequencies. If a future implementation uses high-rate DMA plus decimation, treat that as a separate experiment with explicit validation.
+Do not configure the ESP32-C3 ADC continuous/DMA driver at 500 Hz. If a future implementation uses high-rate DMA plus decimation, treat that as a separate experiment with explicit validation.
 
 ## 6. ECG data integrity rules
 
@@ -106,11 +108,10 @@ Do not configure the classic ESP32 ADC continuous/DMA driver at 500 Hz. Its cont
 
 Implement transports behind a common interface.
 
-1. UART over USB for electronic bench debugging only.
-2. Bluetooth Classic SPP as the first wireless V0 transport for Windows.
-3. BLE GATT later, while keeping the binary protocol unchanged.
+1. UART over native USB for electronic bench debugging only.
+2. Encrypted BLE GATT as the production wireless V0 transport for Windows.
 
-The current ESP32 supports Bluetooth Classic, so SPP is allowed. Future ESP32-C6 hardware will not support Classic Bluetooth, so application logic must not depend directly on SPP-specific APIs.
+Keep the binary protocol transport-independent. Do not add new Bluetooth Classic SPP dependencies or revive the retired classic ESP32 backend.
 
 ## 8. OLED rules
 
@@ -120,7 +121,7 @@ Display only compact state such as:
 
 - RUN / STOP
 - 500 Hz sampling status
-- SPP or BLE connection
+- BLE connection
 - lead-off state
 - ADC clipping
 - queue or buffer high-water mark
@@ -187,14 +188,14 @@ For this Windows setup, the fastest reliable ESP-IDF command shape is to load th
 
 Known local facts from the Hello World baseline exploration:
 
-- The currently used ESP32-C3 SuperMini bench port is `COM21`; keep it in ignored `config/local.ps1` as `$ProjectSerialPort = "COM21"`. The classic ESP32 was previously observed on `COM18`, but that historical port must not be assumed for the C3.
+- The currently used ESP32-C3 SuperMini bench port is `COM21`; keep it in ignored `config/local.ps1` as `$ProjectSerialPort = "COM21"`.
 - The installed IDF root is `C:\Espressif\v6.0.2\esp-idf`.
-- The installer profile uses `C:\Espressif\tools\python\v6.0.2\venv` and reports `ESP-IDF v6.0.2`.
+- The installer profile is intended to use `C:\Espressif\tools\python\v6.0.2\venv`. As observed on 2026-07-25, that venv points to a removed user Python 3.12 installation and must be repaired before new firmware builds can run.
 - Directly dot-sourcing `C:\Espressif\v6.0.2\esp-idf\export.ps1` can fail on this machine because it expects a missing user Python environment under `C:\Users\XWen1024\.espressif\python_env\...`.
 - Plain `eim run "idf.py --version"` may return an empty version and `Failed to setup logging`; prefer the installer profile above when the official PowerShell environment is needed.
 - In the managed Codex sandbox, `idf.py build` may fail with Windows pipe permission errors such as `PermissionError: [WinError 5]`. If that happens, do not retry the same shape; classify it as a sandbox/process issue and rerun the same IDF command outside the sandbox with approval.
-- A first full ESP-IDF build can take many minutes. Use a long timeout, or a background terminal/session if the current Codex surface supports it. Do not start a second build against the same `firmware/build` directory while `ninja`, `cmake`, `ccache`, or `xtensa-*gcc` processes are still running.
-- If a long build times out but compiler processes are still active, treat it as an observation timeout, not a build failure. Check `firmware/build`, `firmware/build/log`, running processes, and expected artifacts such as `firmware/build/hello_world.bin`, then wait for the existing build to finish.
+- A first full ESP-IDF build can take many minutes. Use a long timeout, or a background terminal/session if the current Codex surface supports it. Do not start a second build against the same build directory while `ninja`, `cmake`, `ccache`, or `riscv32-esp-elf-*` processes are still running.
+- If a long build times out but compiler processes are still active, treat it as an observation timeout, not a build failure. Check the selected build directory, its logs, running processes, and expected application artifacts, then wait for the existing build to finish.
 - After the first full build, rerun `.\tools\project.ps1 build` to obtain a clean, fast, explicit success exit code before reporting validation.
 
 ### 12.2 Hardware smoke-test monitor

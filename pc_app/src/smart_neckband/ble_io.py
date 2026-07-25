@@ -4,15 +4,34 @@ import asyncio
 from dataclasses import dataclass
 import logging
 from pathlib import Path
+from queue import Empty, Queue
 import sys
 from threading import Event, Lock, Thread
 import time
 from typing import Callable
 
-from .protocol import DeviceStatusPayload, EcgPayload, ImuPayload, PacketParser, ParserStats, ParsedPacket
+from .protocol import (
+    DeviceStatusPayload,
+    EcgPayload,
+    ImuPayload,
+    PacketParser,
+    ParserStats,
+    ParsedPacket,
+    VoiceStatusPayload,
+    VoiceTextChunkPayload,
+    encode_voice_text_ack_packet,
+)
 from .publisher import DataPublisher, NullPublisher
 from .recorder import RawBinaryRecorder
 from .serial_io import PcDataStores, SerialRuntimeStatus
+from .source_coordinator import (
+    CoordinatorResult,
+    EcgSampleOrdinalExtender,
+    PacketReceipt,
+    SourceInstanceCoordinator,
+    StagedPacket,
+)
+from .voice import VoiceTextAssembler, VoiceTranscript
 
 
 BLE_UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
@@ -110,6 +129,12 @@ class BlePacketReader:
         publisher: DataPublisher | None = None,
         raw_chunk_callback: Callable[[bytes], None] | None = None,
         debug_callback: Callable[[str], None] | None = None,
+        voice_text_callback: Callable[[VoiceTranscript], bool] | None = None,
+        voice_status_callback: Callable[[VoiceStatusPayload], None] | None = None,
+        control_write_callback: Callable[[bytes], None] | None = None,
+        receipt_factory: Callable[[], PacketReceipt] = PacketReceipt.now,
+        monotonic_ns: Callable[[], int] = time.monotonic_ns,
+        source_coordinator: SourceInstanceCoordinator | None = None,
     ) -> None:
         self.address = address
         self.port = address
@@ -119,6 +144,16 @@ class BlePacketReader:
         self.raw_log_path = Path(raw_log_path) if raw_log_path is not None else None
         self.raw_chunk_callback = raw_chunk_callback
         self.debug_callback = debug_callback
+        self.voice_text_callback = voice_text_callback
+        self.voice_status_callback = voice_status_callback
+        self.control_write_callback = control_write_callback
+        self.receipt_factory = receipt_factory
+        self.monotonic_ns = monotonic_ns
+        self.source_coordinator = source_coordinator or SourceInstanceCoordinator()
+        self.ecg_ordinal_extender = EcgSampleOrdinalExtender()
+        self.voice_assembler = VoiceTextAssembler()
+        self._control_tx_queue: Queue[bytes] = Queue()
+        self._control_packet_sequence = 0
         self._stop = Event()
         self._runtime_lock = Lock()
         self._thread: Thread | None = None
@@ -130,6 +165,13 @@ class BlePacketReader:
         self._ecg_packet_count = 0
         self._last_packet_monotonic_s: float | None = None
         self._last_ecg_sample_index: int | None = None
+        self._last_transport_packet_monotonic_ns: int | None = None
+        self._last_transport_packet_received_at_utc: str | None = None
+        self._last_ecg_packet_monotonic_ns: int | None = None
+        self._last_ecg_packet_received_at_utc: str | None = None
+        self._last_status_packet_monotonic_ns: int | None = None
+        self._last_status_packet_received_at_utc: str | None = None
+        self._last_ecg_raw_sample_index: int | None = None
         self._first_notification_logged = False
 
     @property
@@ -151,6 +193,15 @@ class BlePacketReader:
                 ecg_packet_count=self._ecg_packet_count,
                 last_packet_monotonic_s=self._last_packet_monotonic_s,
                 last_ecg_sample_index=self._last_ecg_sample_index,
+                source_instance_id=self.source_coordinator.source_instance_id,
+                last_transport_packet_monotonic_ns=self._last_transport_packet_monotonic_ns,
+                last_transport_packet_received_at_utc=self._last_transport_packet_received_at_utc,
+                last_ecg_packet_monotonic_ns=self._last_ecg_packet_monotonic_ns,
+                last_ecg_packet_received_at_utc=self._last_ecg_packet_received_at_utc,
+                last_status_packet_monotonic_ns=self._last_status_packet_monotonic_ns,
+                last_status_packet_received_at_utc=self._last_status_packet_received_at_utc,
+                last_ecg_sample_ordinal=self._last_ecg_sample_index,
+                last_ecg_raw_sample_index=self._last_ecg_raw_sample_index,
                 last_error=self._last_error,
             )
 
@@ -159,6 +210,10 @@ class BlePacketReader:
             self._debug("启动请求已忽略：BLE 读取线程已在运行")
             return
         self._stop.clear()
+        self.source_coordinator.start_new_reader()
+        self.parser.reset_sequence_baseline()
+        self.ecg_ordinal_extender.reset()
+        self.stores.clear()
         with self._runtime_lock:
             self._last_error = None
             self._started_at_monotonic_s = time.monotonic()
@@ -167,6 +222,13 @@ class BlePacketReader:
             self._ecg_packet_count = 0
             self._last_packet_monotonic_s = None
             self._last_ecg_sample_index = None
+            self._last_transport_packet_monotonic_ns = None
+            self._last_transport_packet_received_at_utc = None
+            self._last_ecg_packet_monotonic_ns = None
+            self._last_ecg_packet_received_at_utc = None
+            self._last_status_packet_monotonic_ns = None
+            self._last_status_packet_received_at_utc = None
+            self._last_ecg_raw_sample_index = None
             self._first_notification_logged = False
         self._thread = Thread(target=self._run, name=f"BlePacketReader-{self.address}", daemon=True)
         self._debug("启动 BLE 连接线程，设备=%s", self.address)
@@ -189,13 +251,14 @@ class BlePacketReader:
         """Feed one ATT notification; public to allow deterministic tests."""
 
         if not data:
+            self._flush_pending()
             return
         if self._recorder is not None:
             self._recorder.write(data)
         if self.raw_chunk_callback is not None:
             self.raw_chunk_callback(data)
         for packet in self.parser.feed(data):
-            self._dispatch(packet)
+            self._ingest(packet)
 
     def _run(self) -> None:
         try:
@@ -269,11 +332,31 @@ class BlePacketReader:
             self._debug("BLE 数据通道已就绪")
 
             while not self._stop.is_set() and client.is_connected:
+                await self._drain_control_writes(client)
+                self._flush_pending()
                 await asyncio.sleep(0.1)
 
             if client.is_connected:
                 self._debug("停止 TX notification")
                 await client.stop_notify(BLE_UART_TX_UUID)
+
+    async def _drain_control_writes(self, client: object) -> None:
+        while True:
+            try:
+                packet = self._control_tx_queue.get_nowait()
+            except Empty:
+                return
+            await client.write_gatt_char(  # type: ignore[attr-defined]
+                BLE_UART_RX_UUID,
+                packet,
+                response=True,
+            )
+
+    def queue_control_packet(self, packet: bytes) -> None:
+        if self.control_write_callback is not None:
+            self.control_write_callback(packet)
+            return
+        self._control_tx_queue.put(packet)
 
     def _debug(self, message: str, *args: object) -> None:
         rendered = message % args if args else message
@@ -284,18 +367,93 @@ class BlePacketReader:
             except Exception:
                 LOGGER.exception("BLE debug callback failed")
 
-    def _dispatch(self, packet: ParsedPacket) -> None:
+    def _ingest(self, packet: ParsedPacket) -> None:
+        staged = StagedPacket(packet=packet, receipt=self.receipt_factory())
+        self._apply_coordinator_result(self.source_coordinator.ingest(staged))
+
+    def _flush_pending(self) -> None:
+        self._apply_coordinator_result(
+            self.source_coordinator.flush_expired(self.monotonic_ns())
+        )
+
+    def _apply_coordinator_result(self, result: CoordinatorResult) -> None:
+        if result.rotated:
+            self.parser.reset_sequence_baseline()
+            self.ecg_ordinal_extender.reset()
+            self.stores.clear()
+            self.voice_assembler = VoiceTextAssembler()
+        for committed in result.committed:
+            if self.parser.commit_packet(committed.packet):
+                self._dispatch(committed)
+
+    def _dispatch(self, staged: StagedPacket) -> None:
+        packet = staged.packet
+        receipt = staged.receipt
         payload = packet.payload
         if isinstance(payload, EcgPayload):
-            self.stores.ecg.append_batch(packet.header, payload)
-            with self._runtime_lock:
-                self._ecg_packet_count += 1
-                self._last_ecg_sample_index = payload.first_sample_index + max(0, len(payload.samples) - 1)
+            try:
+                ordinal = self.ecg_ordinal_extender.extend(payload)
+            except (ValueError, OverflowError):
+                ordinal = None
+            if ordinal is not None:
+                self.stores.ecg.append_batch(
+                    packet.header,
+                    payload,
+                    source_instance_id=self.source_coordinator.source_instance_id,
+                    receipt=receipt,
+                    ordinal=ordinal,
+                )
+                with self._runtime_lock:
+                    self._ecg_packet_count += 1
+                    self._last_ecg_sample_index = ordinal.last_sample_ordinal
+                    self._last_ecg_raw_sample_index = ordinal.raw_last_sample_index
+                    self._last_ecg_packet_monotonic_ns = receipt.received_monotonic_ns
+                    self._last_ecg_packet_received_at_utc = receipt.received_at_utc
         elif isinstance(payload, ImuPayload):
-            self.stores.imu.append_batch(packet.header, payload)
+            self.stores.imu.append_batch(
+                packet.header,
+                payload,
+                source_instance_id=self.source_coordinator.source_instance_id,
+                receipt=receipt,
+            )
         elif isinstance(payload, DeviceStatusPayload):
-            self.stores.status.append(packet.header, payload)
+            self.stores.status.append(
+                packet.header,
+                payload,
+                source_instance_id=self.source_coordinator.source_instance_id,
+                receipt=receipt,
+            )
+            with self._runtime_lock:
+                self._last_status_packet_monotonic_ns = receipt.received_monotonic_ns
+                self._last_status_packet_received_at_utc = receipt.received_at_utc
+        elif isinstance(payload, VoiceTextChunkPayload):
+            transcript = self.voice_assembler.add_chunk(payload)
+            if transcript is not None and self.voice_text_callback is not None:
+                try:
+                    durable = self.voice_text_callback(transcript)
+                except Exception:
+                    LOGGER.exception(
+                        "voice transcript persistence failed for utterance %016x",
+                        transcript.utterance_id,
+                    )
+                    durable = False
+                if durable:
+                    self._queue_voice_ack(transcript.utterance_id)
+        elif isinstance(payload, VoiceStatusPayload):
+            if self.voice_status_callback is not None:
+                self.voice_status_callback(payload)
         with self._runtime_lock:
             self._packet_count += 1
-            self._last_packet_monotonic_s = time.monotonic()
+            self._last_packet_monotonic_s = receipt.received_monotonic_ns / 1_000_000_000
+            self._last_transport_packet_monotonic_ns = receipt.received_monotonic_ns
+            self._last_transport_packet_received_at_utc = receipt.received_at_utc
         self.publisher.publish_packet(packet)
+
+    def _queue_voice_ack(self, utterance_id: int) -> None:
+        packet = encode_voice_text_ack_packet(
+            packet_sequence=self._control_packet_sequence,
+            timestamp_us=time.monotonic_ns() // 1_000,
+            utterance_id=utterance_id,
+        )
+        self._control_packet_sequence = (self._control_packet_sequence + 1) & 0xFFFFFFFF
+        self.queue_control_packet(packet)

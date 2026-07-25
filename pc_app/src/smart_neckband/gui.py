@@ -31,10 +31,12 @@ from .history import (
     write_compare_csv,
     y_range_for,
 )
-from .protocol import ECG_SAMPLE_RATE_HZ, FLAG_LO_MINUS, FLAG_LO_PLUS
+from .health_runtime import HealthRuntimeWorker
+from .protocol import ECG_SAMPLE_RATE_HZ, FLAG_LO_MINUS, FLAG_LO_PLUS, VoiceStatusPayload
 from .serial_io import PcDataStores, SerialPacketReader, list_serial_ports
 from .sessions import ExperimentSessionRecorder, PLACEMENT_PRESETS, WIRE_MAPS, RecordingState
 from .status import ConnectionSnapshot, ConnectionState, connection_state_text
+from .webhook_ui import WebhookTab
 
 
 LOGGER = logging.getLogger(__name__)
@@ -210,6 +212,17 @@ class MainWindow:
         self.attitude_worker = AttitudeWorker(self.stores)
         self.ecg_worker.start()
         self.attitude_worker.start()
+        try:
+            self.health_worker = HealthRuntimeWorker.from_environment(
+                stores=self.stores,
+                reader_provider=lambda: self.reader,
+                analysis_provider=self.ecg_worker.latest,
+            )
+        except ValueError:
+            LOGGER.exception("Health runtime configuration rejected")
+            self.health_worker = None
+        if self.health_worker is not None:
+            self.health_worker.start()
 
         self.window = QtWidgets.QMainWindow()
         self.window.setWindowTitle("AI 智能颈环 V0 上位机")
@@ -220,7 +233,7 @@ class MainWindow:
         layout = QtWidgets.QVBoxLayout(live_tab)
         toolbar = QtWidgets.QHBoxLayout()
         self.transport_combo = QtWidgets.QComboBox()
-        self.transport_combo.addItem("串口 / Bluetooth Classic SPP", "serial")
+        self.transport_combo.addItem("USB 串口（仅台架）", "serial")
         self.transport_combo.addItem("ESP32-C3 BLE", "ble")
         self.port_combo = QtWidgets.QComboBox()
         self.refresh_button = QtWidgets.QPushButton("刷新设备")
@@ -346,10 +359,16 @@ class MainWindow:
         diagnostics_tab = self._build_diagnostics_tab()
         history_tab = self._build_history_tab()
         compare_tab = self._build_compare_tab()
+        self.webhook_tab = WebhookTab(
+            QtCore=QtCore,
+            QtWidgets=QtWidgets,
+            post_gui=self._post_gui,
+        )
         tabs.addTab(live_tab, "实时")
         tabs.addTab(diagnostics_tab, "诊断")
         tabs.addTab(history_tab, "历史记录")
         tabs.addTab(compare_tab, "双轨对比")
+        tabs.addTab(self.webhook_tab.widget, "Webhook")
         self.window.setCentralWidget(tabs)
         self.refresh_button.clicked.connect(self.refresh_ports)
         self.transport_combo.currentIndexChanged.connect(self.refresh_ports)
@@ -616,7 +635,10 @@ class MainWindow:
         self.window.show()
 
     def close(self) -> None:
+        self.webhook_tab.close()
         self.disconnect_serial()
+        if self.health_worker is not None:
+            self.health_worker.stop()
         self.ecg_worker.stop()
         self.attitude_worker.stop()
 
@@ -707,7 +729,10 @@ class MainWindow:
                 raw_log_path=raw_path,
                 raw_chunk_callback=self._record_raw_chunk,
                 debug_callback=self._queue_ble_debug,
+                voice_text_callback=self.webhook_tab.enqueue_voice_text,
+                voice_status_callback=self._queue_voice_status,
             )
+            self.reader.health_transport = "ble"
         else:
             self.reader = SerialPacketReader(
                 port=endpoint,
@@ -715,6 +740,7 @@ class MainWindow:
                 raw_log_path=raw_path,
                 raw_chunk_callback=self._record_raw_chunk,
             )
+            self.reader.health_transport = "uart"
         self.reader.start()
         self.connection_label.setText(f"正在连接 {endpoint}……")
 
@@ -743,6 +769,15 @@ class MainWindow:
         if not self._debug_enabled:
             return
         self._post_gui(lambda message=message: self._append_debug_log(message))
+
+    def _queue_voice_status(self, status: VoiceStatusPayload) -> None:
+        reader = self.reader
+        pending_count = (
+            reader.voice_assembler.pending_count
+            if isinstance(reader, BlePacketReader)
+            else 0
+        )
+        self.webhook_tab.update_voice_status(status, pending_count=pending_count)
 
     def _append_debug_log(self, message: str) -> None:
         if not self._debug_enabled:
@@ -903,6 +938,7 @@ class MainWindow:
             if snapshot.seconds_since_last_packet is not None
             else "最后一包 --"
         )
+        self.webhook_tab.set_receiving(snapshot.state is ConnectionState.RECEIVING)
         self.connect_button.setEnabled(self.reader is None or snapshot.state is ConnectionState.ERROR)
         self.disconnect_button.setEnabled(self.reader is not None)
 
@@ -978,7 +1014,7 @@ class MainWindow:
             connection_type=(
                 "Bluetooth LE GATT"
                 if self.transport_combo.currentData() == "ble"
-                else "Bluetooth Classic SPP / serial"
+                else "USB serial bench connection"
             ),
         )
         delay_seconds = int(self.delay_combo.currentData())

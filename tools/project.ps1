@@ -13,14 +13,29 @@ param(
         "flash-monitor",
         "erase-flash",
         "fullclean",
+        "voice-provision",
+        "voice-model-provision",
         "pc-setup",
         "pc-gui",
+        "pc-mic",
+        "pc-health-mcp",
+        "pc-health-status",
+        "pc-health-soak",
         "pc-test"
     )]
     [string]$Action = "build",
 
-    [ValidateSet("esp32", "esp32c3")]
-    [string]$Target
+    [ValidateSet("esp32c3")]
+    [string]$Target,
+
+    [switch]$Voice,
+
+    [string]$WakeNetModelPath,
+
+    [ValidateRange(1, 1440)]
+    [int]$HealthSoakMinutes = 30,
+
+    [string]$HealthSoakDbPath
 )
 
 Set-StrictMode -Version Latest
@@ -40,20 +55,57 @@ if (-not (Test-Path -LiteralPath $LocalConfig)) {
 if ([string]::IsNullOrWhiteSpace($Target)) {
     $Target = $ExpectedTarget
 }
-if ($Target -notin @("esp32", "esp32c3")) {
-    throw "Unsupported target '$Target'. Expected esp32 or esp32c3."
+if ($Target -ne "esp32c3") {
+    throw "Unsupported target '$Target'. Expected esp32c3."
+}
+if ($Action -in @("voice-provision", "voice-model-provision") -and -not $Voice) {
+    throw "$Action requires -Voice."
+}
+if ($Action -eq "voice-model-provision" -and
+    [string]::IsNullOrWhiteSpace($WakeNetModelPath)) {
+    throw "voice-model-provision requires -WakeNetModelPath."
 }
 
-$BuildDir = Join-Path $FirmwareDir "build-$Target"
-$SdkconfigPath = Join-Path $FirmwareDir "sdkconfig.$Target"
+$BuildFlavor = if ($Voice) { "$Target-voice" } else { $Target }
+$BuildDir = Join-Path $FirmwareDir "build-$BuildFlavor"
+$SdkconfigPath = Join-Path $FirmwareDir "sdkconfig.$BuildFlavor"
 $TargetArguments = @(
     "-B", $BuildDir,
     "-DIDF_TARGET=$Target",
     "-DSDKCONFIG=$SdkconfigPath"
 )
+if ($Voice) {
+    $voiceDefaults = @(
+        "sdkconfig.defaults",
+        "sdkconfig.defaults.esp32c3",
+        "sdkconfig.defaults.voice"
+    ) -join ";"
+    $TargetArguments += @(
+        "-DSMART_NECKBAND_VOICE=ON",
+        "-DSDKCONFIG_DEFAULTS=$voiceDefaults"
+    )
+}
 
 function Invoke-Idf {
     param([Parameter(Mandatory)][string[]]$Arguments)
+
+    if (-not [string]::IsNullOrWhiteSpace($env:IDF_PATH) -and
+        -not [string]::IsNullOrWhiteSpace($env:IDF_PYTHON_ENV_PATH)) {
+        $idfPython = Join-Path $env:IDF_PYTHON_ENV_PATH "Scripts\python.exe"
+        $idfScript = Join-Path $env:IDF_PATH "tools\idf.py"
+        if ((Test-Path -LiteralPath $idfPython) -and
+            (Test-Path -LiteralPath $idfScript)) {
+            $ninjaPath = Initialize-LocalIdfToolEnvironment
+            $Arguments = @(
+                "-DCMAKE_MAKE_PROGRAM=$ninjaPath"
+            ) + $Arguments
+            & $idfPython $idfScript -C $FirmwareDir @Arguments
+            if ($LASTEXITCODE -ne 0) {
+                throw "idf.py failed with exit code $LASTEXITCODE"
+            }
+            return
+        }
+    }
 
     $idf = Get-Command idf.py -ErrorAction SilentlyContinue
     if ($null -ne $idf) {
@@ -125,16 +177,8 @@ function Initialize-LocalIdfToolEnvironment {
         Add-PathPrefix -PathPrefix (Split-Path -Parent $ccache.FullName)
     }
 
-    $compilerRoot = if ($Target -eq "esp32c3") {
-        "C:\Espressif\tools\riscv32-esp-elf"
-    } else {
-        "C:\Espressif\tools\xtensa-esp-elf"
-    }
-    $compilerName = if ($Target -eq "esp32c3") {
-        "riscv32-esp-elf-gcc.exe"
-    } else {
-        "xtensa-esp32-elf-gcc.exe"
-    }
+    $compilerRoot = "C:\Espressif\tools\riscv32-esp-elf"
+    $compilerName = "riscv32-esp-elf-gcc.exe"
     $targetGcc = Get-ChildItem -LiteralPath $compilerRoot -Recurse -Filter $compilerName -ErrorAction SilentlyContinue |
         Sort-Object FullName -Descending |
         Select-Object -First 1
@@ -150,11 +194,7 @@ function Initialize-LocalIdfToolEnvironment {
     }
     Add-PathPrefix -PathPrefix (Split-Path -Parent $ninja.FullName)
 
-    $romElfName = if ($Target -eq "esp32c3") {
-        "esp32c3_rev0_rom.elf"
-    } else {
-        "esp32_rev0_rom.elf"
-    }
+    $romElfName = "esp32c3_rev0_rom.elf"
     $romElf = Get-ChildItem -LiteralPath "C:\Espressif\tools\esp-rom-elfs" -Recurse -Filter $romElfName -ErrorAction SilentlyContinue |
         Sort-Object FullName -Descending |
         Select-Object -First 1
@@ -217,6 +257,36 @@ function Test-PythonModule {
     return $LASTEXITCODE -eq 0
 }
 
+function Get-PcVenvPythonCommand {
+    $py = Get-Command py -ErrorAction SilentlyContinue
+    if ($null -ne $py) {
+        try {
+            & py -3.12 -c "import sys" *> $null
+            if ($LASTEXITCODE -eq 0) {
+                return @{
+                    FilePath = "py"
+                    Arguments = @("-3.12", "-m", "venv")
+                }
+            }
+        }
+        catch {
+        }
+    }
+
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if ($null -ne $python) {
+        & $python.Source -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" *> $null
+        if ($LASTEXITCODE -eq 0) {
+            return @{
+                FilePath = $python.Source
+                Arguments = @("-m", "venv")
+            }
+        }
+    }
+
+    throw "Python >= 3.11 is required for the PC app, but neither 'py -3.12' nor 'python' is usable."
+}
+
 switch ($Action) {
     "doctor" {
         & (Join-Path $PSScriptRoot "doctor.ps1") -Target $Target
@@ -251,6 +321,26 @@ switch ($Action) {
     "fullclean" {
         Invoke-TargetIdf -Arguments @("fullclean")
     }
+    "voice-provision" {
+        $provisionScript = Join-Path $PSScriptRoot "voice-provision.ps1"
+        if (-not (Test-Path -LiteralPath $provisionScript)) {
+            throw "Missing voice provisioning script: $provisionScript"
+        }
+        & $provisionScript `
+            -ProjectSerialPort $ProjectSerialPort `
+            -IdfPath $env:IDF_PATH
+    }
+    "voice-model-provision" {
+        $modelProvisionScript = Join-Path $PSScriptRoot "voice-model-provision.ps1"
+        if (-not (Test-Path -LiteralPath $modelProvisionScript)) {
+            throw "Missing WakeNet model provisioning script: $modelProvisionScript"
+        }
+        & $modelProvisionScript `
+            -ProjectSerialPort $ProjectSerialPort `
+            -IdfPath $env:IDF_PATH `
+            -ModelPath $WakeNetModelPath `
+            -ManifestPath (Join-Path $FirmwareDir "models\wakenet_manifest.json")
+    }
     "pc-setup" {
         if (-not (Test-Path -LiteralPath $PcDir)) {
             throw "PC application directory does not exist: $PcDir"
@@ -260,20 +350,26 @@ switch ($Action) {
             $venvPython = Join-Path $PcDir ".venv\Scripts\python.exe"
             $venvNeedsRepair = -not (Test-Path -LiteralPath $venvPython)
             if (-not $venvNeedsRepair) {
-                $venvNeedsRepair = -not (Test-PythonModule -FilePath $venvPython -ModuleName "pip")
+                try {
+                    $venvNeedsRepair = -not (Test-PythonModule -FilePath $venvPython -ModuleName "pip")
+                }
+                catch {
+                    $venvNeedsRepair = $true
+                }
             }
 
             if ($venvNeedsRepair) {
-                $venvArgs = @("-3.12", "-m", "venv")
+                $venvCommand = Get-PcVenvPythonCommand
+                $venvArgs = @($venvCommand.Arguments)
                 if (Test-Path -LiteralPath ".venv") {
                     $venvArgs += "--clear"
                 }
                 $venvArgs += ".venv"
-                Invoke-Native -FilePath "py" -Arguments $venvArgs -Description "Python virtual environment creation"
+                Invoke-Native -FilePath $venvCommand.FilePath -Arguments $venvArgs -Description "Python virtual environment creation"
             }
 
             Invoke-Native -FilePath $venvPython -Arguments @(
-                "-m", "pip", "install", "-e", ".[dev,gui,serial]"
+                "-m", "pip", "install", "-e", ".[dev,gui,serial,health]"
             ) -Description "PC application and BLE GUI dependency installation"
         }
         finally {
@@ -299,6 +395,106 @@ switch ($Action) {
         finally {
             Pop-Location
         }
+    }
+    "pc-mic" {
+        $venvPython = Join-Path $PcDir ".venv\Scripts\python.exe"
+        if (-not (Test-Path -LiteralPath $venvPython)) {
+            throw "PC virtual environment is missing. Run '.\tools\project.ps1 pc-setup' first."
+        }
+        foreach ($moduleName in @("bleak", "numpy", "pyqtgraph", "PySide6", "websocket")) {
+            if (-not (Test-PythonModule -FilePath $venvPython -ModuleName $moduleName)) {
+                throw "PC module '$moduleName' is missing from .venv. Run '.\tools\project.ps1 pc-setup' first."
+            }
+        }
+        Push-Location $PcDir
+        try {
+            Invoke-Native -FilePath $venvPython -Arguments @(
+                "-m", "smart_neckband.mic_capture_gui"
+            ) -Description "INMP441 BLE capture GUI"
+        }
+        finally {
+            Pop-Location
+        }
+    }
+    "pc-health-mcp" {
+        $venvPython = Join-Path $PcDir ".venv\Scripts\python.exe"
+        if (-not (Test-Path -LiteralPath $venvPython)) {
+            throw "PC virtual environment is missing. Run '.\tools\project.ps1 pc-setup' first."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:SMART_COLLAR_WEARER_ID)) {
+            throw "SMART_COLLAR_WEARER_ID must be set before starting Health MCP."
+        }
+        Push-Location $PcDir
+        try {
+            & $venvPython -m smart_neckband.health_mcp --transport stdio
+            if ($LASTEXITCODE -ne 0) {
+                throw "Health MCP exited with code $LASTEXITCODE."
+            }
+        }
+        finally {
+            Pop-Location
+        }
+    }
+    "pc-health-status" {
+        $venvPython = Join-Path $PcDir ".venv\Scripts\python.exe"
+        if (-not (Test-Path -LiteralPath $venvPython)) {
+            throw "PC virtual environment is missing. Run '.\tools\project.ps1 pc-setup' first."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:SMART_COLLAR_WEARER_ID)) {
+            throw "SMART_COLLAR_WEARER_ID must be set before reading Health status."
+        }
+        Push-Location $PcDir
+        try {
+            $statusArguments = @("-m", "smart_neckband.health_admin")
+            if (-not [string]::IsNullOrWhiteSpace($env:SMART_COLLAR_HEALTH_DB_PATH)) {
+                $statusArguments += @("--db", $env:SMART_COLLAR_HEALTH_DB_PATH)
+            }
+            $statusArguments += @(
+                "status",
+                "--wearer-id", $env:SMART_COLLAR_WEARER_ID
+            )
+            & $venvPython @statusArguments
+            if ($LASTEXITCODE -ne 0) {
+                throw "Health status exited with code $LASTEXITCODE."
+            }
+        }
+        finally {
+            Pop-Location
+        }
+    }
+    "pc-health-soak" {
+        $venvPython = Join-Path $PcDir ".venv\Scripts\python.exe"
+        if (-not (Test-Path -LiteralPath $venvPython)) {
+            throw "PC virtual environment is missing. Run '.\tools\project.ps1 pc-setup' first."
+        }
+        $healthDir = Join-Path $Root "data\health"
+        New-Item -ItemType Directory -Force -Path $healthDir | Out-Null
+        $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+        $dbPath = if ([string]::IsNullOrWhiteSpace($HealthSoakDbPath)) {
+            Join-Path $healthDir "soak-$stamp.sqlite3"
+        }
+        else {
+            $HealthSoakDbPath
+        }
+        if (-not [System.IO.Path]::IsPathRooted($dbPath)) {
+            $dbPath = Join-Path $Root $dbPath
+        }
+        $resultPath = "$dbPath.result.json"
+        Push-Location $PcDir
+        try {
+            Invoke-Native -FilePath $venvPython -Arguments @(
+                "-m", "smart_neckband.health_soak",
+                "--db", $dbPath,
+                "--duration-s", ($HealthSoakMinutes * 60),
+                "--interval-s", "0.5",
+                "--result-path", $resultPath
+            ) -Description "Health MCP synthetic soak"
+        }
+        finally {
+            Pop-Location
+        }
+        Write-Host "Health soak database: $dbPath"
+        Write-Host "Health soak result: $resultPath"
     }
     "pc-test" {
         $venvPython = Join-Path $PcDir ".venv\Scripts\python.exe"

@@ -20,6 +20,10 @@ class EcgAnalysisResult:
     latest_rr_ms: float | None
     signal_quality: float | None
     message: str
+    source_instance_id: str | None = None
+    analyzed_through_ecg_sample_index: int | None = None
+    analyzed_through_received_monotonic_ns: int | None = None
+    analyzed_through_received_at_utc: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +95,25 @@ def _stable_rr_ms(intervals_ms: tuple[float, ...]) -> float | None:
 def analyze_recent_ecg(samples: tuple[EcgSample, ...]) -> EcgAnalysisResult:
     window = samples[-10 * ECG_SAMPLE_RATE_HZ :]
     raw = tuple(float(sample.raw_adc) for sample in window)
+    latest = window[-1] if window else None
+    provenance = {
+        "source_instance_id": (
+            latest.source_instance_id if latest and latest.source_instance_id else None
+        ),
+        "analyzed_through_ecg_sample_index": (
+            latest.sample_index if latest is not None else None
+        ),
+        "analyzed_through_received_monotonic_ns": (
+            latest.received_monotonic_ns
+            if latest is not None and latest.received_monotonic_ns > 0
+            else None
+        ),
+        "analyzed_through_received_at_utc": (
+            latest.received_at_utc
+            if latest is not None and latest.received_at_utc
+            else None
+        ),
+    }
     if len(raw) < ECG_SAMPLE_RATE_HZ:
         return EcgAnalysisResult(
             timestamp_s=time.time(),
@@ -101,6 +124,7 @@ def analyze_recent_ecg(samples: tuple[EcgSample, ...]) -> EcgAnalysisResult:
             latest_rr_ms=None,
             signal_quality=None,
             message="waiting for ECG window",
+            **provenance,
         )
 
     clipped_count = sum(1 for sample in window if sample.flags & FLAG_ADC_CLIPPING)
@@ -114,6 +138,7 @@ def analyze_recent_ecg(samples: tuple[EcgSample, ...]) -> EcgAnalysisResult:
             latest_rr_ms=None,
             signal_quality=None,
             message="ECG clipped",
+            **provenance,
         )
 
     try:
@@ -129,6 +154,7 @@ def analyze_recent_ecg(samples: tuple[EcgSample, ...]) -> EcgAnalysisResult:
             latest_rr_ms=None,
             signal_quality=None,
             message="install neurokit2 and numpy for ECG analysis",
+            **provenance,
         )
 
     raw_array = np.asarray(raw, dtype=float)
@@ -174,4 +200,5 @@ def analyze_recent_ecg(samples: tuple[EcgSample, ...]) -> EcgAnalysisResult:
         latest_rr_ms=latest_rr_ms,
         signal_quality=quality,
         message=message,
+        **provenance,
     )
