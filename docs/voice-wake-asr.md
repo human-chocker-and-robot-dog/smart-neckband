@@ -1,8 +1,37 @@
-# “主人主人”离线唤醒与火山流式 ASR
+# ESP32-C3 Hi ESP、BLE 麦克风与 PC 流式 ASR
 
-## 链路与边界
+## 当前产品链路
 
-Voice 构建只面向 ESP32-C3：
+当前默认方向是：
+
+```text
+INMP441
+-> ESP32-C3 ESP-SR WakeNet9s 官方 Hi ESP 本地唤醒
+-> BLE MIC1 IMA-ADPCM 音频
+-> Windows PC PCM16 解码
+-> PC 火山 V3 流式 ASR
+-> PC 环境音阈值 VAD 自动结束
+-> ordinary Agent Webhook SQLite/dispatcher
+-> Agent final reply
+```
+
+设备不保存火山密钥，不直接连接 ASR WebSocket。正常唤醒默认不写 WAV，只有用户显式打开诊断录音时落盘。运行入口为：
+
+```powershell
+.\tools\project.ps1 pc-setup
+.\tools\project.ps1 pc-mic
+```
+
+独立麦克风固件的非烧录构建入口为：
+
+```powershell
+.\tools\inmp441-test.ps1 build
+.\tools\inmp441-test.ps1 size
+```
+
+## 历史 ESP-side 路线（默认不启用）
+
+仓库保留一条早期 ESP-side ASR 兼容路线：
 
 ```text
 INMP441 -> ESP-SR WakeNet9s“主人主人” -> 火山流式 ASR
@@ -26,7 +55,7 @@ WakeNet 在设备本地连续运行；未唤醒时不会连接 ASR，也不会�
 
 音频格式固定为 16 kHz、单声道、32-bit I2S slot，固件右移 14 bit 并饱和转换成 PCM16。每个运行帧为 100 ms（1600 个采样）；1 秒预卷占 32 KiB RAM。
 
-## 构建
+## 历史 Voice 构建
 
 ```powershell
 . 'C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1'
@@ -40,7 +69,7 @@ Voice 分区包含 2 MiB factory app、1 MiB `model`、24 KiB `voicecfg` 和剩�
 
 托管依赖固定为 ESP-SR 2.4.6、`esp_websocket_client` 1.7.0 和 cJSON 1.7.19~2，版本记录在 `firmware/dependencies.lock`。
 
-## Gate 0：精确自定义模型
+## 历史 Gate 0：精确自定义模型
 
 ESP-SR 自带的 C3 WakeNet9s 词表不包含“主人主人”。仓库不会用“你好小智”或其他内置词代替。
 
@@ -61,7 +90,7 @@ ESP-SR 自带的 C3 WakeNet9s 词表不包含“主人主人”。仓库不会�
 
 工具会再次校验目标、词、状态、许可证、大小和 SHA-256，只写 `model` 分区，并要求键入精确安全确认。
 
-## Wi‑Fi 与火山凭据
+## 历史 Wi-Fi 与火山凭据
 
 Voice 配置放在单独的 `voicecfg` NVS 分区。配置工具支持：
 
@@ -82,7 +111,7 @@ wss://openspeech.bytedance.com/api/v3/sauc/bigmodel
 
 工具用隐藏输入读取 Wi‑Fi 密码和密钥，在随机临时目录生成 24 KiB NVS 镜像，只写 `voicecfg`，随后清除临时文件。未启用 Flash Encryption 时，普通 NVS 不具备硬件级秘密保护；丢失设备可能暴露凭据。
 
-## ASR 会话
+## 历史 ESP-side ASR 会话
 
 - Wi‑Fi 在 Voice 运行期间保持连接；WebSocket 只在唤醒后建立。
 - 请求音频为 PCM16 little-endian、16 kHz、单声道、100 ms/帧。
@@ -94,7 +123,7 @@ wss://openspeech.bytedance.com/api/v3/sauc/bigmodel
 
 设备最多保留 4 条待 PC ACK 的 final 文本，每 2 秒重发一次。PC 先把稳定 instruction ID `voice-<utterance_id>` 持久化到 SQLite，成功后才 ACK，并使用现有 Webhook dispatcher 自动转发给 Agent。
 
-## 当前 PC-side ASR/VAD 测试链路
+## PC-side ASR/VAD 行为
 
 当前仓库的独立麦克风测试固件只负责 Hi ESP 唤醒和通过 BLE 传输 INMP441 音频；火山流式 ASR 与音频阈值自动断句均在上位机 `smart-neckband-mic` 中运行。该测试入口与生产传感器固件并存，不会替换 ECG/IMU 固件。
 
@@ -113,7 +142,7 @@ ASR 和 VAD 队列满时不再把本轮直接打成错误；上位机会丢弃�
 
 正常 Hi ESP 识别默认不保存 WAV。只有用户显式勾选“保存唤醒 WAV（诊断）”或运行手动波形测试时才写入本地 `captures/`；该目录和调试日志均被 Git 忽略。
 
-## 状态与错误
+## 历史 VOICE_STATUS 状态与错误
 
 `VOICE_STATUS.flags`：
 

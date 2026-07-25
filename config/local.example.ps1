@@ -8,4 +8,4 @@ $ExpectedFlashSize = "4MB"
 
 # Exact installed Codex Agent Skill name. This is documentation for the agent;
 # PowerShell itself does not invoke the skill.
-$PowerShellSkillName = "powershell"
+$PowerShellSkillName = "powershell-command-runner"

@@ -35,7 +35,8 @@ Included:
 - Implement repository-local integration gaps that are required for existing
   software paths to work together, especially durable dispatch of PC ASR final
   text with stable de-duplication.
-- Merge the validated integration branch into `main`, commit, and push.
+- Merge the validated integration branch into `main` and commit locally. Do not
+  push until the user gives a later explicit instruction.
 
 Excluded without separate explicit authorization:
 
@@ -70,8 +71,8 @@ Excluded without separate explicit authorization:
    software integration gaps, with focused tests for identity and de-duplication.
 4. Run the combined PC test suite and repair integration regressions.
 5. Build and size-check applicable firmware targets without flashing hardware.
-6. Run formatting/diff checks, review the final scope, commit, push, merge into
-   `main`, and push `main`.
+6. Run formatting/diff checks, review the final scope, merge into `main`, and
+   create a local commit without pushing.
 
 ## Validation
 
@@ -104,9 +105,13 @@ Excluded without separate explicit authorization:
 - [x] Archive and reconcile the handoff documents.
 - [x] Implement the required cross-feature integration gaps.
 - [x] Run PC validation and the 30-minute Health soak.
-- [ ] Firmware build and size validation was stopped at the user's direction;
-  `doctor` passed, but no final image was produced.
-- [ ] Review, commit, push, merge to `main`, and push `main`.
+- [x] Build and size-check the production ESP32-C3 firmware, historical Voice
+  firmware, and standalone INMP441/Hi ESP experiment firmware.
+- [x] Re-run the 185-test PC suite and offscreen construction checks for both
+  desktop GUIs.
+- [x] Review the final integration scope and document local run/flash steps.
+- [x] Prepare the final local Conventional Commit. Push remains intentionally
+  deferred until the user gives a later explicit instruction.
 
 ## Discoveries
 
@@ -119,10 +124,15 @@ Excluded without separate explicit authorization:
 - A temporary user correction mentioned ESP32-C2, but the final instruction is
   ESP32-C3 only. No C2 migration is in scope.
 - The installed ESP-IDF Python environment points to a removed Python 3.12
-  installation. A temporary workspace venv restored `doctor`, but managed
-  child-process PATH propagation prevented a completed sandbox build. A
-  sandbox-external build was started and then stopped by the user before an
-  application image was produced.
+  installation. An ignored Python 3.11 ESP-IDF venv under `data/` restored the
+  official IDF v6.0.2 tools for local builds.
+- Unbounded Ninja parallelism caused two compiler subprocesses to exit without
+  diagnostics on this Windows host. The wrappers now default to four jobs and
+  expose `-BuildJobs` for local tuning.
+- The historical Voice image deliberately has only a four-byte generated model
+  placeholder and still requires separate custom-model provisioning. The
+  current default microphone path is the standalone INMP441 firmware, whose
+  build embeds the official `wn9s_hiesp` model.
 
 ## Result
 
@@ -135,5 +145,12 @@ configuration were removed.
 
 PC validation passed with 185 tests. The synthetic Health soak passed after
 1800.046 seconds with 3194 state revisions, 20271 MCP calls, zero MCP
-exceptions, and zero pending production outbox rows. Firmware build/size was
-not completed because the user requested ending further long validation.
+exceptions, and zero pending production outbox rows. Both desktop GUIs passed
+offscreen construction checks.
+
+All three ESP32-C3 images built successfully. The production image uses 37.74%
+of DRAM and leaves 74% of its 2 MiB app partition free. The historical Voice
+image uses 57.71% of DRAM and leaves 30% of its 2 MiB app partition free. The
+standalone INMP441/Hi ESP image embeds `wn9s_hiesp`, uses 30.68% of DRAM, and
+leaves 60% of its 1.5 MiB app partition free. No firmware was flashed, no serial
+monitor was opened, and no body-connected acquisition was performed.

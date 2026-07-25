@@ -1,11 +1,11 @@
-# Shared physical flash and partition layout. The wrapper passes IDF_TARGET
-# explicitly and ESP-IDF automatically loads sdkconfig.defaults.<target>.
+# ESP32-C3 physical flash and partition layout. The wrapper passes IDF_TARGET
+# explicitly and ESP-IDF automatically loads sdkconfig.defaults.esp32c3.
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 
-# Keep conservative DIO/40 MHz settings shared by both 4 MB boards.
+# Keep conservative DIO/40 MHz settings for the 4 MB ESP32-C3 board.
 CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
 

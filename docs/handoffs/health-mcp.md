@@ -86,7 +86,7 @@ These files are the contract authority. Reuse them as committed artifacts.
 
 | File | Role | SHA-256 |
 |---|---|---|
-| `docs/specs/Smart_Collar_Health_MCP_Spec_v0.2.md` | Human-readable v0.2 spec | `E1D035EDE3040689AEB0F887EE79E0B35E76D3D80A062AC74566215AE60D5533` |
+| `docs/specs/Smart_Collar_Health_MCP_Spec_v0.2.md` | Human-readable v0.2 spec | `E1DAD5A2F55F5D880C4BCC9EAB866CFA445995F40BAD5B30A585AE2E781A6387` |
 | `docs/specs/health-mcp-v0.2.contract.json` | Machine contract, schemas, goldens | `D9EC1619A14A0A7E38F2384C9B7F248B1D9EE3147DB9BD2AFF5C8DC8057F3626` |
 | `docs/health-mcp.md` | Operator guide | `5B1762A04004673B2EE75188F9E01F407942FA88C968BBFFC036E081BD850B1D` |
 

@@ -30,6 +30,9 @@ param(
 
     [switch]$Voice,
 
+    [ValidateRange(1, 64)]
+    [int]$BuildJobs = 4,
+
     [string]$WakeNetModelPath,
 
     [ValidateRange(1, 1440)]
@@ -151,6 +154,25 @@ function Invoke-TargetIdf {
     param([Parameter(Mandatory)][string[]]$Arguments)
 
     Invoke-Idf -Arguments ($TargetArguments + $Arguments)
+}
+
+function Invoke-TargetNinja {
+    param([ValidateSet("build", "size")][string]$RequestedAction)
+
+    $buildNinja = Join-Path $BuildDir "build.ninja"
+    if (-not (Test-Path -LiteralPath $buildNinja)) {
+        Invoke-TargetIdf -Arguments @("reconfigure")
+    }
+
+    $ninja = Initialize-LocalIdfToolEnvironment
+    $ninjaArguments = @("-C", $BuildDir, "-j", "$BuildJobs")
+    if ($RequestedAction -eq "size") {
+        $ninjaArguments += "size"
+    }
+    Invoke-Native `
+        -FilePath $ninja `
+        -Arguments $ninjaArguments `
+        -Description "ninja $RequestedAction ($Target, $BuildJobs jobs)"
 }
 
 function Add-PathPrefix {
@@ -301,18 +323,20 @@ switch ($Action) {
         Invoke-TargetIdf -Arguments @("menuconfig")
     }
     "build" {
-        Invoke-TargetIdf -Arguments @("build")
+        Invoke-TargetNinja -RequestedAction "build"
     }
     "size" {
-        Invoke-TargetIdf -Arguments @("size")
+        Invoke-TargetNinja -RequestedAction "size"
     }
     "flash" {
+        Invoke-TargetNinja -RequestedAction "build"
         Invoke-TargetIdf -Arguments @("-p", $ProjectSerialPort, "-b", "$ProjectFlashBaud", "flash")
     }
     "monitor" {
         Invoke-TargetIdf -Arguments @("-p", $ProjectSerialPort, "monitor")
     }
     "flash-monitor" {
+        Invoke-TargetNinja -RequestedAction "build"
         Invoke-TargetIdf -Arguments @("-p", $ProjectSerialPort, "-b", "$ProjectFlashBaud", "flash", "monitor")
     }
     "erase-flash" {

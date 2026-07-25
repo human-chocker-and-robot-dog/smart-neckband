@@ -7,7 +7,10 @@ param(
     [string]$Port,
 
     [ValidateRange(115200, 921600)]
-    [int]$Baud = 460800
+    [int]$Baud = 460800,
+
+    [ValidateRange(1, 64)]
+    [int]$BuildJobs = 4
 )
 
 Set-StrictMode -Version Latest
@@ -33,12 +36,68 @@ if ([string]::IsNullOrWhiteSpace($Port) -and (Test-Path -LiteralPath $LocalConfi
     }
 }
 
-if ($null -eq (Get-Command idf.py -ErrorAction SilentlyContinue)) {
+if ([string]::IsNullOrWhiteSpace($env:IDF_PATH) -or
+    [string]::IsNullOrWhiteSpace($env:IDF_PYTHON_ENV_PATH)) {
     $IdfProfile = "C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1"
     if (-not (Test-Path -LiteralPath $IdfProfile)) {
         throw "ESP-IDF PowerShell profile is missing: $IdfProfile"
     }
     . $IdfProfile
+}
+
+function Invoke-Idf {
+    param([Parameter(Mandatory)][string[]]$Arguments)
+
+    $IdfPython = Join-Path $env:IDF_PYTHON_ENV_PATH "Scripts\python.exe"
+    $IdfScript = Join-Path $env:IDF_PATH "tools\idf.py"
+    if ((Test-Path -LiteralPath $IdfPython) -and
+        (Test-Path -LiteralPath $IdfScript)) {
+        & $IdfPython $IdfScript @Arguments
+    }
+    else {
+        $IdfCommand = Get-Command idf.py -ErrorAction SilentlyContinue
+        if ($null -eq $IdfCommand) {
+            throw "ESP-IDF Python environment is unavailable."
+        }
+        & idf.py @Arguments
+    }
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "idf.py failed with exit code $LASTEXITCODE"
+    }
+}
+
+function Get-NinjaPath {
+    $NinjaCommand = Get-Command ninja.exe -ErrorAction SilentlyContinue
+    if ($null -ne $NinjaCommand) {
+        return $NinjaCommand.Source
+    }
+
+    $Ninja = Get-ChildItem -LiteralPath "C:\Espressif\tools\ninja" `
+        -Recurse -Filter "ninja.exe" -ErrorAction SilentlyContinue |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if ($null -eq $Ninja) {
+        throw "ninja.exe is unavailable."
+    }
+    return $Ninja.FullName
+}
+
+function Invoke-Ninja {
+    param([ValidateSet("build", "size")][string]$RequestedAction)
+
+    if (-not (Test-Path -LiteralPath (Join-Path $BuildDir "build.ninja"))) {
+        Invoke-Idf -Arguments ($IdfArguments + "reconfigure")
+    }
+
+    $NinjaArguments = @("-C", $BuildDir, "-j", "$BuildJobs")
+    if ($RequestedAction -eq "size") {
+        $NinjaArguments += "size"
+    }
+    & (Get-NinjaPath) @NinjaArguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "ninja $RequestedAction failed with exit code $LASTEXITCODE"
+    }
 }
 
 $IdfArguments = @(
@@ -50,20 +109,17 @@ $IdfArguments = @(
 
 switch ($Action) {
     "build" {
-        & idf.py @IdfArguments build
+        Invoke-Ninja -RequestedAction "build"
     }
     "size" {
-        & idf.py @IdfArguments size
+        Invoke-Ninja -RequestedAction "size"
     }
     "flash" {
         if ([string]::IsNullOrWhiteSpace($Port)) {
             throw "Flash requires -Port COMxx or an ignored config/local.ps1."
         }
         Write-Warning "Flashing temporary INMP441-only firmware to $Port. No body electrodes may be connected."
-        & idf.py @IdfArguments -p $Port -b $Baud flash
+        Invoke-Ninja -RequestedAction "build"
+        Invoke-Idf -Arguments ($IdfArguments + @("-p", $Port, "-b", "$Baud", "flash"))
     }
-}
-
-if ($LASTEXITCODE -ne 0) {
-    throw "idf.py $Action failed with exit code $LASTEXITCODE"
 }

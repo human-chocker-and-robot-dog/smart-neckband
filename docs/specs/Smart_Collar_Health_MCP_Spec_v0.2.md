@@ -1584,7 +1584,7 @@ P0 不暴露删除 MCP tool。实现必须提供本机管理员删除路径，�
 | Resource Template 不完整 | P0 不声明 resources capability，避免半成品资源契约 |
 | 限流范围不明 | 第 6.9 节固定 server-enforced scope 与额度 |
 | 缺保留/删除/访问控制/审计 | 第 4.2、9、10、11 节补齐 |
-| 与当前仓库芯片/采样不符 | 按仓库写成 ESP32/ESP32-C3、ECG 500 Hz、IMU 50 Hz；不再写 ESP32-S3 或 ECG 250 Hz |
+| 与当前仓库芯片/采样不符 | 按仓库写成 ESP32-C3、ECG 500 Hz、IMU 50 Hz；不再写经典 ESP32、ESP32-S3 或 ECG 250 Hz |
 | 当前 HRV/motion 并不存在 | 从 P0 tools/events 移除并明确 `not_implemented` |
 
 ## 15. 明确留待后续版本
