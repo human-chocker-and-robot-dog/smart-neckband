@@ -10,6 +10,7 @@ import time
 import pytest
 
 from smart_neckband.health_contract import load_health_contract
+from smart_neckband.health_event_contract import load_event_contract
 from smart_neckband.health_state import BuiltHealthState
 from smart_neckband.health_store import HealthStore
 from smart_neckband.health_webhook import (
@@ -28,7 +29,9 @@ from smart_neckband.webhook_store import WebhookStore
 
 
 def golden() -> dict:
-    return load_health_contract()["x-golden"]
+    values = dict(load_health_contract()["x-golden"])
+    values.update(load_event_contract()["x-golden"])
+    return values
 
 
 def signed_headers(
@@ -167,6 +170,56 @@ def test_mock_receiver_validates_persists_deduplicates_and_conflicts(tmp_path) -
     assert conflict[0] == 409
     assert json.loads(conflict[2]) == {"error": "notification_id_conflict"}
     assert store.queue_count() == 1
+
+
+def test_receiver_event_revision_idempotency_and_open_extensions(tmp_path) -> None:
+    vector = golden()
+    secret = parse_secret_hex(vector["webhook_secret_hex"])
+    timestamp = int(vector["webhook_timestamp"])
+    store = HealthWebhookReceiverStore(tmp_path / "receiver.sqlite3")
+    receiver = HealthWebhookReceiver(store=store, keys={"key-1": secret})
+
+    first = deepcopy(vector["webhook_request"])
+    first["event_type"] = "custom_domain.new_event"
+    first["evidence"]["future_unknown_field"] = {"nested": True}
+    first_body = canonical_webhook_body(first)
+    assert receiver.handle(
+        method="POST",
+        path="/v1/health-events",
+        headers=signed_headers(first_body, secret=secret, timestamp=timestamp),
+        raw_body=first_body,
+        now_epoch_s=timestamp,
+    )[0] == 202
+
+    same_revision = deepcopy(first)
+    same_revision["notification_id"] = "25ec8019-0dc5-4f1e-802b-633e29c545b6"
+    same_revision["notification_sequence"] = 432
+    same_revision["sent_at"] = "2026-07-25T08:10:04.120Z"
+    same_body = canonical_webhook_body(same_revision)
+    assert receiver.handle(
+        method="POST",
+        path="/v1/health-events",
+        headers=signed_headers(same_body, secret=secret, timestamp=timestamp),
+        raw_body=same_body,
+        now_epoch_s=timestamp,
+    )[0] == 202
+    assert store.queue_count() == 1
+
+    higher = deepcopy(same_revision)
+    higher["notification_id"] = "15d7fa32-cf41-42a2-9017-e93c31b203ea"
+    higher["notification_sequence"] = 433
+    higher["event_revision"] = 2
+    higher["transition"] = "updated"
+    higher["sent_at"] = "2026-07-25T08:10:05.120Z"
+    higher_body = canonical_webhook_body(higher)
+    assert receiver.handle(
+        method="POST",
+        path="/v1/health-events",
+        headers=signed_headers(higher_body, secret=secret, timestamp=timestamp),
+        raw_body=higher_body,
+        now_epoch_s=timestamp,
+    )[0] == 202
+    assert store.queue_count() == 2
 
 
 def test_receiver_validation_order_and_error_shapes(tmp_path) -> None:

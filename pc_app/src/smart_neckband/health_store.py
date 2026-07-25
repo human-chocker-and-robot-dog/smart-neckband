@@ -14,6 +14,8 @@ from uuid import uuid4
 
 from .analysis import EcgAnalysisResult
 from .health_contract import SCHEMA_VERSION, compact_json
+from .health_event_contract import BRIDGE_SCHEMA_VERSION
+from .health_rules import HealthAlertRule, rmssd_ms
 from .health_state import BuiltHealthState
 from .health_webhook import canonical_webhook_body
 from .protocol import ParserStats
@@ -24,8 +26,14 @@ EVENT_TYPES = ("lead_off", "adc_clipping", "input_stale", "input_offline")
 
 
 class HealthStore:
-    def __init__(self, path: str | Path) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        alert_rules: tuple[HealthAlertRule, ...] = (),
+    ) -> None:
         self.path = Path(path)
+        self.alert_rules = alert_rules
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
@@ -51,7 +59,7 @@ class HealthStore:
                     migration_version INTEGER NOT NULL
                 );
                 INSERT INTO health_schema(id, migration_version)
-                VALUES(1, 2)
+                VALUES(1, 4)
                 ON CONFLICT(id) DO UPDATE SET
                     migration_version=MAX(
                         health_schema.migration_version,
@@ -111,6 +119,17 @@ class HealthStore:
                     PRIMARY KEY(wearer_id, event_type)
                 );
 
+                CREATE TABLE IF NOT EXISTS health_alert_rule_state (
+                    wearer_id TEXT NOT NULL,
+                    rule_id TEXT NOT NULL,
+                    active_event_id TEXT,
+                    matched_since_at TEXT,
+                    clear_since_at TEXT,
+                    cooldown_until_at TEXT,
+                    last_evidence_json TEXT,
+                    PRIMARY KEY(wearer_id, rule_id)
+                );
+
                 CREATE TABLE IF NOT EXISTS health_webhook_outbox (
                     notification_id TEXT PRIMARY KEY,
                     wearer_id TEXT NOT NULL,
@@ -152,6 +171,44 @@ class HealthStore:
                     http_status INTEGER NOT NULL,
                     delivered_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS health_metric_samples (
+                    wearer_id TEXT NOT NULL,
+                    state_revision INTEGER NOT NULL,
+                    source_instance_id TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    data_source TEXT NOT NULL,
+                    test_mode INTEGER NOT NULL,
+                    heart_rate_bpm REAL,
+                    signal_quality REAL,
+                    lead_off INTEGER,
+                    adc_clipping_ratio REAL,
+                    motion_score REAL,
+                    still_ratio_percent REAL,
+                    motion_level TEXT,
+                    motion_coverage_ratio REAL NOT NULL,
+                    imu_online INTEGER,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(wearer_id, state_revision)
+                );
+                CREATE INDEX IF NOT EXISTS health_metric_samples_window
+                    ON health_metric_samples(wearer_id, observed_at);
+
+                CREATE TABLE IF NOT EXISTS health_rr_intervals (
+                    wearer_id TEXT NOT NULL,
+                    source_instance_id TEXT NOT NULL,
+                    end_sample_index INTEGER NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    rr_ms REAL NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(
+                        wearer_id,
+                        source_instance_id,
+                        end_sample_index
+                    )
+                );
+                CREATE INDEX IF NOT EXISTS health_rr_intervals_window
+                    ON health_rr_intervals(wearer_id, observed_at);
 
                 CREATE TABLE IF NOT EXISTS health_mcp_audit (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -523,6 +580,13 @@ class HealthStore:
                 ).fetchone()["state_revision"]
             )
             state["state_revision"] = revision
+            self._save_metric_history(
+                connection,
+                state=state,
+                built=built,
+                state_revision=revision,
+                created_at=now_utc,
+            )
             transitions = self._evaluate_events(
                 connection,
                 state=state,
@@ -532,6 +596,16 @@ class HealthStore:
                 status_evidence_key=built.status_evidence_key,
                 clipping_window_full=built.clipping_window_full,
                 trace_id=trace_id,
+            )
+            transitions.extend(
+                self._evaluate_alert_rules(
+                    connection,
+                    state=state,
+                    state_revision=revision,
+                    now_utc=now_utc,
+                    trace_id=trace_id,
+                    motion_score=built.motion_analysis.score,
+                )
             )
             del transitions
             active_rows = connection.execute(
@@ -614,6 +688,44 @@ class HealthStore:
                 row["transport_received_monotonic_ns"]
             ),
         }
+
+    def list_metric_samples(
+        self,
+        *,
+        wearer_id: str,
+        since_utc: str,
+        limit: int = 1_000,
+    ) -> list[dict[str, object]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM health_metric_samples
+                WHERE wearer_id=? AND observed_at>=?
+                ORDER BY observed_at ASC, state_revision ASC
+                LIMIT ?
+                """,
+                (wearer_id, since_utc, max(1, int(limit))),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_rr_intervals(
+        self,
+        *,
+        wearer_id: str,
+        since_utc: str,
+        limit: int = 2_000,
+    ) -> list[dict[str, object]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM health_rr_intervals
+                WHERE wearer_id=? AND observed_at>=?
+                ORDER BY observed_at ASC, end_sample_index ASC
+                LIMIT ?
+                """,
+                (wearer_id, since_utc, max(1, int(limit))),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_event(self, event_id: str) -> dict[str, object] | None:
         with self._connection() as connection:
@@ -956,6 +1068,24 @@ class HealthStore:
                         (thirty_day,),
                     ).rowcount
                 ),
+                "metric_samples": int(
+                    connection.execute(
+                        """
+                        DELETE FROM health_metric_samples
+                        WHERE observed_at < ?
+                        """,
+                        (seven_day,),
+                    ).rowcount
+                ),
+                "rr_intervals": int(
+                    connection.execute(
+                        """
+                        DELETE FROM health_rr_intervals
+                        WHERE observed_at < ?
+                        """,
+                        (seven_day,),
+                    ).rowcount
+                ),
             }
         return counts
 
@@ -1011,6 +1141,14 @@ class HealthStore:
                     "DELETE FROM health_runtime_observability "
                     "WHERE wearer_id=? AND updated_at<=?"
                 ),
+                "metric_samples": (
+                    "DELETE FROM health_metric_samples "
+                    "WHERE wearer_id=? AND observed_at<=?"
+                ),
+                "rr_intervals": (
+                    "DELETE FROM health_rr_intervals "
+                    "WHERE wearer_id=? AND observed_at<=?"
+                ),
             }
             deleted = {
                 name: int(
@@ -1028,8 +1166,15 @@ class HealthStore:
                         (wearer_id,),
                     ).rowcount
                 )
+                deleted["alert_rule_state"] = int(
+                    connection.execute(
+                        "DELETE FROM health_alert_rule_state WHERE wearer_id=?",
+                        (wearer_id,),
+                    ).rowcount
+                )
             else:
                 deleted["event_gates"] = 0
+                deleted["alert_rule_state"] = 0
             connection.execute(
                 """
                 INSERT INTO health_deletion_audit(
@@ -1084,6 +1229,14 @@ class HealthStore:
                 "SELECT COUNT(*) AS count FROM health_runtime_observability "
                 "WHERE wearer_id=? AND updated_at<=?"
             ),
+            "metric_samples": (
+                "SELECT COUNT(*) AS count FROM health_metric_samples "
+                "WHERE wearer_id=? AND observed_at<=?"
+            ),
+            "rr_intervals": (
+                "SELECT COUNT(*) AS count FROM health_rr_intervals "
+                "WHERE wearer_id=? AND observed_at<=?"
+            ),
         }
         counts = {
             name: int(
@@ -1099,11 +1252,21 @@ class HealthStore:
             before_utc,
         ):
             counts["event_gates"] = 0
+            counts["alert_rule_state"] = 0
         else:
             counts["event_gates"] = int(
                 connection.execute(
                     """
                     SELECT COUNT(*) AS count FROM health_event_gates
+                    WHERE wearer_id=?
+                    """,
+                    (wearer_id,),
+                ).fetchone()["count"]
+            )
+            counts["alert_rule_state"] = int(
+                connection.execute(
+                    """
+                    SELECT COUNT(*) AS count FROM health_alert_rule_state
                     WHERE wearer_id=?
                     """,
                     (wearer_id,),
@@ -1125,6 +1288,8 @@ class HealthStore:
             "SELECT 1 FROM health_webhook_dead_letters WHERE wearer_id=?",
             "SELECT 1 FROM health_webhook_deliveries WHERE wearer_id=?",
             "SELECT 1 FROM health_mcp_audit WHERE wearer_id=?",
+            "SELECT 1 FROM health_metric_samples WHERE wearer_id=?",
+            "SELECT 1 FROM health_rr_intervals WHERE wearer_id=?",
         )
         return any(
             connection.execute(query + " LIMIT 1", (wearer_id,)).fetchone()
@@ -1165,6 +1330,14 @@ class HealthStore:
                 "SELECT 1 FROM health_mcp_audit "
                 "WHERE wearer_id=? AND created_at>?"
             ),
+            (
+                "SELECT 1 FROM health_metric_samples "
+                "WHERE wearer_id=? AND observed_at>?"
+            ),
+            (
+                "SELECT 1 FROM health_rr_intervals "
+                "WHERE wearer_id=? AND observed_at>?"
+            ),
         )
         return any(
             connection.execute(
@@ -1174,6 +1347,352 @@ class HealthStore:
             is not None
             for query in queries
         )
+
+    def _save_metric_history(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        state: dict[str, object],
+        built: BuiltHealthState,
+        state_revision: int,
+        created_at: str,
+    ) -> None:
+        wearer_id = str(state["wearer_id"])
+        source_instance_id = str(state["source_instance_id"])
+        heart = state["heart"]["heart_rate"]
+        signal = state["signal"]
+        device = state["device"]
+        motion = built.motion_analysis
+        connection.execute(
+            """
+            INSERT INTO health_metric_samples(
+                wearer_id, state_revision, source_instance_id, observed_at,
+                data_source, test_mode, heart_rate_bpm, signal_quality,
+                lead_off, adc_clipping_ratio, motion_score,
+                still_ratio_percent, motion_level, motion_coverage_ratio,
+                imu_online, created_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                wearer_id,
+                state_revision,
+                source_instance_id,
+                state["observed_at"],
+                state["data_source"],
+                1 if bool(state["test_mode"]) else 0,
+                heart["value"] if bool(heart["valid"]) else None,
+                signal["quality_score"],
+                (
+                    None
+                    if signal["lead_off"] is None
+                    else 1 if bool(signal["lead_off"]) else 0
+                ),
+                signal["adc_clipping_ratio_10s"],
+                motion.score,
+                motion.still_ratio_percent,
+                motion.level,
+                motion.coverage_ratio,
+                (
+                    None
+                    if device["imu_online"] is None
+                    else 1 if bool(device["imu_online"]) else 0
+                ),
+                created_at,
+            ),
+        )
+        for observation in built.rr_intervals:
+            if observation.source_instance_id != source_instance_id:
+                continue
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO health_rr_intervals(
+                    wearer_id, source_instance_id, end_sample_index,
+                    observed_at, rr_ms, created_at
+                ) VALUES(?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    wearer_id,
+                    observation.source_instance_id,
+                    observation.end_sample_index,
+                    observation.observed_at,
+                    observation.rr_ms,
+                    created_at,
+                ),
+            )
+
+    def _evaluate_alert_rules(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        state: dict[str, object],
+        state_revision: int,
+        now_utc: str,
+        trace_id: str,
+        motion_score: float | None,
+    ) -> list[dict[str, object]]:
+        if not self.alert_rules:
+            return []
+        wearer_id = str(state["wearer_id"])
+        now = datetime.fromisoformat(now_utc.replace("Z", "+00:00"))
+        since = _timestamp(now - timedelta(seconds=300))
+        rr_values = [
+            float(row["rr_ms"])
+            for row in connection.execute(
+                """
+                SELECT rr_ms FROM health_rr_intervals
+                WHERE wearer_id=? AND observed_at>=?
+                ORDER BY observed_at ASC, end_sample_index ASC
+                """,
+                (wearer_id, since),
+            ).fetchall()
+        ]
+        heart_metric = state["heart"]["heart_rate"]
+        signal = state["signal"]
+        metrics: dict[str, float | None] = {
+            "heart_rate_bpm": (
+                float(heart_metric["value"])
+                if bool(heart_metric["valid"])
+                and heart_metric["value"] is not None
+                else None
+            ),
+            "hrv_rmssd_ms": rmssd_ms(rr_values),
+            "motion_score": motion_score,
+            "signal_quality": (
+                float(signal["quality_score"])
+                if signal["quality_score"] is not None
+                else None
+            ),
+        }
+        quality_blocked = (
+            signal["lead_off"] is True
+            or (
+                signal["adc_clipping_ratio_10s"] is not None
+                and float(signal["adc_clipping_ratio_10s"]) >= 0.8
+            )
+            or str(state["freshness"]) != "fresh"
+        )
+        transitions: list[dict[str, object]] = []
+        for rule in self.alert_rules:
+            connection.execute(
+                """
+                INSERT INTO health_alert_rule_state(wearer_id, rule_id)
+                VALUES(?, ?)
+                ON CONFLICT(wearer_id, rule_id) DO NOTHING
+                """,
+                (wearer_id, rule.rule_id),
+            )
+            row = connection.execute(
+                """
+                SELECT * FROM health_alert_rule_state
+                WHERE wearer_id=? AND rule_id=?
+                """,
+                (wearer_id, rule.rule_id),
+            ).fetchone()
+            assert row is not None
+            evidence = _rule_evidence(rule, metrics, signal, len(rr_values))
+            matched = not quality_blocked and rule.matches(metrics)
+            active_event_id = row["active_event_id"]
+            if active_event_id is not None:
+                event_row = connection.execute(
+                    "SELECT event_json FROM health_events WHERE event_id=?",
+                    (active_event_id,),
+                ).fetchone()
+                if event_row is None:
+                    connection.execute(
+                        """
+                        UPDATE health_alert_rule_state
+                        SET active_event_id=NULL, matched_since_at=NULL,
+                            clear_since_at=NULL
+                        WHERE wearer_id=? AND rule_id=?
+                        """,
+                        (wearer_id, rule.rule_id),
+                    )
+                    continue
+                event = json.loads(str(event_row["event_json"]))
+                if matched:
+                    connection.execute(
+                        """
+                        UPDATE health_alert_rule_state
+                        SET clear_since_at=NULL, last_evidence_json=?
+                        WHERE wearer_id=? AND rule_id=?
+                        """,
+                        (compact_json(evidence), wearer_id, rule.rule_id),
+                    )
+                    continue
+                clear_since = row["clear_since_at"]
+                if clear_since is None:
+                    clear_since = now_utc
+                    connection.execute(
+                        """
+                        UPDATE health_alert_rule_state SET clear_since_at=?
+                        WHERE wearer_id=? AND rule_id=?
+                        """,
+                        (clear_since, wearer_id, rule.rule_id),
+                    )
+                if _elapsed_seconds(now, str(clear_since)) < rule.clear_for_s:
+                    continue
+                resolved = self._resolve_rule_event(
+                    connection,
+                    event=event,
+                    state=state,
+                    state_revision=state_revision,
+                    now_utc=now_utc,
+                    trace_id=trace_id,
+                    evidence=evidence,
+                )
+                transitions.append(resolved)
+                cooldown_until = _timestamp(now + timedelta(seconds=rule.cooldown_s))
+                connection.execute(
+                    """
+                    UPDATE health_alert_rule_state
+                    SET active_event_id=NULL, matched_since_at=NULL,
+                        clear_since_at=NULL, cooldown_until_at=?,
+                        last_evidence_json=?
+                    WHERE wearer_id=? AND rule_id=?
+                    """,
+                    (
+                        cooldown_until,
+                        compact_json(evidence),
+                        wearer_id,
+                        rule.rule_id,
+                    ),
+                )
+                continue
+
+            if not matched:
+                connection.execute(
+                    """
+                    UPDATE health_alert_rule_state
+                    SET matched_since_at=NULL, clear_since_at=NULL,
+                        last_evidence_json=?
+                    WHERE wearer_id=? AND rule_id=?
+                    """,
+                    (compact_json(evidence), wearer_id, rule.rule_id),
+                )
+                continue
+            cooldown_until = row["cooldown_until_at"]
+            if cooldown_until is not None and now < _parse_timestamp(str(cooldown_until)):
+                continue
+            matched_since = row["matched_since_at"]
+            if matched_since is None:
+                matched_since = now_utc
+                connection.execute(
+                    """
+                    UPDATE health_alert_rule_state
+                    SET matched_since_at=?, last_evidence_json=?
+                    WHERE wearer_id=? AND rule_id=?
+                    """,
+                    (
+                        matched_since,
+                        compact_json(evidence),
+                        wearer_id,
+                        rule.rule_id,
+                    ),
+                )
+            if _elapsed_seconds(now, str(matched_since)) < rule.for_s:
+                continue
+            opened = self._open_rule_event(
+                connection,
+                rule=rule,
+                state=state,
+                state_revision=state_revision,
+                now_utc=now_utc,
+                trace_id=trace_id,
+                evidence=evidence,
+            )
+            transitions.append(opened)
+            connection.execute(
+                """
+                UPDATE health_alert_rule_state
+                SET active_event_id=?, matched_since_at=NULL,
+                    clear_since_at=NULL, last_evidence_json=?
+                WHERE wearer_id=? AND rule_id=?
+                """,
+                (
+                    opened["event_id"],
+                    compact_json(evidence),
+                    wearer_id,
+                    rule.rule_id,
+                ),
+            )
+        return transitions
+
+    def _open_rule_event(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        rule: HealthAlertRule,
+        state: dict[str, object],
+        state_revision: int,
+        now_utc: str,
+        trace_id: str,
+        evidence: dict[str, object],
+    ) -> dict[str, object]:
+        event = {
+            "schema_version": BRIDGE_SCHEMA_VERSION,
+            "event_id": str(uuid4()),
+            "event_revision": 1,
+            "event_type": rule.event_type,
+            "wearer_id": state["wearer_id"],
+            "source_instance_id": state["source_instance_id"],
+            "data_source": state["data_source"],
+            "status": "active",
+            "severity": rule.severity,
+            "bridge_severity": rule.severity,
+            "priority": rule.priority,
+            "summary": rule.summary,
+            "opened_at": now_utc,
+            "updated_at": now_utc,
+            "resolved_at": None,
+            "state_revision": state_revision,
+            "evidence": evidence,
+            "recommended_capabilities": list(rule.recommended_capabilities),
+            "test_mode": state["test_mode"],
+        }
+        self._save_event(connection, event)
+        self._enqueue_transition(
+            connection,
+            event=event,
+            transition="opened",
+            occurred_at=now_utc,
+            trace_id=trace_id,
+        )
+        return event
+
+    def _resolve_rule_event(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        event: dict[str, object],
+        state: dict[str, object],
+        state_revision: int,
+        now_utc: str,
+        trace_id: str,
+        evidence: dict[str, object],
+    ) -> dict[str, object]:
+        resolved = deepcopy(event)
+        resolved.update(
+            {
+                "event_revision": int(event["event_revision"]) + 1,
+                "status": "resolved",
+                "updated_at": now_utc,
+                "resolved_at": now_utc,
+                "state_revision": state_revision,
+                "source_instance_id": state["source_instance_id"],
+                "data_source": state["data_source"],
+                "evidence": evidence,
+                "test_mode": state["test_mode"],
+            }
+        )
+        self._save_event(connection, resolved)
+        self._enqueue_transition(
+            connection,
+            event=resolved,
+            transition="resolved",
+            occurred_at=now_utc,
+            trace_id=trace_id,
+        )
+        return resolved
 
     def _evaluate_events(
         self,
@@ -1458,15 +1977,18 @@ class HealthStore:
             ).fetchone()["notification_sequence"]
         )
         notification_id = str(uuid4())
+        bridge = _bridge_fields(event, transition=transition)
         body = canonical_webhook_body(
             {
-                "schema_version": SCHEMA_VERSION,
+                "schema_version": BRIDGE_SCHEMA_VERSION,
                 "notification_id": notification_id,
                 "notification_sequence": sequence,
                 "event_id": event["event_id"],
                 "event_revision": event["event_revision"],
                 "transition": transition,
-                "event_type": event["event_type"],
+                "event_type": bridge["event_type"],
+                "severity": bridge["severity"],
+                "priority": bridge["priority"],
                 "wearer_id": wearer_id,
                 "source_instance_id": event["source_instance_id"],
                 "state_revision": event["state_revision"],
@@ -1475,6 +1997,11 @@ class HealthStore:
                 "sent_at": occurred_at,
                 "trace_id": trace_id,
                 "test_mode": event["test_mode"],
+                "summary": bridge["summary"],
+                "evidence": bridge["evidence"],
+                "recommended_capabilities": bridge[
+                    "recommended_capabilities"
+                ],
             }
         )
         connection.execute(
@@ -1692,6 +2219,86 @@ def _event_document(
         "recommended_consumer_behavior": behavior,
         "test_mode": state["test_mode"],
     }
+
+
+def _bridge_fields(
+    event: dict[str, object],
+    *,
+    transition: str,
+) -> dict[str, object]:
+    event_type = str(event["event_type"])
+    namespaced = {
+        "lead_off": "signal.lead_off",
+        "adc_clipping": "signal.adc_clipping",
+        "input_stale": "input.stale",
+        "input_offline": "input.offline",
+    }.get(event_type, event_type)
+    if "summary" in event:
+        summary = str(event["summary"])
+    else:
+        descriptions = {
+            "signal.lead_off": "ECG electrodes are not providing a connected signal.",
+            "signal.adc_clipping": "The recent ECG window is dominated by ADC clipping.",
+            "input.stale": "Recent ECG input has become stale.",
+            "input.offline": "ECG input is currently offline.",
+        }
+        summary = descriptions.get(namespaced, f"Health event {namespaced} changed state.")
+        if transition == "resolved":
+            summary = f"Resolved: {summary}"
+    severity = str(event.get("bridge_severity") or event.get("severity") or "warning")
+    if severity == "error":
+        severity = "critical"
+    priority = str(
+        event.get("priority")
+        or ("urgent" if namespaced == "input.offline" else "normal")
+    )
+    evidence = deepcopy(event.get("evidence") or {})
+    capabilities = list(event.get("recommended_capabilities") or [])
+    return {
+        "event_type": namespaced,
+        "severity": severity,
+        "priority": priority,
+        "summary": summary,
+        "evidence": evidence,
+        "recommended_capabilities": capabilities,
+    }
+
+
+def _rule_evidence(
+    rule: HealthAlertRule,
+    metrics: dict[str, float | None],
+    signal: dict[str, object],
+    valid_nn_count: int,
+) -> dict[str, object]:
+    return {
+        "rule_id": rule.rule_id,
+        "heart_rate_bpm": metrics["heart_rate_bpm"],
+        "hrv_rmssd_ms": metrics["hrv_rmssd_ms"],
+        "motion_score_30s": metrics["motion_score"],
+        "signal_quality": metrics["signal_quality"],
+        "quality_level": signal["quality_level"],
+        "lead_off": signal["lead_off"],
+        "adc_clipping_ratio_10s": signal["adc_clipping_ratio_10s"],
+        "valid_nn_count": valid_nn_count,
+        "conditions": [
+            {
+                "metric": condition.metric,
+                "operator": condition.operator,
+                "threshold": condition.threshold,
+            }
+            for condition in rule.conditions
+        ],
+        "required_duration_s": rule.for_s,
+        "recommended_window_s": rule.recommended_window_s,
+    }
+
+
+def _parse_timestamp(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _elapsed_seconds(now: datetime, since: str) -> float:
+    return max(0.0, (now - _parse_timestamp(since)).total_seconds())
 
 
 def _timestamp(value: datetime) -> str:

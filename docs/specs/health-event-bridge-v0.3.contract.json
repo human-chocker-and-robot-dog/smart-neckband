@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smart-neckband.local/contracts/health-event-bridge-v0.3.contract.json",
+  "title": "Smart Collar Health Event Bridge V0.3",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "Uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "Timestamp": {"type": "string", "format": "date-time"},
+    "SafeInteger": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+    "EventType": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$"
+    },
+    "Capability": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$"
+    },
+    "WebhookRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {"const": "0.3.0"},
+        "notification_id": {"$ref": "#/$defs/Uuid"},
+        "notification_sequence": {"$ref": "#/$defs/SafeInteger"},
+        "event_id": {"$ref": "#/$defs/Uuid"},
+        "event_revision": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+        "transition": {"type": "string", "enum": ["opened", "updated", "resolved"]},
+        "event_type": {"$ref": "#/$defs/EventType"},
+        "severity": {"type": "string", "enum": ["info", "warning", "critical"]},
+        "priority": {"type": "string", "enum": ["normal", "urgent"]},
+        "wearer_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+        },
+        "source_instance_id": {"$ref": "#/$defs/Uuid"},
+        "state_revision": {"$ref": "#/$defs/SafeInteger"},
+        "data_source": {"type": "string", "enum": ["live", "replay", "synthetic"]},
+        "occurred_at": {"$ref": "#/$defs/Timestamp"},
+        "sent_at": {"$ref": "#/$defs/Timestamp"},
+        "trace_id": {"$ref": "#/$defs/Uuid"},
+        "test_mode": {"type": "boolean"},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 500},
+        "evidence": {"type": "object"},
+        "recommended_capabilities": {
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/Capability"}
+        }
+      },
+      "required": [
+        "schema_version", "notification_id", "notification_sequence",
+        "event_id", "event_revision", "transition", "event_type",
+        "severity", "priority", "wearer_id", "source_instance_id",
+        "state_revision", "data_source", "occurred_at", "sent_at",
+        "trace_id", "test_mode", "summary", "evidence",
+        "recommended_capabilities"
+      ],
+      "allOf": [
+        {
+          "if": {"properties": {"data_source": {"enum": ["replay", "synthetic"]}}},
+          "then": {"properties": {"test_mode": {"const": true}}}
+        }
+      ]
+    },
+    "WebhookAck": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "notification_id": {"$ref": "#/$defs/Uuid"},
+        "status": {"type": "string", "enum": ["accepted", "duplicate"]}
+      },
+      "required": ["notification_id", "status"]
+    }
+  },
+  "x-contract": {
+    "contract_version": "0.3.0",
+    "endpoint": "/v1/health-events",
+    "signature_input": "ascii(timestamp) + '.' + raw_utf8_request_body",
+    "signature_algorithm": "HMAC-SHA256",
+    "agent_follow_up": "Webhook is a trigger snapshot; capability health.inspect_recent_metrics maps to the three Health MCP tools with window_s=30.",
+    "idempotency": ["notification_id + raw_body_sha256", "event_id + event_revision"]
+  },
+  "x-golden": {
+    "webhook_secret_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "webhook_timestamp": 1784772600,
+    "webhook_request": {
+      "schema_version": "0.3.0",
+      "notification_id": "894d7ebf-3c7a-4818-a85d-3555a0d4dd13",
+      "notification_sequence": 431,
+      "event_id": "50d40557-8df6-47b5-abce-1ef447bf5543",
+      "event_revision": 1,
+      "transition": "opened",
+      "event_type": "cardio.high_hr_low_motion",
+      "severity": "warning",
+      "priority": "urgent",
+      "wearer_id": "xwen",
+      "source_instance_id": "ef132c67-a98f-474a-a673-4ab6ea784790",
+      "state_revision": 1849,
+      "data_source": "live",
+      "occurred_at": "2026-07-25T08:10:03.000Z",
+      "sent_at": "2026-07-25T08:10:03.120Z",
+      "trace_id": "7a916c4a-3b3e-4ec5-8491-e5fc7e843863",
+      "test_mode": false,
+      "summary": "Heart rate stayed above the configured threshold while recent motion remained low.",
+      "evidence": {
+        "rule_id": "low_motion_high_hr",
+        "heart_rate_bpm": 118,
+        "motion_score_30s": 14,
+        "recommended_window_s": 30
+      },
+      "recommended_capabilities": ["health.inspect_recent_metrics"]
+    },
+    "webhook_canonical_body_utf8": "{\"schema_version\":\"0.3.0\",\"notification_id\":\"894d7ebf-3c7a-4818-a85d-3555a0d4dd13\",\"notification_sequence\":431,\"event_id\":\"50d40557-8df6-47b5-abce-1ef447bf5543\",\"event_revision\":1,\"transition\":\"opened\",\"event_type\":\"cardio.high_hr_low_motion\",\"severity\":\"warning\",\"priority\":\"urgent\",\"wearer_id\":\"xwen\",\"source_instance_id\":\"ef132c67-a98f-474a-a673-4ab6ea784790\",\"state_revision\":1849,\"data_source\":\"live\",\"occurred_at\":\"2026-07-25T08:10:03.000Z\",\"sent_at\":\"2026-07-25T08:10:03.120Z\",\"trace_id\":\"7a916c4a-3b3e-4ec5-8491-e5fc7e843863\",\"test_mode\":false,\"summary\":\"Heart rate stayed above the configured threshold while recent motion remained low.\",\"evidence\":{\"rule_id\":\"low_motion_high_hr\",\"heart_rate_bpm\":118,\"motion_score_30s\":14,\"recommended_window_s\":30},\"recommended_capabilities\":[\"health.inspect_recent_metrics\"]}",
+    "webhook_raw_body_sha256": "bf1fc4470c2440b2ea050996663b9727dfd82e22e21fbbbf51cbe6d29a5f6b13",
+    "webhook_signature_v1": "v1=05df60cc29a48ed1d9b51da1bfabba624a6738fff5a7bfc89aea35588654181e"
+  }
+}

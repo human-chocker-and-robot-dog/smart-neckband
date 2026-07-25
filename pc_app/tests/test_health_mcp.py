@@ -1,366 +1,304 @@
 from __future__ import annotations
 
 import asyncio
-from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import sqlite3
+import statistics
 import sys
+import socket
 
 import jsonschema
 import pytest
 
-from smart_neckband.health_contract import load_health_contract
 from smart_neckband.health_mcp import (
     HealthToolService,
     SlidingWindowRateLimiter,
+    _BearerAuthMiddleware,
+    _validate_bearer_token,
+    _validate_http_path,
     create_mcp_server,
 )
-from smart_neckband.health_state import BuiltHealthState
 from smart_neckband.health_store import HealthStore
 
 
-NOW_NS = 20_000_000_000
+NOW = datetime(2026, 7, 25, 12, 0, 30, tzinfo=timezone.utc)
+SOURCE_ID = "ef132c67-a98f-474a-a673-4ab6ea784790"
 
 
-def golden_state() -> dict:
-    return deepcopy(load_health_contract()["x-golden"]["wearer_state_live"])
+def utc_text(value: datetime) -> str:
+    return value.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def commit_document(
+def seed_recent_metrics(
     store: HealthStore,
-    document: dict,
     *,
-    now_ns: int = NOW_NS,
-) -> dict:
-    built = BuiltHealthState(
-        document=document,
-        committed_monotonic_ns=now_ns,
-        ecg_received_monotonic_ns=now_ns - int(document["age_ms"]) * 1_000_000,
-        transport_received_monotonic_ns=now_ns
-        - int(document["device"]["last_transport_packet_age_ms"]) * 1_000_000,
-        status_evidence_key="status-1",
-        clipping_window_full=True,
-    )
-    return store.commit_state(built)
+    now: datetime = NOW,
+) -> None:
+    with sqlite3.connect(store.path) as connection:
+        for index in range(31):
+            observed = utc_text(now - timedelta(seconds=30 - index))
+            connection.execute(
+                """
+                INSERT INTO health_metric_samples(
+                    wearer_id, state_revision, source_instance_id, observed_at,
+                    data_source, test_mode, heart_rate_bpm, signal_quality,
+                    lead_off, adc_clipping_ratio, motion_score,
+                    still_ratio_percent, motion_level, motion_coverage_ratio,
+                    imu_online, created_at
+                ) VALUES(?, ?, ?, ?, 'live', 0, ?, ?, 0, 0, ?, ?, ?, 1, 1, ?)
+                """,
+                (
+                    "xwen",
+                    index + 1,
+                    SOURCE_ID,
+                    observed,
+                    80.0 + (index % 5),
+                    0.9,
+                    10.0 + index,
+                    90.0 - index,
+                    "light" if index < 25 else "moderate",
+                    observed,
+                ),
+            )
+        rr_values = (800.0, 810.0, 790.0, 805.0, 795.0, 820.0, 800.0, 810.0)
+        for index, rr_ms in enumerate(rr_values):
+            observed = utc_text(now - timedelta(seconds=14 - index * 2))
+            connection.execute(
+                """
+                INSERT INTO health_rr_intervals(
+                    wearer_id, source_instance_id, end_sample_index,
+                    observed_at, rr_ms, created_at
+                ) VALUES('xwen', ?, ?, ?, ?, ?)
+                """,
+                (SOURCE_ID, 10_000 + index, observed, rr_ms, observed),
+            )
 
 
-def service(store: HealthStore, now_ns: int = NOW_NS) -> HealthToolService:
+def service(store: HealthStore) -> HealthToolService:
     return HealthToolService(
         store=store,
         configured_wearer_ids={"xwen"},
-        monotonic_ns=lambda: now_ns,
-        utc_now=lambda: "2026-07-24T00:00:00.000Z",
+        monotonic_ns=lambda: 1_000_000_000,
+        utc_now=lambda: utc_text(NOW),
     )
 
 
-def test_service_rejects_invalid_configured_wearer_id(tmp_path) -> None:
-    with pytest.raises(ValueError, match="wearer_id must match"):
-        HealthToolService(
-            store=HealthStore(tmp_path / "health.sqlite3"),
-            configured_wearer_ids={"contains space"},
-        )
-
-
-def validate_tool_result(
-    tool_service: HealthToolService,
-    tool_name: str,
-    result,
-) -> None:
+def validate_result(tool_service: HealthToolService, tool_name: str, result) -> None:
     jsonschema.Draft202012Validator(
         tool_service.tools[tool_name]["outputSchema"]
     ).validate(result.envelope)
 
 
-def test_current_state_success_matches_output_schema_and_text_semantics(
-    tmp_path,
-) -> None:
+def test_service_requires_exactly_one_valid_wearer(tmp_path) -> None:
     store = HealthStore(tmp_path / "health.sqlite3")
-    commit_document(store, golden_state())
-    tool_service = service(store)
-
-    result = tool_service.call(
-        "health.get_current_state",
-        {"wearer_id": "xwen", "max_age_ms": 2_000},
-    )
-
-    assert not result.is_error
-    state = result.envelope["data"]["state"]
-    assert result.envelope["meta"]["age_ms"] == state["age_ms"]
-    assert state["age_ms"] == state["device"]["last_ecg_packet_age_ms"]
-    validate_tool_result(tool_service, "health.get_current_state", result)
+    with pytest.raises(ValueError, match="wearer_id must match"):
+        HealthToolService(store=store, configured_wearer_ids={"contains space"})
+    with pytest.raises(ValueError, match="exactly one"):
+        HealthToolService(store=store, configured_wearer_ids=set())
+    with pytest.raises(ValueError, match="exactly one"):
+        HealthToolService(store=store, configured_wearer_ids={"xwen", "other"})
 
 
-def test_transport_fresh_but_ecg_offline_returns_state_offline(tmp_path) -> None:
-    store = HealthStore(tmp_path / "health.sqlite3")
-    document = golden_state()
-    document["age_ms"] = 10_001
-    document["freshness"] = "offline"
-    document["device"]["last_ecg_packet_age_ms"] = 10_001
-    document["device"]["last_transport_packet_age_ms"] = 10
-    document["device"]["status"] = "degraded"
-    for metric in document["heart"].values():
-        if isinstance(metric, dict) and "valid" in metric:
-            metric.update(
-                {
-                    "value": None,
-                    "valid": False,
-                    "observed_at": None,
-                    "age_ms": None,
-                    "unavailable_reason": "stale_data",
-                }
-            )
-    commit_document(store, document)
-    tool_service = service(store)
-
-    result = tool_service.call(
-        "health.get_current_state",
-        {"wearer_id": "xwen"},
-    )
-
-    assert result.is_error
-    assert result.envelope["error"]["code"] == "STATE_OFFLINE"
-    assert result.envelope["meta"]["data_source"] == "live"
-    assert result.envelope["meta"]["age_ms"] == 10_001
-    validate_tool_result(tool_service, "health.get_current_state", result)
-
-
-def test_monotonic_clock_reset_never_revives_persisted_state(tmp_path) -> None:
-    store = HealthStore(tmp_path / "health.sqlite3")
-    commit_document(store, golden_state(), now_ns=NOW_NS)
-    tool_service = service(store, now_ns=1_000_000_000)
-
-    state = tool_service.call(
-        "health.get_current_state",
-        {"wearer_id": "xwen"},
-    )
-    device = tool_service.call(
-        "health.get_device_status",
-        {"wearer_id": "xwen"},
-    )
-
-    assert state.is_error
-    assert state.envelope["error"]["code"] == "DEVICE_OFFLINE"
-    assert state.envelope["meta"]["age_ms"] == 10_001
-    assert device.envelope["data"]["device"]["status"] == "offline"
-    assert device.envelope["meta"]["age_ms"] == 10_001
-
-
-def test_invalid_argument_and_unknown_wearer_use_domain_failures(tmp_path) -> None:
-    store = HealthStore(tmp_path / "health.sqlite3")
-    tool_service = service(store)
-
-    invalid = tool_service.call(
-        "health.get_current_state",
-        {"wearer_id": "xwen", "max_age_ms": 99},
-    )
-    missing = tool_service.call(
-        "health.get_device_status",
-        {"wearer_id": "other"},
-    )
-
-    assert invalid.envelope["error"]["code"] == "INVALID_ARGUMENT"
-    assert invalid.envelope["meta"]["data_source"] is None
-    assert missing.envelope["error"]["code"] == "WEARER_NOT_FOUND"
-    validate_tool_result(tool_service, "health.get_current_state", invalid)
-    validate_tool_result(tool_service, "health.get_device_status", missing)
-
-
-def test_event_tools_and_device_status_match_contract(tmp_path) -> None:
-    store = HealthStore(tmp_path / "health.sqlite3")
-    document = golden_state()
-    document["signal"].update(
-        {
-            "lead_off": True,
-            "quality_score": 0.1,
-            "quality_level": "bad",
-            "quality_rank": 1,
-        }
-    )
-    for metric in document["heart"].values():
-        if isinstance(metric, dict) and "valid" in metric:
-            metric.update(
-                {
-                    "value": None,
-                    "valid": False,
-                    "observed_at": None,
-                    "age_ms": None,
-                    "unavailable_reason": "lead_off",
-                }
-            )
-    committed = commit_document(store, document)
-    event_id = committed["active_events"][0]["event_id"]
-    tool_service = service(store)
-
-    details = tool_service.call(
-        "health.get_event_details",
-        {"event_id": event_id},
-    )
-    recent = tool_service.call(
-        "health.get_recent_events",
-        {"wearer_id": "xwen", "limit": 20},
-    )
-    device = tool_service.call(
-        "health.get_device_status",
-        {"wearer_id": "xwen"},
-    )
-
-    assert details.envelope["data"]["event"]["event_id"] == event_id
-    assert recent.envelope["data"]["events"][0]["event_id"] == event_id
-    assert device.envelope["data"]["device"]["status"] in {
-        "ok",
-        "degraded",
-        "stale",
-        "offline",
-    }
-    validate_tool_result(tool_service, "health.get_event_details", details)
-    validate_tool_result(tool_service, "health.get_recent_events", recent)
-    validate_tool_result(tool_service, "health.get_device_status", device)
-
-
-def test_event_details_hides_events_for_unconfigured_wearers(tmp_path) -> None:
-    db_path = tmp_path / "health.sqlite3"
-    store = HealthStore(db_path)
-    document = golden_state()
-    document["wearer_id"] = "other"
-    document["signal"].update(
-        {
-            "lead_off": True,
-            "quality_score": 0.1,
-            "quality_level": "bad",
-            "quality_rank": 1,
-        }
-    )
-    for metric in document["heart"].values():
-        if isinstance(metric, dict) and "valid" in metric:
-            metric.update(
-                {
-                    "value": None,
-                    "valid": False,
-                    "observed_at": None,
-                    "age_ms": None,
-                    "unavailable_reason": "lead_off",
-                }
-            )
-    committed = commit_document(store, document)
-    event_id = committed["active_events"][0]["event_id"]
-    tool_service = service(store)
-
-    result = tool_service.call(
-        "health.get_event_details",
-        {"event_id": event_id},
-    )
-
-    assert result.is_error
-    assert result.envelope["error"]["code"] == "EVENT_NOT_FOUND"
-    with sqlite3.connect(db_path) as connection:
-        audit_wearer = connection.execute(
-            """
-            SELECT wearer_id FROM health_mcp_audit
-            ORDER BY id DESC LIMIT 1
-            """
-        ).fetchone()[0]
-    assert audit_wearer == "other"
-
-
-def test_tools_list_is_exact_and_unknown_tool_is_json_rpc_error(tmp_path) -> None:
+def test_tools_list_is_exactly_three(tmp_path) -> None:
     from mcp import types
-    from mcp.shared.exceptions import McpError
 
     tool_service = service(HealthStore(tmp_path / "health.sqlite3"))
     server = create_mcp_server(tool_service)
-    list_handler = server.request_handlers[types.ListToolsRequest]
-    listed = asyncio.run(list_handler(types.ListToolsRequest()))
-    tools = listed.root.tools
+    listed = asyncio.run(
+        server.request_handlers[types.ListToolsRequest](types.ListToolsRequest())
+    )
 
-    assert [tool.name for tool in tools] == [
-        "health.get_current_state",
-        "health.get_event_details",
-        "health.get_recent_events",
-        "health.get_device_status",
+    assert [tool.name for tool in listed.root.tools] == [
+        "health.get_heart_rate",
+        "health.get_hrv",
+        "health.get_imu_state",
     ]
-    assert all(tool.outputSchema is not None for tool in tools)
-    assert all(tool.annotations.readOnlyHint for tool in tools)
-
-    call_handler = server.request_handlers[types.CallToolRequest]
-    with pytest.raises(McpError) as error:
-        asyncio.run(
-            call_handler(
-                types.CallToolRequest(
-                    params=types.CallToolRequestParams(
-                        name="health.unknown",
-                        arguments={},
-                    )
-                )
-            )
-        )
-    assert error.value.error.code == types.INVALID_PARAMS
-    assert error.value.error.message == "Unknown tool: health.unknown"
+    assert all(tool.annotations.readOnlyHint for tool in listed.root.tools)
+    assert all(tool.outputSchema is not None for tool in listed.root.tools)
 
 
-def test_rate_limiter_returns_next_allowed_delay() -> None:
+def test_heart_rate_returns_recent_summary_and_bounded_series(tmp_path) -> None:
+    store = HealthStore(tmp_path / "health.sqlite3")
+    seed_recent_metrics(store)
+    tool_service = service(store)
+
+    result = tool_service.call("health.get_heart_rate", {"window_s": 30})
+
+    assert not result.is_error
+    data = result.envelope["data"]
+    assert data["valid"]
+    assert data["latest_bpm"] == 80.0
+    assert data["min_bpm"] == 80.0
+    assert data["max_bpm"] == 84.0
+    assert data["coverage_ratio"] == 1.0
+    assert len(data["series"]) == 31
+    assert result.envelope["meta"]["wearer_id"] == "xwen"
+    validate_result(tool_service, "health.get_heart_rate", result)
+
+
+def test_hrv_uses_time_domain_nn_metrics_and_quality_gate(tmp_path) -> None:
+    store = HealthStore(tmp_path / "health.sqlite3")
+    seed_recent_metrics(store)
+    tool_service = service(store)
+
+    result = tool_service.call("health.get_hrv", {})
+
+    data = result.envelope["data"]
+    assert data["valid"]
+    assert data["valid_nn_count"] == 8
+    assert data["estimate_type"] == "ultra_short_time_domain"
+    assert data["mean_nn_ms"] == round(statistics.fmean((800, 810, 790, 805, 795, 820, 800, 810)), 3)
+    assert data["rmssd_ms"] is not None
+    assert data["sdnn_ms"] is not None
+    validate_result(tool_service, "health.get_hrv", result)
+
+
+def test_imu_state_returns_latest_motion_score_and_trend(tmp_path) -> None:
+    store = HealthStore(tmp_path / "health.sqlite3")
+    seed_recent_metrics(store)
+    tool_service = service(store)
+
+    result = tool_service.call("health.get_imu_state", {"window_s": 30})
+
+    data = result.envelope["data"]
+    assert data["valid"]
+    assert data["motion_score"] == 40.0
+    assert data["still_ratio_percent"] == 60.0
+    assert data["level"] == "moderate"
+    assert data["coverage_ratio"] == 1.0
+    assert len(data["series"]) == 31
+    validate_result(tool_service, "health.get_imu_state", result)
+
+
+def test_empty_history_is_explicitly_unavailable_not_fabricated(tmp_path) -> None:
+    tool_service = service(HealthStore(tmp_path / "health.sqlite3"))
+
+    for tool_name in tool_service.tools:
+        result = tool_service.call(tool_name, {})
+        assert not result.is_error
+        assert result.envelope["data"]["valid"] is False
+        assert result.envelope["data"]["unavailable_reason"] is not None
+        assert result.envelope["meta"]["latest_observed_at"] is None
+        validate_result(tool_service, tool_name, result)
+
+
+def test_invalid_window_uses_contract_failure(tmp_path) -> None:
+    tool_service = service(HealthStore(tmp_path / "health.sqlite3"))
+
+    result = tool_service.call("health.get_heart_rate", {"window_s": 9})
+
+    assert result.is_error
+    assert result.envelope["error"]["code"] == "INVALID_ARGUMENT"
+    validate_result(tool_service, "health.get_heart_rate", result)
+
+
+def test_rate_limiter_matches_product_tool_limits() -> None:
     now = [1_000_000_000]
     limiter = SlidingWindowRateLimiter(monotonic_ns=lambda: now[0])
-
     for _ in range(60):
-        assert limiter.check("health.get_device_status", "xwen") is None
-    assert limiter.check("health.get_device_status", "xwen") == 60_000
+        assert limiter.check("health.get_hrv", "xwen") is None
+    assert limiter.check("health.get_hrv", "xwen") == 60_000
     now[0] += 60_000_000_001
-    assert limiter.check("health.get_device_status", "xwen") is None
+    assert limiter.check("health.get_hrv", "xwen") is None
 
 
-def test_official_client_can_initialize_list_and_call_stdio_server(tmp_path) -> None:
+def test_http_configuration_and_bearer_middleware() -> None:
+    assert _validate_http_path("/mcp") == "/mcp"
+    assert _validate_bearer_token("a" * 32) == "a" * 32
+    with pytest.raises(ValueError):
+        _validate_http_path("mcp")
+    with pytest.raises(ValueError):
+        _validate_bearer_token("short")
+
+    calls: list[str] = []
+
+    async def downstream(scope, receive, send) -> None:
+        del receive, send
+        calls.append(scope["path"])
+
+    middleware = _BearerAuthMiddleware(
+        downstream,
+        token="a" * 32,
+        protected_path="/mcp",
+    )
+
+    async def invoke(authorization: str | None) -> list[dict]:
+        sent: list[dict] = []
+        headers = [] if authorization is None else [(b"authorization", authorization.encode())]
+
+        async def send(message: dict) -> None:
+            sent.append(message)
+
+        await middleware(
+            {"type": "http", "path": "/mcp", "headers": headers},
+            lambda: None,
+            send,
+        )
+        return sent
+
+    unauthorized = asyncio.run(invoke(None))
+    assert unauthorized[0]["status"] == 401
+    authorized = asyncio.run(invoke("Bearer " + "a" * 32))
+    assert authorized == []
+    assert calls == ["/mcp"]
+
+
+def test_official_client_can_list_and_call_stdio_server(tmp_path) -> None:
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
     db_path = tmp_path / "health.sqlite3"
     store = HealthStore(db_path)
-    commit_document(store, golden_state(), now_ns=1_000_000_000)
+    seed_recent_metrics(store, now=datetime.now(timezone.utc))
     environment = os.environ.copy()
     environment["SMART_COLLAR_WEARER_ID"] = "xwen"
     environment["SMART_COLLAR_HEALTH_DB_PATH"] = str(db_path)
+    environment["PYTHONPATH"] = str(
+        __import__("pathlib").Path(__file__).resolve().parents[1] / "src"
+    )
 
     async def exercise() -> None:
         parameters = StdioServerParameters(
             command=sys.executable,
-            args=[
-                "-m",
-                "smart_neckband.health_mcp",
-                "--transport",
-                "stdio",
-            ],
+            args=["-m", "smart_neckband.health_mcp", "--transport", "stdio"],
             env=environment,
         )
         async with stdio_client(parameters) as (read_stream, write_stream):
             async with ClientSession(read_stream, write_stream) as session:
-                initialized = await session.initialize()
-                assert initialized.protocolVersion == "2025-11-25"
+                await session.initialize()
                 listed = await session.list_tools()
                 assert [tool.name for tool in listed.tools] == [
-                    "health.get_current_state",
-                    "health.get_event_details",
-                    "health.get_recent_events",
-                    "health.get_device_status",
+                    "health.get_heart_rate",
+                    "health.get_hrv",
+                    "health.get_imu_state",
                 ]
                 result = await session.call_tool(
-                    "health.get_device_status",
-                    {"wearer_id": "xwen"},
+                    "health.get_heart_rate",
+                    {"window_s": 30},
                 )
                 assert result.isError is False
-                assert len(result.content) == 1
                 assert json.loads(result.content[0].text) == result.structuredContent
 
     asyncio.run(exercise())
 
 
-def test_real_stdio_unknown_and_malformed_calls_match_frozen_wire(
-    tmp_path,
-) -> None:
-    contract = load_health_contract()
+def test_official_client_can_call_authenticated_streamable_http(tmp_path) -> None:
+    import httpx
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+
+    db_path = tmp_path / "health.sqlite3"
+    store = HealthStore(db_path)
+    seed_recent_metrics(store, now=datetime.now(timezone.utc))
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = int(listener.getsockname()[1])
+    token = "r" * 48
     environment = os.environ.copy()
-    environment["SMART_COLLAR_WEARER_ID"] = "xwen"
-    environment["SMART_COLLAR_HEALTH_DB_PATH"] = str(
-        tmp_path / "health.sqlite3"
+    environment["PYTHONPATH"] = str(
+        __import__("pathlib").Path(__file__).resolve().parents[1] / "src"
     )
 
     async def exercise() -> None:
@@ -369,68 +307,71 @@ def test_real_stdio_unknown_and_malformed_calls_match_frozen_wire(
             "-m",
             "smart_neckband.health_mcp",
             "--transport",
-            "stdio",
+            "streamable-http",
+            "--db",
+            str(db_path),
+            "--wearer-id",
+            "xwen",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--path",
+            "/mcp",
+            "--bearer-token",
+            token,
+            "--allowed-host",
+            f"127.0.0.1:{port}",
             env=environment,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
-        assert process.stdin is not None
-        assert process.stdout is not None
+        try:
+            for _ in range(100):
+                try:
+                    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                    writer.close()
+                    await writer.wait_closed()
+                    del reader
+                    break
+                except OSError:
+                    await asyncio.sleep(0.05)
+            else:
+                raise AssertionError("Streamable HTTP server did not start")
 
-        async def exchange(message: dict) -> dict:
-            process.stdin.write(
-                json.dumps(message, separators=(",", ":")).encode("utf-8")
-                + b"\n"
-            )
-            await process.stdin.drain()
-            line = await asyncio.wait_for(
-                process.stdout.readline(),
+            url = f"http://127.0.0.1:{port}/mcp"
+            async with httpx.AsyncClient(timeout=5) as unauthorized:
+                assert (await unauthorized.post(url, json={})).status_code == 401
+            async with httpx.AsyncClient(
+                headers={"Authorization": f"Bearer {token}"},
                 timeout=10,
-            )
-            return json.loads(line)
-
-        initialized = await exchange(
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2025-11-25",
-                    "capabilities": {},
-                    "clientInfo": {"name": "wire-test", "version": "1"},
-                },
-            }
-        )
-        assert initialized["id"] == 1
-        process.stdin.write(
-            b'{"jsonrpc":"2.0","method":"notifications/initialized"}\n'
-        )
-        await process.stdin.drain()
-
-        unknown = await exchange(
-            {
-                "jsonrpc": "2.0",
-                "id": 9,
-                "method": "tools/call",
-                "params": {
-                    "name": "health.unknown",
-                    "arguments": {},
-                },
-            }
-        )
-        malformed = await exchange(
-            {
-                "jsonrpc": "2.0",
-                "id": 10,
-                "method": "tools/call",
-                "params": {"arguments": {}},
-            }
-        )
-        assert unknown == contract["x-golden"]["mcp_unknown_tool_error"]
-        assert malformed == contract["x-golden"]["mcp_malformed_call_error"]
-
-        process.terminate()
-        await asyncio.wait_for(process.wait(), timeout=10)
+            ) as client:
+                async with streamable_http_client(url, http_client=client) as streams:
+                    read_stream, write_stream, _session_id = streams
+                    async with ClientSession(read_stream, write_stream) as session:
+                        await session.initialize()
+                        listed = await session.list_tools()
+                        assert [tool.name for tool in listed.tools] == [
+                            "health.get_heart_rate",
+                            "health.get_hrv",
+                            "health.get_imu_state",
+                        ]
+                        result = await session.call_tool(
+                            "health.get_imu_state",
+                            {"window_s": 30},
+                        )
+                        assert result.isError is False
+                        payload = result.structuredContent
+                        assert json.loads(result.content[0].text) == payload
+                        assert payload["meta"]["wearer_id"] == "xwen"
+                        assert payload["meta"]["window_s"] == 30
+                        assert isinstance(payload["data"]["valid"], bool)
+        finally:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
 
     asyncio.run(exercise())

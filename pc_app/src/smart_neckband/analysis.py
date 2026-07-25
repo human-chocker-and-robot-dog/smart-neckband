@@ -11,6 +11,15 @@ from .protocol import ECG_SAMPLE_RATE_HZ, FLAG_ADC_CLIPPING
 
 
 @dataclass(frozen=True, slots=True)
+class RrIntervalObservation:
+    source_instance_id: str
+    end_sample_index: int
+    observed_at: str
+    received_monotonic_ns: int
+    rr_ms: float
+
+
+@dataclass(frozen=True, slots=True)
 class EcgAnalysisResult:
     timestamp_s: float
     raw: tuple[float, ...]
@@ -24,6 +33,7 @@ class EcgAnalysisResult:
     analyzed_through_ecg_sample_index: int | None = None
     analyzed_through_received_monotonic_ns: int | None = None
     analyzed_through_received_at_utc: str | None = None
+    rr_intervals: tuple[RrIntervalObservation, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +89,38 @@ def _rr_intervals_ms(peaks: tuple[int, ...]) -> tuple[float, ...]:
 
 def _valid_rr_intervals_ms(peaks: tuple[int, ...]) -> tuple[float, ...]:
     return tuple(rr for rr in _rr_intervals_ms(peaks) if 300.0 <= rr <= 2000.0)
+
+
+def _rr_observations(
+    window: tuple[EcgSample, ...],
+    peaks: tuple[int, ...],
+) -> tuple[RrIntervalObservation, ...]:
+    observations: list[RrIntervalObservation] = []
+    for index in range(1, len(peaks)):
+        start_peak = peaks[index - 1]
+        end_peak = peaks[index]
+        if not (0 <= start_peak < end_peak < len(window)):
+            continue
+        rr_ms = (end_peak - start_peak) * 1000.0 / ECG_SAMPLE_RATE_HZ
+        if not 300.0 <= rr_ms <= 2000.0:
+            continue
+        end_sample = window[end_peak]
+        if (
+            not end_sample.source_instance_id
+            or not end_sample.received_at_utc
+            or end_sample.received_monotonic_ns <= 0
+        ):
+            continue
+        observations.append(
+            RrIntervalObservation(
+                source_instance_id=end_sample.source_instance_id,
+                end_sample_index=end_sample.sample_index,
+                observed_at=end_sample.received_at_utc,
+                received_monotonic_ns=end_sample.received_monotonic_ns,
+                rr_ms=rr_ms,
+            )
+        )
+    return tuple(observations)
 
 
 def _stable_rr_ms(intervals_ms: tuple[float, ...]) -> float | None:
@@ -163,6 +205,7 @@ def analyze_recent_ecg(samples: tuple[EcgSample, ...]) -> EcgAnalysisResult:
         cleaned_array = nk.ecg_clean(raw_array, sampling_rate=ECG_SAMPLE_RATE_HZ)
         _, peak_info = nk.ecg_peaks(cleaned_array, sampling_rate=ECG_SAMPLE_RATE_HZ)
     peaks = tuple(int(index) for index in peak_info.get("ECG_R_Peaks", []))
+    rr_observations = _rr_observations(window, peaks)
 
     latest_rr_ms: float | None = None
     heart_rate_bpm: float | None = None
@@ -200,5 +243,6 @@ def analyze_recent_ecg(samples: tuple[EcgSample, ...]) -> EcgAnalysisResult:
         latest_rr_ms=latest_rr_ms,
         signal_quality=quality,
         message=message,
+        rr_intervals=rr_observations,
         **provenance,
     )

@@ -17,6 +17,7 @@ param(
         "pc-gui",
         "pc-mic",
         "pc-health-mcp",
+        "pc-health-mcp-http",
         "pc-health-status",
         "pc-health-soak",
         "pc-test"
@@ -32,7 +33,7 @@ param(
     [int]$BuildJobs = 4,
 
     [ValidateRange(1, 1440)]
-    [int]$HealthSoakMinutes = 30,
+    [int]$HealthSoakMinutes = 5,
 
     [string]$HealthSoakDbPath
 )
@@ -265,6 +266,29 @@ function Invoke-Native {
     }
 }
 
+function Invoke-PcPython {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [Parameter(Mandatory)][string]$Description
+    )
+
+    $srcPath = Join-Path $PcDir "src"
+    $oldPythonPath = $env:PYTHONPATH
+    try {
+        if ([string]::IsNullOrWhiteSpace($oldPythonPath)) {
+            $env:PYTHONPATH = $srcPath
+        }
+        else {
+            $env:PYTHONPATH = "$srcPath;$oldPythonPath"
+        }
+        Invoke-Native -FilePath $FilePath -Arguments $Arguments -Description $Description
+    }
+    finally {
+        $env:PYTHONPATH = $oldPythonPath
+    }
+}
+
 function Test-PythonModule {
     param(
         [Parameter(Mandatory)][string]$FilePath,
@@ -389,7 +413,7 @@ switch ($Action) {
         }
         Push-Location $PcDir
         try {
-            Invoke-Native -FilePath $venvPython -Arguments @(
+            Invoke-PcPython -FilePath $venvPython -Arguments @(
                 "-m", "smart_neckband"
             ) -Description "PC GUI"
         }
@@ -409,7 +433,7 @@ switch ($Action) {
         }
         Push-Location $PcDir
         try {
-            Invoke-Native -FilePath $venvPython -Arguments @(
+            Invoke-PcPython -FilePath $venvPython -Arguments @(
                 "-m", "smart_neckband.mic_capture_gui"
             ) -Description "INMP441 BLE capture GUI"
         }
@@ -427,10 +451,64 @@ switch ($Action) {
         }
         Push-Location $PcDir
         try {
-            & $venvPython -m smart_neckband.health_mcp --transport stdio
-            if ($LASTEXITCODE -ne 0) {
-                throw "Health MCP exited with code $LASTEXITCODE."
-            }
+            Invoke-PcPython -FilePath $venvPython -Arguments @(
+                "-m", "smart_neckband.health_mcp", "--transport", "stdio"
+            ) -Description "Health MCP stdio"
+        }
+        finally {
+            Pop-Location
+        }
+    }
+    "pc-health-mcp-http" {
+        $venvPython = Join-Path $PcDir ".venv\Scripts\python.exe"
+        if (-not (Test-Path -LiteralPath $venvPython)) {
+            throw "PC virtual environment is missing. Run '.\tools\project.ps1 pc-setup' first."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:SMART_COLLAR_WEARER_ID)) {
+            throw "SMART_COLLAR_WEARER_ID must be set before starting Health MCP."
+        }
+        if ([string]::IsNullOrWhiteSpace($env:SMART_COLLAR_HEALTH_MCP_BEARER_TOKEN)) {
+            throw "SMART_COLLAR_HEALTH_MCP_BEARER_TOKEN must be set for Streamable HTTP."
+        }
+        $mcpHost = if ([string]::IsNullOrWhiteSpace($env:SMART_COLLAR_HEALTH_MCP_HOST)) {
+            "0.0.0.0"
+        }
+        else {
+            $env:SMART_COLLAR_HEALTH_MCP_HOST
+        }
+        $mcpPort = if ([string]::IsNullOrWhiteSpace($env:SMART_COLLAR_HEALTH_MCP_PORT)) {
+            "8765"
+        }
+        else {
+            $env:SMART_COLLAR_HEALTH_MCP_PORT
+        }
+        $mcpPath = if ([string]::IsNullOrWhiteSpace($env:SMART_COLLAR_HEALTH_MCP_PATH)) {
+            "/mcp"
+        }
+        else {
+            $env:SMART_COLLAR_HEALTH_MCP_PATH
+        }
+        $allowedHosts = @(
+            $env:SMART_COLLAR_HEALTH_MCP_ALLOWED_HOSTS -split "," |
+                ForEach-Object { $_.Trim() } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        )
+        if ($allowedHosts.Count -eq 0) {
+            throw "SMART_COLLAR_HEALTH_MCP_ALLOWED_HOSTS must list the Windows host:port used by the RDK."
+        }
+        $arguments = @(
+            "-m", "smart_neckband.health_mcp",
+            "--transport", "streamable-http",
+            "--host", $mcpHost,
+            "--port", $mcpPort,
+            "--path", $mcpPath
+        )
+        foreach ($allowedHost in $allowedHosts) {
+            $arguments += @("--allowed-host", $allowedHost)
+        }
+        Push-Location $PcDir
+        try {
+            Invoke-PcPython -FilePath $venvPython -Arguments $arguments -Description "Health MCP Streamable HTTP"
         }
         finally {
             Pop-Location
@@ -454,10 +532,7 @@ switch ($Action) {
                 "status",
                 "--wearer-id", $env:SMART_COLLAR_WEARER_ID
             )
-            & $venvPython @statusArguments
-            if ($LASTEXITCODE -ne 0) {
-                throw "Health status exited with code $LASTEXITCODE."
-            }
+            Invoke-PcPython -FilePath $venvPython -Arguments $statusArguments -Description "Health status"
         }
         finally {
             Pop-Location
@@ -483,7 +558,7 @@ switch ($Action) {
         $resultPath = "$dbPath.result.json"
         Push-Location $PcDir
         try {
-            Invoke-Native -FilePath $venvPython -Arguments @(
+            Invoke-PcPython -FilePath $venvPython -Arguments @(
                 "-m", "smart_neckband.health_soak",
                 "--db", $dbPath,
                 "--duration-s", ($HealthSoakMinutes * 60),

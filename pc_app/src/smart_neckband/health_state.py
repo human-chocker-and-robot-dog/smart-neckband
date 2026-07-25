@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import time
 from typing import Callable
 
-from .analysis import EcgAnalysisResult
+from .analysis import EcgAnalysisResult, RrIntervalObservation
 from .buffers import EcgSample, StatusSample
 from .health_contract import SCHEMA_VERSION, validate_wearer_id
+from .health_motion import MotionAnalysis, analyze_motion
 from .health_quality import (
     HealthQuality,
     HealthQualityWindow,
@@ -35,6 +36,10 @@ class BuiltHealthState:
     transport_received_monotonic_ns: int
     status_evidence_key: str | None
     clipping_window_full: bool
+    motion_analysis: MotionAnalysis = field(
+        default_factory=lambda: analyze_motion((), source_instance_id="")
+    )
+    rr_intervals: tuple[RrIntervalObservation, ...] = ()
 
 
 def age_ms(now_monotonic_ns: int, evidence_monotonic_ns: int | None) -> int | None:
@@ -458,6 +463,11 @@ class HealthStateBuilder:
         transport_received_ns = runtime.last_transport_packet_monotonic_ns
         if transport_received_ns is None:
             transport_received_ns = latest_ecg.received_monotonic_ns
+        motion_analysis = analyze_motion(
+            stores.imu.snapshot(),
+            source_instance_id=latest_ecg.source_instance_id,
+            window_s=30.0,
+        )
         document: dict[str, object] = {
             "schema_version": SCHEMA_VERSION,
             "wearer_id": self.wearer_id,
@@ -508,4 +518,6 @@ class HealthStateBuilder:
                 samples,
                 source_instance_id=latest_ecg.source_instance_id,
             )[1],
+            motion_analysis=motion_analysis,
+            rr_intervals=(analysis.rr_intervals if analysis is not None else ()),
         )

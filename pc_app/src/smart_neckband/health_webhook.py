@@ -17,7 +17,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from .health_contract import SCHEMA_VERSION, compact_json
+from .health_contract import compact_json
+from .health_event_contract import BRIDGE_SCHEMA_VERSION, definition_schema
 
 
 HEALTH_WEBHOOK_PATH = "/v1/health-events"
@@ -62,6 +63,8 @@ def canonical_webhook_body(payload: dict[str, object]) -> bytes:
         "event_revision",
         "transition",
         "event_type",
+        "severity",
+        "priority",
         "wearer_id",
         "source_instance_id",
         "state_revision",
@@ -70,6 +73,9 @@ def canonical_webhook_body(payload: dict[str, object]) -> bytes:
         "sent_at",
         "trace_id",
         "test_mode",
+        "summary",
+        "evidence",
+        "recommended_capabilities",
     )
     if tuple(payload) != required_order:
         raise ValueError("webhook payload keys are not in canonical contract order")
@@ -190,7 +196,7 @@ class HealthWebhookClient:
             headers={
                 "Content-Type": "application/json; charset=utf-8",
                 "Accept": "application/json",
-                "User-Agent": f"smart-neckband-health/{SCHEMA_VERSION}",
+                "User-Agent": f"smart-neckband-health/{BRIDGE_SCHEMA_VERSION}",
                 "X-Smart-Collar-Key-Id": self.key_id,
                 "X-Smart-Collar-Timestamp": str(timestamp),
                 "X-Smart-Collar-Notification-Id": notification_id,
@@ -371,6 +377,19 @@ class HealthWebhookReceiverStore:
                     raw_body BLOB NOT NULL,
                     received_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS health_event_heads (
+                    event_id TEXT PRIMARY KEY,
+                    highest_revision INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS health_agent_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    notification_id TEXT NOT NULL UNIQUE,
+                    event_id TEXT NOT NULL,
+                    event_revision INTEGER NOT NULL,
+                    raw_body BLOB NOT NULL,
+                    received_at TEXT NOT NULL,
+                    UNIQUE(event_id, event_revision)
+                );
                 """
             )
 
@@ -382,6 +401,9 @@ class HealthWebhookReceiverStore:
 
     def persist(self, notification_id: str, raw_body: bytes) -> str:
         digest = hashlib.sha256(raw_body).hexdigest()
+        payload = json.loads(raw_body.decode("utf-8"))
+        event_id = str(payload["event_id"])
+        event_revision = int(payload["event_revision"])
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(
@@ -401,20 +423,40 @@ class HealthWebhookReceiverStore:
                 ),
             )
             if cursor.rowcount == 1:
-                connection.execute(
-                    """
-                    INSERT INTO health_queue(
-                        notification_id, raw_body, received_at
-                    ) VALUES(?, ?, ?)
-                    """,
-                    (
-                        notification_id,
-                        raw_body,
-                        datetime.now(timezone.utc)
-                        .isoformat(timespec="milliseconds")
-                        .replace("+00:00", "Z"),
-                    ),
-                )
+                head = connection.execute(
+                    "SELECT highest_revision FROM health_event_heads WHERE event_id=?",
+                    (event_id,),
+                ).fetchone()
+                if head is None or event_revision > int(head["highest_revision"]):
+                    connection.execute(
+                        """
+                        INSERT INTO health_event_heads(event_id, highest_revision)
+                        VALUES(?, ?)
+                        ON CONFLICT(event_id) DO UPDATE SET
+                            highest_revision=MAX(
+                                health_event_heads.highest_revision,
+                                excluded.highest_revision
+                            )
+                        """,
+                        (event_id, event_revision),
+                    )
+                    connection.execute(
+                        """
+                        INSERT OR IGNORE INTO health_agent_queue(
+                            notification_id, event_id, event_revision,
+                            raw_body, received_at
+                        ) VALUES(?, ?, ?, ?, ?)
+                        """,
+                        (
+                            notification_id,
+                            event_id,
+                            event_revision,
+                            raw_body,
+                            datetime.now(timezone.utc)
+                            .isoformat(timespec="milliseconds")
+                            .replace("+00:00", "Z"),
+                        ),
+                    )
                 return "accepted"
             existing = connection.execute(
                 """
@@ -428,9 +470,9 @@ class HealthWebhookReceiverStore:
     def queue_count(self) -> int:
         with self._connection() as connection:
             return int(
-                connection.execute("SELECT COUNT(*) AS count FROM health_queue").fetchone()[
-                    "count"
-                ]
+                connection.execute(
+                    "SELECT COUNT(*) AS count FROM health_agent_queue"
+                ).fetchone()["count"]
             )
 
 
@@ -521,8 +563,6 @@ class HealthWebhookReceiver:
         try:
             payload = json.loads(raw_body.decode("utf-8"))
             from jsonschema import Draft202012Validator
-
-            from .health_contract import definition_schema
 
             Draft202012Validator(definition_schema("WebhookRequest")).validate(
                 payload

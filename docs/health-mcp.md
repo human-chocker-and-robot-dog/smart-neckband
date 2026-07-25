@@ -1,255 +1,205 @@
-# PC Health MCP V0.2
+# PC Health MCP V0.3
 
-The Windows PC application now owns the P0 Health MCP implementation. It reads
-the same committed ECG, IMU, device-status, and analysis evidence used by the
-desktop UI, persists contract-versioned state and events in SQLite, exposes four
-read-only tools over stdio, and delivers optional health-event wake-up
-notifications through a separate signed webhook queue.
+The Windows PC owns sensor acquisition, NeuroKit2 analysis, derived metric
+history, health-event rules, SQLite, and the Health MCP server. The RDK runs the
+Agent and acts as the remote MCP client.
 
-This is an engineering-status interface. It is not a medical device, diagnosis,
-emergency service, or authorization for robot motion.
+The business MCP surface contains exactly three read-only tools:
+
+```text
+health.get_heart_rate
+health.get_hrv
+health.get_imu_state
+```
+
+No MCP tool exposes raw ECG, cleaned ECG, R peaks, raw IMU arrays, event
+history, deletion, threshold configuration, secrets, Webhook bodies, diagnosis,
+or robot-motion authorization.
 
 ## Install
-
-From the repository PowerShell:
 
 ```powershell
 .\tools\project.ps1 pc-setup
 ```
 
-The Health extra pins the official stable MCP Python SDK to `mcp==1.28.0`,
-which supports MCP protocol revision `2025-11-25`. The implementation does not
-use the prerelease v2 SDK.
+The `health` extra pins `mcp==1.28.0`. Streamable HTTP uses the SDK's server
+transport together with Starlette/Uvicorn dependencies installed by the SDK.
 
-## Configuration
-
-Set these variables in the environment that starts the PC GUI and the MCP
-child:
+## Common configuration
 
 ```text
-SMART_COLLAR_WEARER_ID=<stable-non-name-id>
+SMART_COLLAR_WEARER_ID=xwen
 SMART_COLLAR_HEALTH_DB_PATH=C:\path\outside\Git\health_state.db
+SMART_COLLAR_HEALTH_RULES_PATH=C:\path\outside\Git\health_rules.json
 ```
 
-The GUI starts the Health state worker only when `SMART_COLLAR_WEARER_ID` is
-present. The default database path is the ignored local path
-`data/health/health_state.db`.
-The wearer ID must match `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` and should be a
-stable pseudonymous identifier, not a real name. Invalid configured IDs fail
-before state or MCP service startup.
-
-The optional health-event webhook requires all three variables:
+The wearer ID is a stable pseudonym matching:
 
 ```text
-SMART_COLLAR_HEALTH_WEBHOOK_URL=http://127.0.0.1:8766/v1/health-events
-SMART_COLLAR_HEALTH_WEBHOOK_KEY_ID=<health-key-id>
-SMART_COLLAR_HEALTH_WEBHOOK_SECRET_HEX=<64-lowercase-hex>
+[A-Za-z0-9][A-Za-z0-9._-]{0,63}
 ```
 
-The secret is exactly 32 random bytes encoded as 64 lowercase hexadecimal
-characters. Uppercase, whitespace, `0x`, Base64, passphrases, and partial
-configuration fail closed before a delivery worker starts. Plain HTTP is
-accepted only for `localhost`, `127.0.0.1`, or `::1`; every other endpoint must
-use HTTPS.
+The rules path is optional. Copy `config/health_rules.example.json` to an
+ignored local path, set thresholds deliberately, and enable only the required
+rules.
 
-Do not reuse the Live Web token, ordinary Agent webhook token, or an MCP
-credential as the health webhook secret.
-
-## Acquisition owner
-
-Start the ordinary PC GUI after setting the environment:
-
-```powershell
-.\tools\project.ps1 pc-gui
-```
-
-The Health runtime evaluates every 500 ms on a dedicated worker. It writes:
-
-- the latest device snapshot, even before the first ECG packet;
-- a wearer-state revision only after a valid ECG packet exists;
-- the four P0 event types: `lead_off`, `adc_clipping`, `input_stale`, and
-  `input_offline`;
-- an independent health webhook outbox in the same transaction as an event
-  transition.
-
-The raw recorder still writes each received transport chunk before parsing or
-reset decisions. Health state never replaces or filters raw ECG evidence.
-
-## MCP client command
-
-Configure an MCP host to launch the virtual-environment Python directly:
+## Data ownership
 
 ```text
-command = C:\path\to\smart-neckband\pc_app\.venv\Scripts\python.exe
-args    = -m smart_neckband.health_mcp --transport stdio
-env     = SMART_COLLAR_WEARER_ID, SMART_COLLAR_HEALTH_DB_PATH
+ESP32 serial/BLE packets
+  -> Windows GUI/acquisition process
+  -> receipt/source-aware buffers
+  -> NeuroKit2 HR and RR observations
+  -> local IMU motion scoring
+  -> SQLite derived history
+  -> Health MCP queries and signed Health Webhooks
 ```
 
-For an interactive shell test, the repository wrapper is:
+The primary raw ECG recording path is unchanged. Derived MCP history does not
+replace raw evidence.
+
+## Tool semantics
+
+Each tool accepts an optional closed input object:
+
+```json
+{"window_s": 30}
+```
+
+The allowed range is 10 to 300 seconds and the default is 30 seconds.
+
+### `health.get_heart_rate`
+
+Returns latest, mean, minimum, and maximum valid BPM, counts, recent coverage,
+mean signal quality, lead-off/clipping observations, and at most one derived
+trend point per second.
+
+### `health.get_hrv`
+
+Returns the ultra-short time-domain estimate `rmssd_ms`, `sdnn_ms`,
+`pnn50_percent`, `mean_nn_ms`, valid NN count, and quality gates. RMSSD is the
+primary value available to local alert rules. Thirty-second HRV is an
+engineering estimate and not a medical conclusion.
+
+### `health.get_imu_state`
+
+Returns a 0-100 motion score, still-time percentage, level
+(`still/light/moderate/vigorous`), coverage, IMU-online state, method, and a
+bounded trend.
+
+The score uses MPU6050 ±2 g and ±250 dps scaling:
+
+```text
+acc_activity = abs(norm(acceleration) - 1 g)
+gyro_activity = norm(angular_velocity)
+
+score = 100 * (0.6 * clamp(acc_activity / A_REF)
+             + 0.4 * clamp(gyro_activity / G_REF))
+```
+
+The PC averages per-sample activity into one-second buckets and summarizes the
+recent 30-second IMU window. Reference values and rule thresholds require
+static, ordinary-motion, and vigorous-motion calibration.
+
+## Local stdio MCP
+
+For development or an Agent host on the same Windows machine:
 
 ```powershell
 .\tools\project.ps1 pc-health-mcp
 ```
 
-The server writes only MCP JSON-RPC frames to stdout; operational logs go to
-stderr. P0 does not open an MCP network port and does not declare resources,
-prompts, or sampling.
+Equivalent host configuration:
 
-The fixed tools are:
+```text
+command = C:\path\to\pc_app\.venv\Scripts\python.exe
+args = -m smart_neckband.health_mcp --transport stdio
+```
 
-- `health.get_current_state`
-- `health.get_event_details`
-- `health.get_recent_events`
-- `health.get_device_status`
+## RDK Streamable HTTP MCP
 
-All are read-only, idempotent, non-destructive, and closed-world. They do not
-return raw or cleaned ECG arrays.
+The MCP server remains on Windows because Windows owns SQLite. The RDK connects
+to Windows:
 
-## Local observability
+```text
+RDK Agent -> http://<windows-address>:8765/mcp
+Authorization: Bearer <token>
+```
 
-The MCP surface remains exactly four tools. Operational status is available
-only through a local, read-only administrator command:
+Windows configuration:
+
+```text
+SMART_COLLAR_HEALTH_MCP_HOST=0.0.0.0
+SMART_COLLAR_HEALTH_MCP_PORT=8765
+SMART_COLLAR_HEALTH_MCP_PATH=/mcp
+SMART_COLLAR_HEALTH_MCP_BEARER_TOKEN=<32-or-more-random-characters>
+SMART_COLLAR_HEALTH_MCP_ALLOWED_HOSTS=<windows-ip>:8765,<hostname>:8765
+```
+
+Start it with:
+
+```powershell
+.\tools\project.ps1 pc-health-mcp-http
+```
+
+`SMART_COLLAR_HEALTH_MCP_ALLOWED_HOSTS` is checked against the HTTP `Host`
+header to reduce DNS-rebinding risk. Configure the Windows firewall manually so
+only the RDK address can reach TCP 8765. The project does not modify firewall
+rules automatically.
+
+Plain HTTP plus Bearer authentication is acceptable only on an isolated demo
+LAN because the token is not encrypted. Production requires HTTPS or an
+encrypted private overlay such as Tailscale/WireGuard. Never expose this port
+directly to the public Internet.
+
+## Active health Webhook
+
+Health events use a separate channel from ASR text:
+
+```text
+ASR/user text: POST /v1/instructions
+Health trigger: POST /v1/health-events
+```
+
+The Health Webhook is HMAC-SHA256 signed, persisted before delivery, and
+retried with stable raw UTF-8 body bytes. It contains the latest trigger
+snapshot, not the recent time series. Capability
+`health.inspect_recent_metrics` tells the RDK Agent policy to call all three
+Health MCP tools with the recommended window.
+
+The receiver maintains two idempotency levels:
+
+- `notification_id + raw_body_sha256` for HTTP retries;
+- `event_id + event_revision` for Agent/MCP action opportunities.
+
+The event contract and catalog are:
+
+```text
+docs/specs/health-event-bridge-v0.3.contract.json
+docs/specs/health-event-catalog.md
+```
+
+## Local observability and deletion
+
+Local status remains an administrator command, not an MCP tool:
 
 ```powershell
 .\tools\project.ps1 pc-health-status
 ```
 
-Set `SMART_COLLAR_WEARER_ID` first. Set `SMART_COLLAR_HEALTH_DB_PATH` when the
-runtime uses a non-default database. The command prints JSON containing:
+Local deletion remains an explicit administrator plan/delete workflow. It is
+not exposed to the Agent.
 
-- state revision, source instance, data source, freshness, and recomputed age;
-- opened, active, and resolved event counts;
-- pending outbox count and oldest pending age;
-- webhook attempts, successful deliveries, retries, and dead letters;
-- MCP call count, latency, error count, and latest error code;
-- parser accepted/lost/CRC counters;
-- analysis source, sample index, message, evidence age, and last-success age;
-- SQLite migration version.
-
-It deliberately excludes raw webhook bodies, secrets, signatures, waveform
-samples, HR, RR, SQI, and other physiological values. A monotonic-clock rollback
-is reported conservatively as stale/offline-age evidence rather than as fresh.
-
-## Webhook behavior
-
-Health notifications use only:
-
-```text
-POST /v1/health-events
-```
-
-They never reuse `/v1/instructions` or `/agent-replies`. Each notification
-contains identifiers and transition metadata, not HR, RR, SQI, waveform,
-R-peaks, or diagnostic text.
-
-The dispatcher:
-
-- persists canonical UTF-8 body bytes before the first attempt;
-- signs `timestamp + "." + raw_body` with HMAC-SHA256;
-- disables HTTP redirects;
-- retries retryable transport/HTTP failures with jittered backoff;
-- preserves per-wearer `notification_sequence` order;
-- moves terminal or 24-hour failures to a separate dead-letter table;
-- pauses automatic delivery after HTTP 401 or 403.
-
-The receiver must persist and deduplicate before returning HTTP 202, then query
-the event and current state through MCP. A notification alone must never drive
-physical movement.
-
-## Key rotation
-
-Rotate the webhook key without reusing another application credential:
-
-1. Add the new key ID and 32-byte secret to the receiver while keeping the old
-   key temporarily valid.
-2. Stop the PC GUI so no Health delivery is in flight.
-3. Replace `SMART_COLLAR_HEALTH_WEBHOOK_KEY_ID` and
-   `SMART_COLLAR_HEALTH_WEBHOOK_SECRET_HEX` in the process environment.
-4. Restart the GUI and confirm a synthetic notification is accepted with the
-   new key ID.
-5. Remove the old key from the receiver.
-
-Never print either secret, an HMAC signature, or a complete webhook body while
-checking rotation.
-
-## Stability soak
-
-The repository includes a synthetic, no-hardware stability runner. It exercises
-the state builder at 500 Hz-equivalent input, all four event families, SQLite
-writer/reader concurrency, MCP queries, and store recovery:
-
-```powershell
-.\tools\project.ps1 pc-health-soak -HealthSoakMinutes 30
-```
-
-The command creates an ignored SQLite database and a JSON result under
-`data/health/`. A passing result has `"status":"passed"`,
-`"mcp_exceptions":0`, a positive state revision, zero production outbox rows,
-and a successful reopen of the same database. Synthetic evidence is always
-stored as `data_source=synthetic`, `test_mode=true`, and must never enqueue a
-production webhook. Outbox ordering, leasing, retry, restart, and hash
-invariants are covered by the dedicated automated tests. The soak does not
-start serial/BLE hardware, flash a device, or use electrodes.
-
-## Troubleshooting
-
-| Symptom | Meaning and action |
-|---|---|
-| `WEARER_NOT_FOUND` | The MCP child was started with a different `SMART_COLLAR_WEARER_ID`; correct the environment and restart it. |
-| `STATE_UNAVAILABLE` | The GUI has not committed a valid ECG packet yet; inspect device status and acquisition without substituting old physiology. |
-| `STATE_STALE` / `STATE_OFFLINE` | ECG evidence exceeded the caller or frozen freshness limit; restore ECG input and wait for a new revision. |
-| `DEVICE_OFFLINE` | The reader is closed/error or inbound transport is older than 10 seconds. |
-| `RATE_LIMITED` | Respect `retry_after_ms`; the enforced quota is per MCP process and tool. |
-| Webhook 401/403 | Automatic health delivery pauses and the item becomes dead letter; fix key ID/secret before restarting the dispatcher. |
-| Growing pending outbox | Check receiver availability and TLS/URL policy; do not move health records into the ordinary Agent queue. |
-| Old state after Windows restart | It must remain offline until a new packet arrives; a fresh result before new input is a defect. |
-
-For local inspection, keep the DB access limited to the same OS account that
-runs the GUI/MCP process. Do not copy the database, raw sessions, logs, or
-result files into Git.
-
-## Local deletion
-
-Health MCP exposes no deletion tool. Stop the PC acquisition process, then
-generate an exact local deletion plan:
-
-```powershell
-pc_app\.venv\Scripts\python.exe -m smart_neckband.health_admin `
-  --db C:\path\health_state.db `
-  plan-delete `
-  --wearer-id <id> `
-  --before-utc 2026-07-24T00:00:00.000Z
-```
-
-Review the per-table counts. Execute only with the returned confirmation token:
-
-```powershell
-pc_app\.venv\Scripts\python.exe -m smart_neckband.health_admin `
-  --db C:\path\health_state.db `
-  delete `
-  --wearer-id <id> `
-  --before-utc 2026-07-24T00:00:00.000Z `
-  --confirmation-token <token>
-```
-
-The delete step obtains an exclusive SQLite transaction, rejects changed
-counts, and writes a deletion audit without physiological content. It does not
-delete `data/sessions/**/raw.bin`; raw-session deletion is a separate operator
-decision.
-
-## Validation and safety
-
-Run:
+## Validation
 
 ```powershell
 .\tools\project.ps1 pc-test
+.\tools\project.ps1 pc-health-soak -HealthSoakMinutes 5
 ```
 
-Automated tests use synthetic packet/state fixtures and local temporary
-databases. They do not flash firmware, open a serial monitor, or connect body
-electrodes.
+The Health MCP soak is intentionally bounded to five minutes. A canceled run
+is reported as user-terminated rather than failed, and its partial SQLite
+database is retained for inspection.
 
-USB debugging remains electronics-only with no body electrodes. Human ECG
-acquisition requires independent battery power and wireless transport; never
-attach desktop USB, wall power, a charging power bank, or grounded bench
-instruments while electrodes are on a person.
+No firmware flash, serial monitor, or body-connected acquisition is required
+for software validation.

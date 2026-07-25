@@ -11,6 +11,7 @@ from typing import Callable
 from .analysis import EcgAnalysisResult
 from .health_state import HealthStateBuilder
 from .health_store import HealthStore
+from .health_rules import load_health_rules
 from .health_webhook import (
     HealthWebhookClient,
     HealthWebhookDispatcher,
@@ -74,7 +75,9 @@ class HealthRuntimeWorker:
             / "health"
             / "health_state.db"
         )
-        store = HealthStore(db_path)
+        rules_path = os.environ.get("SMART_COLLAR_HEALTH_RULES_PATH")
+        alert_rules = load_health_rules(rules_path) if rules_path else ()
+        store = HealthStore(db_path, alert_rules=alert_rules)
         webhook_url = os.environ.get("SMART_COLLAR_HEALTH_WEBHOOK_URL")
         key_id = os.environ.get("SMART_COLLAR_HEALTH_WEBHOOK_KEY_ID")
         secret_hex = os.environ.get("SMART_COLLAR_HEALTH_WEBHOOK_SECRET_HEX")

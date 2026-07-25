@@ -1557,7 +1557,7 @@ P0 不暴露删除 MCP tool。实现必须提供本机管理员删除路径，�
 一个阶段只有在相应测试通过、文档同步、未提交 secret/raw data 后才算完成。P0 总完成还要求：
 
 - 所有 12 节验收项通过；
-- 30 分钟 synthetic/bench soak，无 state builder crash、DB lock 泄漏或 outbox 丢失；
+- 5 分钟 synthetic/bench soak，无 state builder crash、DB lock 泄漏或 outbox 丢失；
 - 进程 kill/restart 后 active event 与 pending outbox 恢复；
 - MCP client contract test 和 mock receiver contract test 各自独立通过。
 

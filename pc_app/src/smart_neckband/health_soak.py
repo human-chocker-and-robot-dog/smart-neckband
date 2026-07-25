@@ -17,6 +17,8 @@ from .protocol import (
     STATUS_SAMPLING_ACTIVE,
     DeviceStatusPayload,
     EcgPayload,
+    ImuPayload,
+    ImuPoint,
     PacketHeader,
     ParserStats,
 )
@@ -65,27 +67,18 @@ def run_soak(
         while not stop_queries.wait(0.2):
             try:
                 service.call(
-                    "health.get_device_status",
-                    {"wearer_id": "soak-wearer"},
+                    "health.get_heart_rate",
+                    {"window_s": 30},
                 )
                 service.call(
-                    "health.get_current_state",
-                    {"wearer_id": "soak-wearer"},
+                    "health.get_hrv",
+                    {"window_s": 30},
                 )
-                recent = service.call(
-                    "health.get_recent_events",
-                    {"wearer_id": "soak-wearer", "limit": 1},
+                service.call(
+                    "health.get_imu_state",
+                    {"window_s": 30},
                 )
-                response_data = recent.envelope.get("data") or {}
-                events = response_data.get("events", [])
-                if events:
-                    service.call(
-                        "health.get_event_details",
-                        {"event_id": events[0]["event_id"]},
-                    )
-                query_counts["calls"] = int(query_counts["calls"]) + 3 + bool(
-                    events
-                )
+                query_counts["calls"] = int(query_counts["calls"]) + 3
             except Exception as exc:
                 query_counts["exceptions"] = int(
                     query_counts["exceptions"]
@@ -105,6 +98,7 @@ def run_soak(
     iteration = 0
     packet_sequence = 0
     next_sample_ordinal = 0
+    next_imu_index = 0
     last_ecg_ns: int | None = None
     last_ecg_utc: str | None = None
     last_status_second = -1
@@ -168,6 +162,29 @@ def run_soak(
                 parser_stats.packets_ok += 1
                 last_ecg_ns = now_ns
                 last_ecg_utc = now_utc
+
+            imu_count = max(1, round(50 * interval_s))
+            vigorous_motion = 30.0 <= phase < 40.0
+            imu_point = (
+                ImuPoint(ax=16_384, ay=0, az=16_384, gx=20_000, gy=0, gz=0)
+                if vigorous_motion
+                else ImuPoint(ax=0, ay=0, az=16_384, gx=0, gy=0, gz=0)
+            )
+            stores.imu.append_batch(
+                PacketHeader(
+                    packet_type=2,
+                    payload_length=0,
+                    packet_sequence=packet_sequence & 0xFFFFFFFF,
+                    timestamp_us=int(elapsed_s * 1_000_000),
+                ),
+                ImuPayload(
+                    first_sample_index=next_imu_index,
+                    samples=(imu_point,) * imu_count,
+                ),
+                source_instance_id=SOURCE_ID,
+                receipt=PacketReceipt(now_ns, now_utc),
+            )
+            next_imu_index += imu_count
 
             elapsed_second = int(elapsed_s)
             if elapsed_second != last_status_second:

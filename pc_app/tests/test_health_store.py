@@ -491,6 +491,8 @@ def test_retention_deletes_only_expired_terminal_records(tmp_path) -> None:
         "deliveries": 1,
         "dead_letters": 1,
         "mcp_audit": 1,
+        "metric_samples": 0,
+        "rr_intervals": 0,
     }
     assert store.get_event(active_id)["status"] == "active"
     assert store.list_outbox()
@@ -601,7 +603,7 @@ def test_local_observability_is_complete_and_excludes_sensitive_payloads(
         now=datetime(2026, 7, 24, tzinfo=timezone.utc),
     )
 
-    assert status["database"]["migration_version"] == 2
+    assert status["database"]["migration_version"] == 4
     assert status["state"]["revision"] == 1
     assert status["state"]["source_instance_id"] == document["source_instance_id"]
     assert status["state"]["age_ms"] == 220
