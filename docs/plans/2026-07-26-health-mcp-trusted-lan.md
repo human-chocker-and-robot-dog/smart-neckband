@@ -70,7 +70,7 @@ waited to completion in all outcomes.
 - [x] Confirm trusted-LAN requirement and inventory authentication paths.
 - [x] Remove authentication code and configuration.
 - [x] Validate real MCP connectivity and process cleanup.
-- [ ] Complete merge and push.
+- [x] Complete merge and push.
 
 ## Discoveries
 
@@ -87,3 +87,5 @@ tools, and called `health.get_imu_state`; focused validation passed with
 `16 passed`. The complete PC suite passed with `210 passed in 53.07s`. Process
 audits after both runs found zero Health MCP and zero task-specific pytest
 Python processes. Firmware and hardware were unchanged and not tested.
+Commit `958296d` was fast-forwarded to `main` and pushed to the canonical
+`origin`.
