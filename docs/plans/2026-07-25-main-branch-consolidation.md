@@ -90,7 +90,7 @@ authorized.
 ## Progress
 
 - [x] Back up dirty HANDOFF changes.
-- [ ] Merge `docs/health-mcp-spec`.
+- [x] Merge `docs/health-mcp-spec`.
 - [ ] Merge `feat/health-event-bridge-v0.3`.
 - [ ] Complete validation and review.
 - [ ] Push main.
@@ -104,6 +104,9 @@ authorized.
   commits relative to main.
 - Three untracked HANDOFF replacements and two deletion intents were preserved
   under ignored `data/branch-cleanup-backup-20260725` before cleanup.
+- `docs/health-mcp-spec` produced one add/add conflict in the V0.2 prose spec.
+  Main's newer ESP32-C3/unified-transport wording was retained while the
+  branch ancestry was merged as `b780c64`.
 
 ## Result
 
