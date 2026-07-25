@@ -92,6 +92,16 @@ cd /home/sunrise/tts-mcp
 ./send_tts.py "单次播报内容"
 ```
 
+全局响度模式命令：
+
+```bash
+tts-max                 # 最大响度：云端 +6、PulseAudio 125%、硬件 100%
+tts-normal              # 恢复普通模式
+tts-loudness status     # 查看当前模式和系统输出音量
+```
+
+命令应由 `sunrise` 用户直接运行，不要加 `sudo`。最大响度模式会牺牲动态范围并可能产生削波失真；模式状态会在重启后保留。
+
 ## 延迟与调用策略
 
 - 本机实测入队响应：约 `10.8 ms`。
