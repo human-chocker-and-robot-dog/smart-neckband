@@ -105,6 +105,11 @@ wss://openspeech.bytedance.com/api/v3/sauc/bigmodel
 
 ASR 默认使用 100 ms 音频分片和 20 ms 接收轮询上限。发送循环会先快速 drain 已缓存音频并连续发出多个 WebSocket audio frame，然后再短暂读取服务端消息；VAD 停止后会扩大 drain 时间片，尽快发送尾部音频和 final 标记，避免队列被 `recv` 超时节流。
 
+上位机在本地阈值 VAD 发出 `speech_end` 时立即向测试固件发送
+`STOP`、关闭 WAV，并让 ASR 发送尾帧；如果本地阈值没有及时命中，云端
+ASR 返回 `final` 也会作为兜底立即发送 `STOP` 并关闭 WAV。两条路径共用
+同一个幂等停止流程，避免 final 已返回或文字已上传后仍继续录音。
+
 运行日志写入 `pc_app/data/mic_capture_debug.log`，包含唤醒、ASR 连接/发送/final、队列丢弃、阈值 VAD chunk RMS/Peak、静默环境采样、说话声音采样、保存采样和异常 traceback。日志会脱敏字段名里包含 key/token/secret/password/authorization 的值。
 
 ASR 和 VAD 队列满时不再把本轮直接打成错误；上位机会丢弃最旧音频帧并继续处理，停止录音时也会优先腾出空间发送 final 标记。音频阈值 VAD 不依赖 FunASR、PyTorch 或本地模型；点击“静默环境采样”或“说话声音采样”后，上位机会直接启动麦克风传输，采样完成后更新界面数值。点击“保存采样”会把静默 RMS 与说话 RMS 写入 `pc_app/data/audio_threshold_vad_settings.json`，下次启动自动加载。

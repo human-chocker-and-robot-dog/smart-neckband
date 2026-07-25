@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
+from dataclasses import dataclass
 from datetime import datetime
 import json
 from pathlib import Path
@@ -31,6 +32,27 @@ from .volc_asr_client import (
     load_volc_asr_settings,
     save_volc_asr_settings,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureStopDecision:
+    reason: str
+    finish_asr: bool
+
+
+def wake_capture_stop_decision(
+    capture_mode: str | None,
+    *,
+    event_source: str,
+    event_kind: str,
+) -> CaptureStopDecision | None:
+    if capture_mode != "wake":
+        return None
+    if event_source == "vad" and event_kind == "speech_end":
+        return CaptureStopDecision(reason="vad_speech_end", finish_asr=True)
+    if event_source == "asr" and event_kind == "final":
+        return CaptureStopDecision(reason="asr_final", finish_asr=False)
+    return None
 
 
 def main() -> int:
@@ -613,16 +635,25 @@ def main() -> int:
             )
 
         def stop_capture(self) -> None:
+            self.stop_capture_for_event(
+                CaptureStopDecision(reason="manual", finish_asr=True)
+            )
+
+        def stop_capture_for_event(self, decision: CaptureStopDecision) -> None:
+            if self.capture_mode is None and self.recorder is None:
+                return
             self.debug_logger.event(
                 "capture.stop",
                 mode=self.capture_mode,
+                reason=decision.reason,
                 has_asr=self.asr_worker is not None,
                 has_vad=self.vad_worker is not None,
             )
             if self.worker is not None:
                 for _ in range(3):
                     self.worker.send("STOP")
-            self.finish_asr_session()
+            if decision.finish_asr:
+                self.finish_asr_session()
             self.finish_vad_session()
             self.finish_recording()
 
@@ -961,6 +992,13 @@ def main() -> int:
                 self.asr_status_label.setText("ASR final 已返回")
                 self.asr_partial_label.setText("Partial：--")
                 self.asr_final_text.appendPlainText(event.text)
+                decision = wake_capture_stop_decision(
+                    self.capture_mode,
+                    event_source="asr",
+                    event_kind=event.kind,
+                )
+                if decision is not None:
+                    self.stop_capture_for_event(decision)
             elif event.kind == "error":
                 self.asr_status_label.setText(f"ASR 错误：{event.detail}")
             elif event.kind == "closed":
@@ -980,8 +1018,13 @@ def main() -> int:
                 self.vad_status_label.setText(f"检测到开始说话：{event.detail}")
             elif event.kind == "speech_end":
                 self.vad_status_label.setText(f"检测到说话结束：{event.detail}")
-                if self.capture_mode == "wake" and self.recorder is not None:
-                    self.stop_capture()
+                decision = wake_capture_stop_decision(
+                    self.capture_mode,
+                    event_source="vad",
+                    event_kind=event.kind,
+                )
+                if decision is not None:
+                    self.stop_capture_for_event(decision)
             elif event.kind == "error":
                 self.vad_status_label.setText(f"VAD 错误：{event.detail}")
             elif event.kind == "closed":
