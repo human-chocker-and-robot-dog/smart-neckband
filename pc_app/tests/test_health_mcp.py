@@ -31,10 +31,14 @@ def utc_text(value: datetime) -> str:
     return value.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def seed_recent_metrics(store: HealthStore) -> None:
+def seed_recent_metrics(
+    store: HealthStore,
+    *,
+    now: datetime = NOW,
+) -> None:
     with sqlite3.connect(store.path) as connection:
         for index in range(31):
-            observed = utc_text(NOW - timedelta(seconds=30 - index))
+            observed = utc_text(now - timedelta(seconds=30 - index))
             connection.execute(
                 """
                 INSERT INTO health_metric_samples(
@@ -60,7 +64,7 @@ def seed_recent_metrics(store: HealthStore) -> None:
             )
         rr_values = (800.0, 810.0, 790.0, 805.0, 795.0, 820.0, 800.0, 810.0)
         for index, rr_ms in enumerate(rr_values):
-            observed = utc_text(NOW - timedelta(seconds=14 - index * 2))
+            observed = utc_text(now - timedelta(seconds=14 - index * 2))
             connection.execute(
                 """
                 INSERT INTO health_rr_intervals(
@@ -247,7 +251,7 @@ def test_official_client_can_list_and_call_stdio_server(tmp_path) -> None:
 
     db_path = tmp_path / "health.sqlite3"
     store = HealthStore(db_path)
-    seed_recent_metrics(store)
+    seed_recent_metrics(store, now=datetime.now(timezone.utc))
     environment = os.environ.copy()
     environment["SMART_COLLAR_WEARER_ID"] = "xwen"
     environment["SMART_COLLAR_HEALTH_DB_PATH"] = str(db_path)
@@ -287,7 +291,7 @@ def test_official_client_can_call_authenticated_streamable_http(tmp_path) -> Non
 
     db_path = tmp_path / "health.sqlite3"
     store = HealthStore(db_path)
-    seed_recent_metrics(store)
+    seed_recent_metrics(store, now=datetime.now(timezone.utc))
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = int(listener.getsockname()[1])
@@ -357,7 +361,11 @@ def test_official_client_can_call_authenticated_streamable_http(tmp_path) -> Non
                             {"window_s": 30},
                         )
                         assert result.isError is False
-                        assert result.structuredContent["data"]["valid"] is True
+                        payload = result.structuredContent
+                        assert json.loads(result.content[0].text) == payload
+                        assert payload["meta"]["wearer_id"] == "xwen"
+                        assert payload["meta"]["window_s"] == 30
+                        assert isinstance(payload["data"]["valid"], bool)
         finally:
             process.terminate()
             try:
