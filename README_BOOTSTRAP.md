@@ -67,6 +67,27 @@ https://github.com/human-chocker-and-robot-dog/smart-neckband.git
 
 Use `origin` for that remote. After Codex creates a validated Conventional Commit, it should push the committed branch to `origin` and set upstream when needed, unless the user explicitly says not to push.
 
+## SleepECG dependency
+
+The upstream [SleepECG](https://github.com/cbrnr/sleepecg) source is pinned to
+release `v0.5.9` as the `third_party/SleepECG` Git submodule. Initialize it when
+cloning or updating this repository:
+
+```powershell
+git submodule update --init --recursive
+```
+
+The normal PC setup installs the matching `sleepecg==0.5.9` Windows wheel as
+part of the GUI dependencies:
+
+```powershell
+.\tools\project.ps1 pc-setup
+```
+
+The wheel is used for normal setup because an editable install from the cloned
+source requires Microsoft Visual C++ 14 or newer to compile SleepECG's native
+heartbeat-detection extension.
+
 ## PC Agent Webhook
 
 The PC GUI includes a **Webhook** tab for submitting durable user-text instructions to an Agent Webhook Gateway and receiving de-duplicated final reply callbacks. The optional device gate enables ordinary sends only after the ESP32-C3 connection reaches `RECEIVING`; the HTTP integration does not change the BLE firmware protocol.
