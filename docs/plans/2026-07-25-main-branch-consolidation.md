@@ -65,8 +65,8 @@ Excluded:
 
 ```powershell
 .\tools\project.ps1 pc-test
-.\tools\project.ps1 build -Target esp32c3 -Voice
-.\tools\project.ps1 size -Target esp32c3 -Voice
+.\tools\project.ps1 build -Target esp32c3
+.\tools\project.ps1 size -Target esp32c3
 git diff --check
 git status --short --branch
 git branch --all
@@ -91,8 +91,9 @@ authorized.
 
 - [x] Back up dirty HANDOFF changes.
 - [x] Merge `docs/health-mcp-spec`.
-- [ ] Merge `feat/health-event-bridge-v0.3`.
-- [ ] Complete validation and review.
+- [x] Merge `feat/health-event-bridge-v0.3`.
+- [x] Complete PC, contract, static, and merge-boundary validation.
+- [ ] Repair the local ESP-IDF Python environment and rerun firmware build/size.
 - [ ] Push main.
 - [ ] Delete obsolete branches and worktrees.
 
@@ -107,6 +108,18 @@ authorized.
 - `docs/health-mcp-spec` produced one add/add conflict in the V0.2 prose spec.
   Main's newer ESP32-C3/unified-transport wording was retained while the
   branch ancestry was merged as `b780c64`.
+- `feat/health-event-bridge-v0.3` produced three real conflicts. Main's unified
+  microphone implementation and documentation were retained; the wrapper
+  conflict kept `Invoke-PcPython`, and the obsolete standalone-microphone test
+  from the wrong-target follow-up was excluded.
+- The Health V0.3 merge is `7a7259e`. The staged boundary contained zero
+  firmware files and the complete unified PC suite passed with `204 passed`.
+- JSON contracts, PowerShell parsing, conflict-marker scan, and
+  `git diff --check` passed.
+- Firmware build/size could not be rerun because the installed ESP-IDF v6.0.2
+  Python environment points to a removed Python 3.12 executable. CMake did not
+  reach source compilation. This is an environment blocker, not a firmware
+  compiler result, and no firmware file changed in this integration.
 
 ## Result
 
