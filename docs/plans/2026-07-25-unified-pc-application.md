@@ -98,7 +98,7 @@ unchanged.
 - [x] Integrate Health/MCP tab into the main GUI.
 - [x] Retire the standalone microphone GUI entry.
 - [x] Complete validation and documentation.
-- [ ] Merge and push main.
+- [x] Merge and push main.
 
 ## Discoveries
 
@@ -120,4 +120,5 @@ open the same main application. ASR final and local VAD speech end both stop
 the active recording, with one STOP per wake session. The complete PC suite
 passed on Windows: `210 passed in 68.67s`. Static diff and PowerShell parser
 checks passed. Firmware, flashing, serial monitoring, and hardware behavior
-were not changed or validated by this work.
+were not changed or validated by this work. Commit `75469f9` was fast-forwarded
+to `main` and pushed to the canonical `origin`.
