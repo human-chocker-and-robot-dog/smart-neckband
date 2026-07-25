@@ -25,6 +25,7 @@ gui = [
     "pyqtgraph>=0.13",
     "pyserial>=3.5",
     "PySide6>=6.7",
+    "sleepecg==0.5.9",
     "websocket-client>=1.8",
 ]
 serial = [
