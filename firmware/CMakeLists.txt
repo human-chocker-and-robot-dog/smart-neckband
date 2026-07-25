@@ -2,7 +2,7 @@
 # CMakeLists in this exact order for cmake to work correctly
 cmake_minimum_required(VERSION 3.22)
 
-set(PROJECT_VER "0.1.0")
+set(PROJECT_VER "0.2.0")
 
 # The repository supports only the ESP32-C3 hardware baseline.
 if(NOT DEFINED IDF_TARGET)
@@ -17,11 +17,13 @@ list(APPEND EXTRA_COMPONENT_DIRS
     "${CMAKE_CURRENT_LIST_DIR}/components/ble_uart"
 )
 
-list(APPEND EXTRA_COMPONENT_DIRS
-    "${CMAKE_CURRENT_LIST_DIR}/components/voice_deps"
-)
+option(SMART_NECKBAND_MIC "Enable unified Hi ESP microphone runtime" ON)
+
+if(SMART_NECKBAND_MIC)
+    set(COMPONENTS main mic_runtime)
+else()
+    set(COMPONENTS main)
+endif()
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-# "Trim" the build. Include the minimal set of components, main, and anything it depends on.
-idf_build_set_property(MINIMAL_BUILD ON)
 project(smart_neckband)

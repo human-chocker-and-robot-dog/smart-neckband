@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import struct
 import wave
+import json
+from pathlib import Path
 
 from smart_neckband.mic_capture_protocol import (
     CRC,
@@ -48,6 +50,34 @@ def make_frame(
     )
     body = header + payload
     return body + CRC.pack(crc16_ccitt_false(body))
+
+
+def test_shared_mic1_golden_status_vector() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    vectors = json.loads(
+        (repo_root / "docs" / "protocol" / "mic1_golden_vectors.json").read_text(
+            encoding="utf-8"
+        )
+    )["vectors"]
+    encoded = bytes.fromhex(vectors[0]["frame_hex"])
+
+    frames = MicFrameParser().feed(encoded)
+
+    assert frames == [
+        DeviceStatusFrame(
+            encoding=ENCODING_IMA_ADPCM,
+            sequence=7,
+            sample_rate=16_000,
+            first_sample_index=123_456,
+            i2s_errors=1,
+            tx_errors=2,
+            clipped_frames=3,
+            reserved=8,
+            pcm_shift=16,
+            streaming=False,
+            armed=True,
+        )
+    ]
 
 
 def test_pcm16_frame_survives_arbitrary_ble_fragmentation() -> None:

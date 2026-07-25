@@ -1,0 +1,12 @@
+{
+  "protocol": "MIC1",
+  "version": 1,
+  "crc": "CRC-16/CCITT-FALSE",
+  "vectors": [
+    {
+      "name": "status_armed_adpcm",
+      "description": "Armed status with fixed counters and 10 ms BLE interval",
+      "frame_hex": "4d494331010203000007000000803e000040e20100000000000000140001000000020000000300000008000000100003023c70"
+    }
+  ]
+}

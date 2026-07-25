@@ -20,14 +20,10 @@ set(main_requirements
     esp_driver_gptimer
     esp_driver_gpio
     esp_driver_i2c
-    esp_driver_i2s
     esp_hw_support
     esp_timer
     nvs_flash
     esp_partition
-    esp_event
-    esp_netif
-    esp_wifi
     spi_flash
 )
 
@@ -36,13 +32,12 @@ idf_component_register(
         ${main_sources}
     PRIV_REQUIRES
         ${main_requirements}
-        voice_deps
     INCLUDE_DIRS
         "."
 )
 
-if(SMART_NECKBAND_VOICE)
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE SMART_NECKBAND_VOICE=1)
+if(SMART_NECKBAND_MIC)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE SMART_NECKBAND_MIC=1)
 else()
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE SMART_NECKBAND_VOICE=0)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE SMART_NECKBAND_MIC=0)
 endif()

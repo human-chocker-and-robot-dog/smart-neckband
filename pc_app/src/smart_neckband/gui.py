@@ -37,6 +37,7 @@ from .serial_io import PcDataStores, SerialPacketReader, list_serial_ports
 from .sessions import ExperimentSessionRecorder, PLACEMENT_PRESETS, WIRE_MAPS, RecordingState
 from .status import ConnectionSnapshot, ConnectionState, connection_state_text
 from .webhook_ui import WebhookTab
+from .unified_mic_ui import UnifiedMicPanel
 
 
 LOGGER = logging.getLogger(__name__)
@@ -364,10 +365,18 @@ class MainWindow:
             QtWidgets=QtWidgets,
             post_gui=self._post_gui,
         )
+        self.mic_panel = UnifiedMicPanel(
+            QtCore=QtCore,
+            QtWidgets=QtWidgets,
+            pg=pg,
+            post_gui=self._post_gui,
+            webhook_submit=self.webhook_tab.enqueue_pc_asr_text,
+        )
         tabs.addTab(live_tab, "实时")
         tabs.addTab(diagnostics_tab, "诊断")
         tabs.addTab(history_tab, "历史记录")
         tabs.addTab(compare_tab, "双轨对比")
+        tabs.addTab(self.mic_panel.widget, "Microphone / Hi ESP")
         tabs.addTab(self.webhook_tab.widget, "Webhook")
         self.window.setCentralWidget(tabs)
         self.refresh_button.clicked.connect(self.refresh_ports)
@@ -635,6 +644,7 @@ class MainWindow:
         self.window.show()
 
     def close(self) -> None:
+        self.mic_panel.close()
         self.webhook_tab.close()
         self.disconnect_serial()
         if self.health_worker is not None:
@@ -731,8 +741,14 @@ class MainWindow:
                 debug_callback=self._queue_ble_debug,
                 voice_text_callback=self.webhook_tab.enqueue_voice_text,
                 voice_status_callback=self._queue_voice_status,
+                mic_frame_callback=lambda frame, stats: self._post_gui(
+                    lambda frame=frame, stats=stats: self.mic_panel.handle_frame(
+                        frame, stats
+                    )
+                ),
             )
             self.reader.health_transport = "ble"
+            self.mic_panel.set_reader(self.reader, endpoint)
         else:
             self.reader = SerialPacketReader(
                 port=endpoint,
@@ -741,6 +757,7 @@ class MainWindow:
                 raw_chunk_callback=self._record_raw_chunk,
             )
             self.reader.health_transport = "uart"
+            self.mic_panel.set_reader(None)
         self.reader.start()
         self.connection_label.setText(f"正在连接 {endpoint}……")
 
@@ -751,6 +768,7 @@ class MainWindow:
             self._append_debug_log(f"断开设备：{self.reader.port}")
             self.reader.stop()
             self.reader = None
+        self.mic_panel.set_reader(None)
         self.connection_label.setText("未连接")
 
     def update_view(self) -> None:

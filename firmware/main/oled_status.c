@@ -13,6 +13,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "i2c_scan.h"
+#if SMART_NECKBAND_MIC
+#include "mic_runtime.h"
+#endif
 #include "protocol_v0.h"
 #include "sample_ring.h"
 #include "sensors.h"
@@ -205,7 +208,7 @@ static uint32_t status_error_count(const v0_sensor_status_t *sensor,
            transport->write_error_count;
 }
 
-static void draw_page(bool second_page)
+static void draw_page(uint8_t page)
 {
     v0_sensor_status_t sensor = {0};
     v0_transport_status_t transport = {0};
@@ -215,10 +218,10 @@ static void draw_page(bool second_page)
     char line1[24] = {0};
     char line2[24] = {0};
 
-    if (!second_page) {
+    if (page == 0U) {
         snprintf(line1, sizeof(line1), "BT %s", transport.connected ? "CONN" : "WAIT");
         snprintf(line2, sizeof(line2), "ECG 500 IMU 50");
-    } else {
+    } else if (page == 1U) {
         const uint8_t usage = max3(v0_sample_ring_ecg_usage_percent(),
                                    v0_sample_ring_imu_usage_percent(),
                                    transport.queue_usage_percent);
@@ -231,6 +234,19 @@ static void draw_page(bool second_page)
                  sizeof(line2),
                  "LEAD %s",
                  sensor.lead_off_flags == 0U ? "OK" : "OFF");
+#if SMART_NECKBAND_MIC
+    } else {
+        mic_runtime_status_t mic = {0};
+        mic_runtime_get_status(&mic);
+        const char *state = mic.state == MIC_RUNTIME_ARMED ? "ARM" :
+                            mic.state == MIC_RUNTIME_STREAMING ? "STRM" :
+                            mic.state == MIC_RUNTIME_ERROR ? "ERR" : "OFF";
+        snprintf(line1, sizeof(line1), "MIC %s W%" PRIu32, state, mic.wake_count);
+        snprintf(line2,
+                 sizeof(line2),
+                 "ERR %" PRIu32,
+                 mic.i2s_error_count + mic.tx_error_count + mic.control_error_count);
+#endif
     }
 
     framebuffer_clear();
@@ -242,14 +258,14 @@ static void oled_task(void *arg)
 {
     (void)arg;
 
-    bool second_page = false;
+    uint8_t page = 0U;
     uint32_t page_elapsed_ms = 0U;
     for (;;) {
         if (!s_oled_online) {
             (void)oled_init_device();
         }
         if (s_oled_online) {
-            draw_page(second_page);
+            draw_page(page);
             if (oled_flush() != ESP_OK) {
                 ESP_LOGW(TAG, "OLED flush failed");
             }
@@ -257,7 +273,11 @@ static void oled_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(BOARD_OLED_REFRESH_INTERVAL_MS));
         page_elapsed_ms += BOARD_OLED_REFRESH_INTERVAL_MS;
         if (page_elapsed_ms >= BOARD_OLED_PAGE_INTERVAL_MS) {
-            second_page = !second_page;
+#if SMART_NECKBAND_MIC
+            page = (uint8_t)((page + 1U) % 3U);
+#else
+            page = (uint8_t)((page + 1U) % 2U);
+#endif
             page_elapsed_ms = 0U;
         }
     }

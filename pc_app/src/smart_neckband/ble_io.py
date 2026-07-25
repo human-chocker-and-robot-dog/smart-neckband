@@ -10,6 +10,7 @@ from threading import Event, Lock, Thread
 import time
 from typing import Callable
 
+from .mic_capture_protocol import MicFrame, MicFrameParser, ParserStats as MicParserStats
 from .protocol import (
     DeviceStatusPayload,
     EcgPayload,
@@ -32,6 +33,7 @@ from .source_coordinator import (
     StagedPacket,
 )
 from .voice import VoiceTextAssembler, VoiceTranscript
+from .unified_stream import UnifiedFrameKind, UnifiedStreamDemux
 
 
 BLE_UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
@@ -113,11 +115,11 @@ async def _start_notify_after_bond(
 
 
 class BlePacketReader:
-    """Receive the V0 byte stream from the ESP-IDF BLE UART TX characteristic.
+    """Own the unified V0 + MIC1 ESP-IDF BLE UART connection.
 
     ESP-IDF fragments writes to the live ATT MTU. Notifications are therefore
-    treated as arbitrary ordered byte chunks and fed directly to PacketParser;
-    V0 magic, length, CRC, and packet sequence provide stream recovery.
+    treated as arbitrary ordered byte chunks. UnifiedStreamDemux validates and
+    separates complete V0 and MIC1 frames before their existing parsers run.
     """
 
     def __init__(
@@ -131,6 +133,7 @@ class BlePacketReader:
         debug_callback: Callable[[str], None] | None = None,
         voice_text_callback: Callable[[VoiceTranscript], bool] | None = None,
         voice_status_callback: Callable[[VoiceStatusPayload], None] | None = None,
+        mic_frame_callback: Callable[[MicFrame, MicParserStats], None] | None = None,
         control_write_callback: Callable[[bytes], None] | None = None,
         receipt_factory: Callable[[], PacketReceipt] = PacketReceipt.now,
         monotonic_ns: Callable[[], int] = time.monotonic_ns,
@@ -140,12 +143,15 @@ class BlePacketReader:
         self.port = address
         self.stores = stores or PcDataStores.create()
         self.parser = PacketParser()
+        self.mic_parser = MicFrameParser()
+        self.demux = UnifiedStreamDemux()
         self.publisher = publisher or NullPublisher()
         self.raw_log_path = Path(raw_log_path) if raw_log_path is not None else None
         self.raw_chunk_callback = raw_chunk_callback
         self.debug_callback = debug_callback
         self.voice_text_callback = voice_text_callback
         self.voice_status_callback = voice_status_callback
+        self.mic_frame_callback = mic_frame_callback
         self.control_write_callback = control_write_callback
         self.receipt_factory = receipt_factory
         self.monotonic_ns = monotonic_ns
@@ -212,6 +218,9 @@ class BlePacketReader:
         self._stop.clear()
         self.source_coordinator.start_new_reader()
         self.parser.reset_sequence_baseline()
+        self.mic_parser.reset()
+        self.demux.reset()
+        self._clear_control_queue()
         self.ecg_ordinal_extender.reset()
         self.stores.clear()
         with self._runtime_lock:
@@ -257,8 +266,19 @@ class BlePacketReader:
             self._recorder.write(data)
         if self.raw_chunk_callback is not None:
             self.raw_chunk_callback(data)
-        for packet in self.parser.feed(data):
-            self._ingest(packet)
+        v0_crc_errors_before = self.demux.stats.v0_crc_errors
+        wire_frames = self.demux.feed(data)
+        self.parser.stats.crc_errors += (
+            self.demux.stats.v0_crc_errors - v0_crc_errors_before
+        )
+        for wire_frame in wire_frames:
+            if wire_frame.kind is UnifiedFrameKind.V0:
+                for packet in self.parser.feed(wire_frame.data):
+                    self._ingest(packet)
+                continue
+            for frame in self.mic_parser.feed(wire_frame.data):
+                if self.mic_frame_callback is not None:
+                    self.mic_frame_callback(frame, self.mic_parser.stats)
 
     def _run(self) -> None:
         try:
@@ -327,6 +347,7 @@ class BlePacketReader:
             self._debug("BLE 已连接并完成配对阶段；GATT 服务=%s", service_uuids or "<none>")
             self._debug("等待绑定链路加密并订阅 TX notification")
             await _start_notify_after_bond(client, notification)
+            await self._arm_microphone_after_subscription(client)
             with self._runtime_lock:
                 self._serial_open = True
             self._debug("BLE 数据通道已就绪")
@@ -352,11 +373,38 @@ class BlePacketReader:
                 response=True,
             )
 
+    async def _arm_microphone_after_subscription(self, client: object) -> None:
+        self.queue_mic_command("ARM")
+        await self._drain_control_writes(client)
+
     def queue_control_packet(self, packet: bytes) -> None:
         if self.control_write_callback is not None:
             self.control_write_callback(packet)
             return
         self._control_tx_queue.put(packet)
+
+    def queue_mic_command(self, command: str) -> None:
+        normalized = command.strip().upper()
+        if normalized.startswith("MIC "):
+            normalized = normalized[4:].strip()
+        if normalized not in ("ARM", "DISARM", "STOP"):
+            if not normalized.startswith("SHIFT "):
+                raise ValueError(f"unsupported microphone command: {command}")
+            try:
+                shift = int(normalized[6:].strip())
+            except ValueError as exc:
+                raise ValueError(f"invalid microphone shift: {command}") from exc
+            if not 10 <= shift <= 20:
+                raise ValueError("microphone shift must be between 10 and 20")
+            normalized = f"SHIFT {shift}"
+        self.queue_control_packet(f"MIC {normalized}".encode("ascii"))
+
+    def _clear_control_queue(self) -> None:
+        while True:
+            try:
+                self._control_tx_queue.get_nowait()
+            except Empty:
+                return
 
     def _debug(self, message: str, *args: object) -> None:
         rendered = message % args if args else message

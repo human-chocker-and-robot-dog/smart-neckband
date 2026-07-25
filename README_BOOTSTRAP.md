@@ -52,6 +52,11 @@ Validate the only supported target explicitly:
 .\tools\project.ps1 size -Target esp32c3
 ```
 
+These commands build the unified ECG + IMU + OLED + Hi ESP + MIC1 firmware in
+`firmware/build-c3-unified`. Use `-SensorsOnly` only as a diagnostic
+rollback. The unified partition table must be fully flashed before first use;
+flashing still requires explicit authorization.
+
 ## GitHub remote
 
 This local repository is attached to:
@@ -68,9 +73,10 @@ The PC GUI includes a **Webhook** tab for submitting durable user-text instructi
 
 See [the PC Agent Webhook guide](docs/pc-agent-webhook.md) for same-PC setup, remote-LAN setup, callback configuration, retry behavior, security limits, and troubleshooting.
 
-## ESP32-C3 Voice path
+## ESP32-C3 unified microphone path
 
-The current microphone path uses INMP441 audio, the official local `Hi ESP`
-WakeNet model, BLE MIC1 audio, PC-side Volcengine streaming ASR and threshold
-VAD, then the same durable Agent Webhook queue used by manual text. See
+The default firmware uses INMP441 audio, the official local `Hi ESP` WakeNet
+model, BLE MIC1 ADPCM audio, PC-side Volcengine streaming ASR and threshold VAD,
+then the same durable Agent Webhook queue used by manual text. The main GUI owns
+the single BLE connection and receives both V0 sensors and MIC1. See
 [the Voice setup and safety guide](docs/voice-wake-asr.md).

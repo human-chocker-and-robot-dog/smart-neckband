@@ -9,13 +9,15 @@
 #include "esp_partition.h"
 #include "esp_system.h"
 #include "i2c_scan.h"
+#if SMART_NECKBAND_MIC
+#include "mic_runtime.h"
+#endif
 #include "oled_status.h"
 #include "packet_task.h"
 #include "protocol_v0.h"
 #include "sdkconfig.h"
 #include "sensors.h"
 #include "transport.h"
-#include "voice_runtime.h"
 
 static const char *TAG = "v0_boot";
 
@@ -107,6 +109,9 @@ void app_main(void)
     log_partition_info("nvs", ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS);
     log_partition_info("phy_init", ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_PHY);
     log_partition_info("factory", ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY);
+#if SMART_NECKBAND_MIC
+    log_partition_info("model", ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS);
+#endif
     log_partition_info("storage", ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS);
 
     ESP_LOGI(TAG, "minimum free heap=%" PRIu32 " bytes", esp_get_minimum_free_heap_size());
@@ -120,6 +125,11 @@ void app_main(void)
     } else {
         ESP_LOGE(TAG, "protocol_v0 golden self-test=FAIL");
     }
+#if SMART_NECKBAND_MIC
+    ESP_LOGI(TAG,
+             "MIC1 golden self-test=%s",
+             mic_runtime_protocol_self_test() ? "PASS" : "FAIL");
+#endif
 
     const esp_err_t scan_err = v0_i2c_scan_once();
     if (scan_err != ESP_OK) {
@@ -148,12 +158,12 @@ void app_main(void)
         ESP_LOGE(TAG, "packet task failed to start: %s", esp_err_to_name(packet_err));
     }
 
-#if SMART_NECKBAND_VOICE
-    const esp_err_t voice_err = v0_voice_runtime_start();
-    if (voice_err != ESP_OK) {
+#if SMART_NECKBAND_MIC
+    const esp_err_t mic_err = mic_runtime_start();
+    if (mic_err != ESP_OK) {
         ESP_LOGW(TAG,
-                 "voice runtime gated or failed: %s",
-                 esp_err_to_name(voice_err));
+                 "microphone runtime disabled after startup failure: %s",
+                 esp_err_to_name(mic_err));
     }
 #endif
 

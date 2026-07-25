@@ -12,8 +12,10 @@ extern "C" {
 
 typedef struct {
     bool connected;
+    bool subscribed;
     bool congested;
     uint8_t queue_usage_percent;
+    uint16_t connection_interval_units;
     uint32_t queue_overflow_count;
     uint32_t disconnected_drop_count;
     uint32_t write_error_count;

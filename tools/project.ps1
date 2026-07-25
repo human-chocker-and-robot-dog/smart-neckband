@@ -13,8 +13,6 @@ param(
         "flash-monitor",
         "erase-flash",
         "fullclean",
-        "voice-provision",
-        "voice-model-provision",
         "pc-setup",
         "pc-gui",
         "pc-mic",
@@ -28,12 +26,10 @@ param(
     [ValidateSet("esp32c3")]
     [string]$Target,
 
-    [switch]$Voice,
+    [switch]$SensorsOnly,
 
     [ValidateRange(1, 64)]
     [int]$BuildJobs = 4,
-
-    [string]$WakeNetModelPath,
 
     [ValidateRange(1, 1440)]
     [int]$HealthSoakMinutes = 30,
@@ -61,33 +57,16 @@ if ([string]::IsNullOrWhiteSpace($Target)) {
 if ($Target -ne "esp32c3") {
     throw "Unsupported target '$Target'. Expected esp32c3."
 }
-if ($Action -in @("voice-provision", "voice-model-provision") -and -not $Voice) {
-    throw "$Action requires -Voice."
-}
-if ($Action -eq "voice-model-provision" -and
-    [string]::IsNullOrWhiteSpace($WakeNetModelPath)) {
-    throw "voice-model-provision requires -WakeNetModelPath."
-}
-
-$BuildFlavor = if ($Voice) { "$Target-voice" } else { $Target }
-$BuildDir = Join-Path $FirmwareDir "build-$BuildFlavor"
+$BuildFlavor = if ($SensorsOnly) { "$Target-sensors-only" } else { "$Target-unified" }
+$BuildDirFlavor = if ($SensorsOnly) { "c3-sensors-only" } else { "c3-unified" }
+$BuildDir = Join-Path $FirmwareDir "build-$BuildDirFlavor"
 $SdkconfigPath = Join-Path $FirmwareDir "sdkconfig.$BuildFlavor"
 $TargetArguments = @(
     "-B", $BuildDir,
     "-DIDF_TARGET=$Target",
-    "-DSDKCONFIG=$SdkconfigPath"
+    "-DSDKCONFIG=$SdkconfigPath",
+    ("-DSMART_NECKBAND_MIC={0}" -f $(if ($SensorsOnly) { "OFF" } else { "ON" }))
 )
-if ($Voice) {
-    $voiceDefaults = @(
-        "sdkconfig.defaults",
-        "sdkconfig.defaults.esp32c3",
-        "sdkconfig.defaults.voice"
-    ) -join ";"
-    $TargetArguments += @(
-        "-DSMART_NECKBAND_VOICE=ON",
-        "-DSDKCONFIG_DEFAULTS=$voiceDefaults"
-    )
-}
 
 function Invoke-Idf {
     param([Parameter(Mandatory)][string[]]$Arguments)
@@ -98,9 +77,18 @@ function Invoke-Idf {
         $idfScript = Join-Path $env:IDF_PATH "tools\idf.py"
         if ((Test-Path -LiteralPath $idfPython) -and
             (Test-Path -LiteralPath $idfScript)) {
+            Add-PathPrefix -PathPrefix (Split-Path -Parent $idfPython)
             $ninjaPath = Initialize-LocalIdfToolEnvironment
+            $cCompiler = Get-Command riscv32-esp-elf-gcc.exe -ErrorAction Stop
+            $cxxCompiler = Get-Command riscv32-esp-elf-g++.exe -ErrorAction Stop
+            $env:CC = $cCompiler.Source
+            $env:CXX = $cxxCompiler.Source
+            $env:ASM = $cCompiler.Source
             $Arguments = @(
-                "-DCMAKE_MAKE_PROGRAM=$ninjaPath"
+                "-DCMAKE_MAKE_PROGRAM=$ninjaPath",
+                "-DCMAKE_C_COMPILER=$($cCompiler.Source)",
+                "-DCMAKE_CXX_COMPILER=$($cxxCompiler.Source)",
+                "-DCMAKE_ASM_COMPILER=$($cCompiler.Source)"
             ) + $Arguments
             & $idfPython $idfScript -C $FirmwareDir @Arguments
             if ($LASTEXITCODE -ne 0) {
@@ -191,6 +179,7 @@ function Initialize-LocalIdfToolEnvironment {
         throw "ESP-IDF path not found: $idfPath"
     }
     $env:IDF_PATH = $idfPath
+    $env:ESP_IDF_VERSION = $ExpectedIdfVersion.TrimStart("v")
 
     $ccache = Get-ChildItem -LiteralPath "C:\Espressif\tools\ccache" -Recurse -Filter "ccache.exe" -ErrorAction SilentlyContinue |
         Sort-Object FullName -Descending |
@@ -207,6 +196,14 @@ function Initialize-LocalIdfToolEnvironment {
     if ($null -ne $targetGcc) {
         Add-PathPrefix -PathPrefix (Split-Path -Parent $targetGcc.FullName)
     }
+
+    $cmake = Get-ChildItem -LiteralPath "C:\Espressif\tools\cmake" -Recurse -Filter "cmake.exe" -ErrorAction SilentlyContinue |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if ($null -eq $cmake) {
+        throw "cmake.exe not found under C:\Espressif\tools\cmake"
+    }
+    Add-PathPrefix -PathPrefix (Split-Path -Parent $cmake.FullName)
 
     $ninja = Get-ChildItem -LiteralPath "C:\Espressif\tools\ninja" -Recurse -Filter "ninja.exe" -ErrorAction SilentlyContinue |
         Sort-Object FullName -Descending |
@@ -344,26 +341,6 @@ switch ($Action) {
     }
     "fullclean" {
         Invoke-TargetIdf -Arguments @("fullclean")
-    }
-    "voice-provision" {
-        $provisionScript = Join-Path $PSScriptRoot "voice-provision.ps1"
-        if (-not (Test-Path -LiteralPath $provisionScript)) {
-            throw "Missing voice provisioning script: $provisionScript"
-        }
-        & $provisionScript `
-            -ProjectSerialPort $ProjectSerialPort `
-            -IdfPath $env:IDF_PATH
-    }
-    "voice-model-provision" {
-        $modelProvisionScript = Join-Path $PSScriptRoot "voice-model-provision.ps1"
-        if (-not (Test-Path -LiteralPath $modelProvisionScript)) {
-            throw "Missing WakeNet model provisioning script: $modelProvisionScript"
-        }
-        & $modelProvisionScript `
-            -ProjectSerialPort $ProjectSerialPort `
-            -IdfPath $env:IDF_PATH `
-            -ModelPath $WakeNetModelPath `
-            -ManifestPath (Join-Path $FirmwareDir "models\wakenet_manifest.json")
     }
     "pc-setup" {
         if (-not (Test-Path -LiteralPath $PcDir)) {

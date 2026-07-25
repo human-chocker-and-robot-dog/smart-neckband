@@ -5,6 +5,8 @@ firmware/sdkconfig
 firmware/sdkconfig.esp32
 firmware/sdkconfig.esp32c3
 firmware/sdkconfig.esp32c3-voice
+firmware/sdkconfig.esp32c3-unified
+firmware/sdkconfig.esp32c3-sensors-only
 firmware/sdkconfig.old
 firmware/sdkconfig.*.old
 firmware/managed_components/
@@ -45,7 +47,6 @@ captures/
 *.parquet
 *.csv
 !firmware/partitions.csv
-!firmware/partitions_voice.csv
 !experiments/inmp441_ble_capture/firmware/partitions.csv
 *.log
 

@@ -1,6 +1,9 @@
 import asyncio
 import json
 from pathlib import Path
+import struct
+
+import pytest
 
 from smart_neckband.ble_io import (
     BLE_UART_RX_UUID,
@@ -11,6 +14,16 @@ from smart_neckband.ble_io import (
     _start_notify_after_bond,
 )
 from smart_neckband.serial_io import PcDataStores
+from smart_neckband.mic_capture_protocol import (
+    CRC as MIC_CRC,
+    ENCODING_IMA_ADPCM,
+    FRAME_TYPE_STATUS,
+    HEADER as MIC_HEADER,
+    MAGIC as MIC_MAGIC,
+    STATUS_PAYLOAD,
+    DeviceStatusFrame,
+    crc16_ccitt_false as mic_crc16,
+)
 from smart_neckband.protocol import (
     VoiceTextAckPayload,
     VoiceTextChunkPayload,
@@ -37,6 +50,24 @@ def load_vector(name: str) -> bytes:
     )["vectors"]
     vector = next(item for item in vectors if item["name"] == name)
     return bytes.fromhex(vector["packet_hex"])
+
+
+def make_mic_status_frame() -> bytes:
+    payload = STATUS_PAYLOAD.pack(1, 2, 3, 8, 16, ENCODING_IMA_ADPCM, 2)
+    header = MIC_HEADER.pack(
+        MIC_MAGIC,
+        1,
+        FRAME_TYPE_STATUS,
+        ENCODING_IMA_ADPCM,
+        0,
+        0,
+        16_000,
+        0,
+        0,
+        len(payload),
+    )
+    body = header + payload
+    return body + MIC_CRC.pack(mic_crc16(body))
 
 
 def test_ble_uart_uuids_match_esp_idf_service() -> None:
@@ -90,6 +121,65 @@ def test_ble_reader_reassembles_default_mtu_notifications() -> None:
     assert runtime.ecg_packet_count == 1
     assert len(samples) == 20
     assert reader.stats.crc_errors == 0
+
+
+def test_ble_reader_dispatches_interleaved_v0_and_mic1_frames() -> None:
+    packet = load_ecg_packet()
+    mic = make_mic_status_frame()
+    stores = PcDataStores.create()
+    mic_frames = []
+    reader = BlePacketReader(
+        address="AA:BB:CC:DD:EE:FF",
+        stores=stores,
+        mic_frame_callback=lambda frame, _stats: mic_frames.append(frame),
+    )
+
+    mixed = packet + mic
+    for offset in range(0, len(mixed), 11):
+        reader.feed_notification(mixed[offset : offset + 11])
+
+    assert reader.runtime_status.ecg_packet_count == 1
+    assert len(stores.ecg.snapshot()) == 20
+    assert len(mic_frames) == 1
+    assert isinstance(mic_frames[0], DeviceStatusFrame)
+    assert mic_frames[0].armed is True
+    assert reader.demux.stats.v0_frames == 1
+    assert reader.demux.stats.mic1_frames == 1
+
+
+def test_ble_reader_mic_commands_are_validated_and_prefixed() -> None:
+    writes: list[bytes] = []
+    reader = BlePacketReader(
+        address="AA:BB:CC:DD:EE:FF", control_write_callback=writes.append
+    )
+
+    reader.queue_mic_command("ARM")
+    reader.queue_mic_command("MIC STOP")
+    reader.queue_mic_command("SHIFT 14")
+
+    assert writes == [b"MIC ARM", b"MIC STOP", b"MIC SHIFT 14"]
+    with pytest.raises(ValueError):
+        reader.queue_mic_command("SHIFT 21")
+    with pytest.raises(ValueError):
+        reader.queue_mic_command("START")
+
+
+def test_ble_reader_auto_arms_immediately_after_subscription() -> None:
+    class FakeClient:
+        def __init__(self) -> None:
+            self.writes: list[tuple[str, bytes, bool]] = []
+
+        async def write_gatt_char(
+            self, uuid: str, packet: bytes, *, response: bool
+        ) -> None:
+            self.writes.append((uuid, packet, response))
+
+    client = FakeClient()
+    reader = BlePacketReader(address="AA:BB:CC:DD:EE:FF")
+
+    asyncio.run(reader._arm_microphone_after_subscription(client))
+
+    assert client.writes == [(BLE_UART_RX_UUID, b"MIC ARM", True)]
 
 
 def test_ble_reader_recovers_after_truncated_packet() -> None:

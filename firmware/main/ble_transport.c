@@ -14,7 +14,11 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "host/ble_gap.h"
 #include "host/ble_hs.h"
+#if SMART_NECKBAND_MIC
+#include "mic_runtime.h"
+#endif
 #include "nvs_flash.h"
 #include "protocol_v0.h"
 
@@ -22,7 +26,7 @@ static const char *TAG = "v0_ble";
 
 typedef struct {
     uint16_t length;
-    uint8_t data[PROTOCOL_V0_MAX_PACKET_SIZE];
+    uint8_t data[BOARD_TRANSPORT_MAX_FRAME_SIZE];
 } v0_ble_tx_item_t;
 
 static QueueHandle_t s_tx_queue = NULL;
@@ -31,12 +35,49 @@ static TaskHandle_t s_tx_task_handle = NULL;
 static v0_transport_rx_callback_t s_rx_callback = NULL;
 
 static volatile bool s_connected = false;
+static volatile bool s_subscribed = false;
 static volatile bool s_congested = false;
+static volatile uint16_t s_connection_interval_units = 0U;
+static bool s_connection_params_requested = false;
 
 static portMUX_TYPE s_status_mux = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t s_queue_overflow_count = 0U;
 static uint32_t s_disconnected_drop_count = 0U;
 static uint32_t s_write_error_count = 0U;
+
+extern int ble_gap_conn_foreach_handle(
+    ble_gap_conn_foreach_handle_fn *callback, void *arg);
+
+static int update_connection_callback(uint16_t conn_handle, void *arg)
+{
+    struct ble_gap_conn_desc description = {0};
+    if (ble_gap_conn_find(conn_handle, &description) != 0) {
+        return 0;
+    }
+    s_connection_interval_units = description.conn_itvl;
+    if (*(bool *)arg && !s_connection_params_requested) {
+        const struct ble_gap_upd_params parameters = {
+            .itvl_min = 6U,
+            .itvl_max = 12U,
+            .latency = 0U,
+            .supervision_timeout = 400U,
+            .min_ce_len = 0U,
+            .max_ce_len = 0U,
+        };
+        const int result = ble_gap_update_params(conn_handle, &parameters);
+        if (result == 0 || result == BLE_HS_EALREADY) {
+            s_connection_params_requested = true;
+        } else {
+            ESP_LOGW(TAG, "connection parameter update failed rc=%d", result);
+        }
+    }
+    return 0;
+}
+
+static void refresh_connection_parameters(bool request_update)
+{
+    (void)ble_gap_conn_foreach_handle(update_connection_callback, &request_update);
+}
 
 static void add_queue_overflow(void)
 {
@@ -89,20 +130,32 @@ static void drop_pending_tx_queue(const char *reason)
 static void update_connection_state(void)
 {
     const bool connected = ble_uart_is_connected();
-    if (connected == s_connected) {
+    const bool subscribed = ble_uart_is_subscribed();
+    if (connected == s_connected && subscribed == s_subscribed) {
+        if (connected) {
+            refresh_connection_parameters(false);
+        }
         return;
     }
 
-    if (!connected) {
+    if (s_connected && !connected) {
         drop_pending_tx_queue("disconnect");
         s_congested = false;
+        s_connection_interval_units = 0U;
+        s_connection_params_requested = false;
         ESP_LOGI(TAG, "BLE client disconnected");
-    } else {
+    } else if (!s_connected && connected) {
         drop_pending_tx_queue("connect");
+        refresh_connection_parameters(true);
         ESP_LOGI(TAG, "BLE client connected; notifications=%s",
-                 ble_uart_is_subscribed() ? "subscribed" : "pending");
+                 subscribed ? "subscribed" : "pending");
+    } else if (connected && subscribed != s_subscribed) {
+        ESP_LOGI(TAG,
+                 "BLE notifications %s",
+                 subscribed ? "subscribed" : "unsubscribed");
     }
     s_connected = connected;
+    s_subscribed = subscribed;
 }
 
 static void tx_task(void *arg)
@@ -110,19 +163,38 @@ static void tx_task(void *arg)
     (void)arg;
 
     v0_ble_tx_item_t item = {0};
+    v0_ble_tx_item_t pending_low_priority_item = {0};
+    bool has_pending_low_priority_item = false;
     for (;;) {
         update_connection_state();
         if (!s_connected) {
+            if (has_pending_low_priority_item) {
+                add_disconnected_drops(1U);
+                has_pending_low_priority_item = false;
+            }
             vTaskDelay(pdMS_TO_TICKS(50U));
             continue;
         }
 
+        bool low_priority = false;
         if (xQueueReceive(s_tx_queue, &item, 0U) != pdTRUE) {
-            if (s_low_priority_tx_queue == NULL ||
-                xQueueReceive(s_low_priority_tx_queue,
-                              &item,
-                              pdMS_TO_TICKS(50U)) != pdTRUE) {
+            if (has_pending_low_priority_item) {
+                item = pending_low_priority_item;
+                has_pending_low_priority_item = false;
+            } else if (s_low_priority_tx_queue == NULL ||
+                       xQueueReceive(s_low_priority_tx_queue, &item, 0U) != pdTRUE) {
+                vTaskDelay(1U);
                 continue;
+            }
+            low_priority = true;
+        }
+
+        if (low_priority) {
+            v0_ble_tx_item_t high_priority_item = {0};
+            if (xQueueReceive(s_tx_queue, &high_priority_item, 0U) == pdTRUE) {
+                pending_low_priority_item = item;
+                has_pending_low_priority_item = true;
+                item = high_priority_item;
             }
         }
 
@@ -165,7 +237,25 @@ static esp_err_t init_nvs_for_ble(void)
 
 static void on_ble_rx(const uint8_t *data, size_t length)
 {
-    if (data != NULL && length > 0U && s_rx_callback != NULL) {
+    if (data == NULL || length == 0U) {
+        return;
+    }
+    if (length >= 2U &&
+        data[0] == (uint8_t)(PROTOCOL_V0_MAGIC & 0xffU) &&
+        data[1] == (uint8_t)(PROTOCOL_V0_MAGIC >> 8U)) {
+        if (s_rx_callback != NULL) {
+            s_rx_callback(data, length);
+        }
+        return;
+    }
+#if SMART_NECKBAND_MIC
+    if (mic_runtime_handle_command(data, length)) {
+        return;
+    }
+    mic_runtime_record_control_error();
+    return;
+#endif
+    if (s_rx_callback != NULL) {
         s_rx_callback(data, length);
     }
 }
@@ -193,7 +283,8 @@ esp_err_t v0_transport_start(void)
         }
     }
     if (s_low_priority_tx_queue == NULL) {
-        s_low_priority_tx_queue = xQueueCreate(4U, sizeof(v0_ble_tx_item_t));
+        s_low_priority_tx_queue = xQueueCreate(
+            BOARD_TRANSPORT_LOW_PRIORITY_QUEUE_DEPTH, sizeof(v0_ble_tx_item_t));
         if (s_low_priority_tx_queue == NULL) {
             return ESP_ERR_NO_MEM;
         }
@@ -255,7 +346,8 @@ esp_err_t v0_transport_start(void)
 
 bool v0_transport_enqueue(const uint8_t *data, size_t length)
 {
-    if (data == NULL || length == 0U || length > PROTOCOL_V0_MAX_PACKET_SIZE || s_tx_queue == NULL) {
+    if (data == NULL || length == 0U ||
+        length > BOARD_TRANSPORT_MAX_FRAME_SIZE || s_tx_queue == NULL) {
         return false;
     }
 
@@ -287,7 +379,7 @@ bool v0_transport_enqueue(const uint8_t *data, size_t length)
 
 bool v0_transport_enqueue_low_priority(const uint8_t *data, size_t length)
 {
-    if (data == NULL || length == 0U || length > PROTOCOL_V0_MAX_PACKET_SIZE ||
+    if (data == NULL || length == 0U || length > BOARD_TRANSPORT_MAX_FRAME_SIZE ||
         s_low_priority_tx_queue == NULL) {
         return false;
     }
@@ -305,7 +397,6 @@ bool v0_transport_enqueue_low_priority(const uint8_t *data, size_t length)
     if (xQueueSend(s_low_priority_tx_queue, &item, 0U) == pdTRUE) {
         return true;
     }
-    add_queue_overflow();
     return false;
 }
 
@@ -322,7 +413,9 @@ void v0_transport_get_status(v0_transport_status_t *out_status)
 
     update_connection_state();
     out_status->connected = s_connected;
+    out_status->subscribed = s_subscribed;
     out_status->congested = s_congested;
+    out_status->connection_interval_units = s_connection_interval_units;
     const UBaseType_t queued = s_tx_queue == NULL ? 0U : uxQueueMessagesWaiting(s_tx_queue);
     out_status->queue_usage_percent =
         (uint8_t)((queued * 100U) / BOARD_TRANSPORT_TX_QUEUE_DEPTH);
