@@ -14,13 +14,16 @@ param(
         "erase-flash",
         "fullclean",
         "pc-setup",
+        "pc-sleep-setup",
+        "pc-sleep-data",
         "pc-gui",
         "pc-mic",
         "pc-health-mcp",
         "pc-health-mcp-http",
         "pc-health-status",
         "pc-health-soak",
-        "pc-test"
+        "pc-test",
+        "pc-sleep-test"
     )]
     [string]$Action = "build",
 
@@ -401,6 +404,44 @@ switch ($Action) {
             Pop-Location
         }
     }
+    "pc-sleep-setup" {
+        if (-not (Test-Path -LiteralPath $PcDir)) {
+            throw "PC application directory does not exist: $PcDir"
+        }
+        Push-Location $PcDir
+        try {
+            $venvPython = Join-Path $PcDir ".venv\Scripts\python.exe"
+            if (-not (Test-Path -LiteralPath $venvPython)) {
+                throw "PC virtual environment is missing. Run '.\tools\project.ps1 pc-setup' first."
+            }
+            Invoke-Native -FilePath $venvPython -Arguments @(
+                "-m", "pip", "install", "-e", ".[dev,gui,serial,health,sleep]"
+            ) -Description "SleepECG, TensorFlow, EDF, and WFDB dependency installation"
+        }
+        finally {
+            Pop-Location
+        }
+    }
+    "pc-sleep-data" {
+        $venvPython = Join-Path $PcDir ".venv\Scripts\python.exe"
+        if (-not (Test-Path -LiteralPath $venvPython)) {
+            throw "PC virtual environment is missing. Run '.\tools\project.ps1 pc-setup' first."
+        }
+        foreach ($moduleName in @("wfdb", "scipy")) {
+            if (-not (Test-PythonModule -FilePath $venvPython -ModuleName $moduleName)) {
+                throw "PC module '$moduleName' is missing. Run '.\tools\project.ps1 pc-sleep-setup' first."
+            }
+        }
+        Push-Location $PcDir
+        try {
+            Invoke-PcPython -FilePath $venvPython -Arguments @(
+                "-m", "smart_neckband.sleep_dataset", "prepare"
+            ) -Description "PhysioNet SLPDB slp03 download and local-session conversion"
+        }
+        finally {
+            Pop-Location
+        }
+    }
     "pc-gui" {
         $venvPython = Join-Path $PcDir ".venv\Scripts\python.exe"
         if (-not (Test-Path -LiteralPath $venvPython)) {
@@ -586,6 +627,30 @@ switch ($Action) {
         }
         finally {
             $env:PYTHONPATH = $oldPythonPath
+            Pop-Location
+        }
+    }
+    "pc-sleep-test" {
+        $venvPython = Join-Path $PcDir ".venv\Scripts\python.exe"
+        if (-not (Test-Path -LiteralPath $venvPython)) {
+            throw "PC virtual environment is missing. Run '.\tools\project.ps1 pc-setup' first."
+        }
+        if (-not (Test-PythonModule -FilePath $venvPython -ModuleName "pytest")) {
+            throw "pytest is missing from the PC virtual environment. Run '.\tools\project.ps1 pc-setup' first."
+        }
+        Push-Location $PcDir
+        try {
+            $pytestBaseTemp = Join-Path $PcDir ("pytest-cache-files-sleep-{0}" -f [guid]::NewGuid().ToString("N"))
+            Invoke-PcPython -FilePath $venvPython -Arguments @(
+                "-m", "pytest", "--basetemp", $pytestBaseTemp,
+                "tests/test_sleep_ecg.py",
+                "tests/test_sleep_dataset.py",
+                "tests/test_sleep_health_store.py",
+                "tests/test_sleep_mcp.py",
+                "tests/test_sleep_ecg_ui.py"
+            ) -Description "Sleep ECG pytest"
+        }
+        finally {
             Pop-Location
         }
     }

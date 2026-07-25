@@ -72,7 +72,7 @@ class HealthIntegrationPanel:
         mcp_form.addRow("路径", self.mcp_path)
         layout.addWidget(mcp_group)
 
-        tools_group = QtWidgets.QGroupBox("Agent 可调用的三个 MCP 工具")
+        tools_group = QtWidgets.QGroupBox("Agent 可调用的四个 MCP 工具")
         tools_layout = QtWidgets.QVBoxLayout(tools_group)
         self.tools_label = QtWidgets.QLabel("\n".join(MCP_TOOL_NAMES))
         self.tools_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)

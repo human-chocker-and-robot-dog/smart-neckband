@@ -99,7 +99,7 @@ def test_service_requires_exactly_one_valid_wearer(tmp_path) -> None:
         HealthToolService(store=store, configured_wearer_ids={"xwen", "other"})
 
 
-def test_tools_list_is_exactly_three(tmp_path) -> None:
+def test_tools_list_is_exactly_four(tmp_path) -> None:
     from mcp import types
 
     tool_service = service(HealthStore(tmp_path / "health.sqlite3"))
@@ -112,6 +112,7 @@ def test_tools_list_is_exactly_three(tmp_path) -> None:
         "health.get_heart_rate",
         "health.get_hrv",
         "health.get_imu_state",
+        "health.get_sleep_report",
     ]
     assert all(tool.annotations.readOnlyHint for tool in listed.root.tools)
     assert all(tool.outputSchema is not None for tool in listed.root.tools)
@@ -173,7 +174,11 @@ def test_imu_state_returns_latest_motion_score_and_trend(tmp_path) -> None:
 def test_empty_history_is_explicitly_unavailable_not_fabricated(tmp_path) -> None:
     tool_service = service(HealthStore(tmp_path / "health.sqlite3"))
 
-    for tool_name in tool_service.tools:
+    for tool_name in (
+        "health.get_heart_rate",
+        "health.get_hrv",
+        "health.get_imu_state",
+    ):
         result = tool_service.call(tool_name, {})
         assert not result.is_error
         assert result.envelope["data"]["valid"] is False
@@ -236,6 +241,7 @@ def test_official_client_can_list_and_call_stdio_server(tmp_path) -> None:
                     "health.get_heart_rate",
                     "health.get_hrv",
                     "health.get_imu_state",
+                    "health.get_sleep_report",
                 ]
                 result = await session.call_tool(
                     "health.get_heart_rate",
@@ -306,6 +312,7 @@ def test_official_client_can_call_trusted_lan_streamable_http(tmp_path) -> None:
                         "health.get_heart_rate",
                         "health.get_hrv",
                         "health.get_imu_state",
+                        "health.get_sleep_report",
                     ]
                     result = await session.call_tool(
                         "health.get_imu_state",

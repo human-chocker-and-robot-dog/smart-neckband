@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 
-MCP_SCHEMA_VERSION = "0.3.0"
+MCP_SCHEMA_VERSION = "0.4.0"
 
 
 def contract_path() -> Path:
@@ -14,7 +14,7 @@ def contract_path() -> Path:
         Path(__file__).resolve().parents[3]
         / "docs"
         / "specs"
-        / "health-mcp-v0.3.contract.json"
+        / "health-mcp-v0.4.contract.json"
     )
 
 

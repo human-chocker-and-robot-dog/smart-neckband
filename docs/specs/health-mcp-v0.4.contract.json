@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://smart-neckband.local/contracts/health-mcp-v0.3.contract.json",
-  "title": "Smart Collar Health MCP V0.3",
+  "$id": "https://smart-neckband.local/contracts/health-mcp-v0.4.contract.json",
+  "title": "Smart Collar Health MCP V0.4",
   "type": "object",
   "additionalProperties": false,
   "$defs": {
@@ -29,7 +29,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "schema_version": {"const": "0.3.0"},
+        "schema_version": {"const": "0.4.0"},
         "generated_at": {"$ref": "#/$defs/Timestamp"},
         "wearer_id": {"type": "string", "minLength": 1, "maxLength": 64},
         "window_s": {"type": "integer", "minimum": 10, "maximum": 300},
@@ -157,6 +157,179 @@
         "unavailable_reason"
       ]
     },
+    "SleepReportInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sleep_record_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "include_epochs": {"type": "boolean", "default": false},
+        "epoch_offset": {"type": "integer", "minimum": 0, "default": 0},
+        "epoch_limit": {"type": "integer", "minimum": 1, "maximum": 240, "default": 240}
+      }
+    },
+    "SleepReportMeta": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {"const": "0.4.0"},
+        "generated_at": {"$ref": "#/$defs/Timestamp"},
+        "wearer_id": {"type": "string", "minLength": 1, "maxLength": 64},
+        "trace_id": {"$ref": "#/$defs/Uuid"}
+      },
+      "required": ["schema_version", "generated_at", "wearer_id", "trace_id"]
+    },
+    "SleepStageValues": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "UNDEFINED": {"type": "number", "minimum": 0},
+        "WAKE": {"type": "number", "minimum": 0},
+        "REM": {"type": "number", "minimum": 0},
+        "NREM": {"type": "number", "minimum": 0}
+      },
+      "required": ["UNDEFINED", "WAKE", "REM", "NREM"]
+    },
+    "SleepEpoch": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "epoch_index": {"type": "integer", "minimum": 0},
+        "start_offset_s": {"type": "integer", "minimum": 0},
+        "stage": {"enum": ["UNDEFINED", "WAKE", "REM", "NREM"]},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "probabilities": {"$ref": "#/$defs/SleepStageValues"},
+        "reference_stage": {
+          "type": ["string", "null"],
+          "enum": ["UNDEFINED", "WAKE", "REM", "NREM", null]
+        }
+      },
+      "required": [
+        "epoch_index", "start_offset_s", "stage", "confidence",
+        "probabilities", "reference_stage"
+      ]
+    },
+    "SleepSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "epoch_duration_s": {"type": "integer", "const": 30},
+        "total_epoch_count": {"type": "integer", "minimum": 0},
+        "valid_epoch_count": {"type": "integer", "minimum": 0},
+        "analyzed_duration_s": {"type": "integer", "minimum": 0},
+        "total_sleep_time_s": {"type": "integer", "minimum": 0},
+        "sleep_efficiency_percent": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+        "sleep_onset_latency_min": {"type": ["number", "null"], "minimum": 0},
+        "wake_after_sleep_onset_min": {"type": ["number", "null"], "minimum": 0},
+        "awakening_count": {"type": "integer", "minimum": 0},
+        "stage_transition_count": {"type": "integer", "minimum": 0},
+        "mean_confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "stage_duration_s": {"$ref": "#/$defs/SleepStageValues"},
+        "stage_percent": {"$ref": "#/$defs/SleepStageValues"}
+      },
+      "required": [
+        "epoch_duration_s", "total_epoch_count", "valid_epoch_count",
+        "analyzed_duration_s", "total_sleep_time_s",
+        "sleep_efficiency_percent", "sleep_onset_latency_min",
+        "wake_after_sleep_onset_min", "awakening_count",
+        "stage_transition_count", "mean_confidence", "stage_duration_s",
+        "stage_percent"
+      ]
+    },
+    "SleepRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sleep_record_id": {"type": "string", "minLength": 1},
+        "wearer_id": {"type": "string", "minLength": 1},
+        "source_type": {"type": "string", "minLength": 1},
+        "source_session_id": {"type": ["string", "null"]},
+        "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "display_name": {"type": "string", "minLength": 1},
+        "source_name": {"type": "string", "minLength": 1},
+        "lead_name": {"type": "string", "minLength": 1},
+        "sample_rate_hz": {"type": "number", "exclusiveMinimum": 0},
+        "sample_count": {"type": "integer", "minimum": 1},
+        "duration_s": {"type": "number", "minimum": 0},
+        "recording_start_time": {"type": ["string", "null"]},
+        "recording_end_time": {"type": ["string", "null"]},
+        "demographics": {"type": "object"},
+        "provenance": {"type": "object"},
+        "imported_at": {"$ref": "#/$defs/Timestamp"}
+      },
+      "required": [
+        "sleep_record_id", "wearer_id", "source_type", "source_session_id",
+        "source_sha256", "display_name", "source_name", "lead_name",
+        "sample_rate_hz", "sample_count", "duration_s",
+        "recording_start_time", "recording_end_time", "demographics",
+        "provenance", "imported_at"
+      ]
+    },
+    "SleepAnalysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "analysis_run_id": {"type": "string", "minLength": 1},
+        "status": {"const": "completed"},
+        "model_name": {"type": "string", "minLength": 1},
+        "stages_mode": {"const": "wake-rem-nrem"},
+        "sleepecg_version": {"type": "string", "minLength": 1},
+        "tensorflow_version": {"type": "string", "minLength": 1},
+        "heartbeat_count": {"type": "integer", "minimum": 0},
+        "parameters": {"type": "object"},
+        "summary": {"$ref": "#/$defs/SleepSummary"},
+        "quality": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "demographics_complete": {"type": "boolean"},
+            "warnings": {"type": "array", "items": {"type": "string"}}
+          },
+          "required": ["demographics_complete", "warnings"]
+        },
+        "started_at": {"$ref": "#/$defs/Timestamp"},
+        "completed_at": {"$ref": "#/$defs/Timestamp"}
+      },
+      "required": [
+        "analysis_run_id", "status", "model_name", "stages_mode",
+        "sleepecg_version", "tensorflow_version", "heartbeat_count",
+        "parameters", "summary", "quality", "started_at", "completed_at"
+      ]
+    },
+    "SleepPagination": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "offset": {"type": "integer", "minimum": 0},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 240},
+        "returned": {"type": "integer", "minimum": 0, "maximum": 240},
+        "total": {"type": "integer", "minimum": 0},
+        "next_offset": {"type": ["integer", "null"], "minimum": 0}
+      },
+      "required": ["offset", "limit", "returned", "total", "next_offset"]
+    },
+    "SleepReportData": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "record": {"$ref": "#/$defs/SleepRecord"},
+        "analysis": {"$ref": "#/$defs/SleepAnalysis"},
+        "epochs": {"type": "array", "maxItems": 240, "items": {"$ref": "#/$defs/SleepEpoch"}},
+        "pagination": {"$ref": "#/$defs/SleepPagination"},
+        "disclaimer": {"type": "string", "minLength": 1}
+      },
+      "required": ["record", "analysis", "epochs", "pagination", "disclaimer"]
+    },
+    "SleepReportEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ok": {"type": "boolean"},
+        "data": {"oneOf": [{"$ref": "#/$defs/SleepReportData"}, {"type": "null"}]},
+        "meta": {"$ref": "#/$defs/SleepReportMeta"},
+        "error": {"oneOf": [{"$ref": "#/$defs/Error"}, {"type": "null"}]}
+      },
+      "required": ["ok", "data", "meta", "error"]
+    },
     "HeartRateEnvelope": {
       "type": "object", "additionalProperties": false,
       "properties": {
@@ -189,12 +362,12 @@
     }
   },
   "x-contract": {
-    "contract_version": "0.3.0",
+    "contract_version": "0.4.0",
     "mcp_protocol_version": "2025-11-25",
     "default_window_s": 30,
     "minimum_window_s": 10,
     "maximum_window_s": 300,
-    "business_tool_count": 3
+    "business_tool_count": 4
   },
   "x-mcp-tools": [
     {
@@ -219,6 +392,14 @@
       "description": "Return the local 0-100 motion score, still-time percentage, level, coverage, and bounded trend for the recent window.",
       "inputSchema": {"$ref": "#/$defs/WindowInput"},
       "outputSchema": {"$ref": "#/$defs/ImuStateEnvelope"},
+      "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}
+    },
+    {
+      "name": "health.get_sleep_report",
+      "title": "Get stored sleep ECG report",
+      "description": "Return a completed local SleepECG WAKE/REM/NREM report and an optional bounded page of 30-second epochs. Never returns raw ECG samples.",
+      "inputSchema": {"$ref": "#/$defs/SleepReportInput"},
+      "outputSchema": {"$ref": "#/$defs/SleepReportEnvelope"},
       "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}
     }
   ]

@@ -19,6 +19,7 @@ MCP_TOOL_NAMES = (
     "health.get_heart_rate",
     "health.get_hrv",
     "health.get_imu_state",
+    "health.get_sleep_report",
 )
 
 

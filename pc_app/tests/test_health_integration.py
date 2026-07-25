@@ -44,11 +44,12 @@ def settings(tmp_path: Path) -> HealthIntegrationSettings:
     )
 
 
-def test_settings_expose_exact_three_tools_for_trusted_lan(tmp_path) -> None:
+def test_settings_expose_exact_four_tools_for_trusted_lan(tmp_path) -> None:
     assert MCP_TOOL_NAMES == (
         "health.get_heart_rate",
         "health.get_hrv",
         "health.get_imu_state",
+        "health.get_sleep_report",
     )
     configured = settings(tmp_path)
     configured.validate_mcp()

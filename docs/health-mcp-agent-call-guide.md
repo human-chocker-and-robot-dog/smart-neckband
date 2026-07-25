@@ -1,8 +1,8 @@
 # Health MCP Agent 调用指南
 
 本文面向运行在 CPE / RDK 上的 Agent 或 Gateway。Windows 上位机负责采集、
-分析和保存派生健康数据；Agent 只通过 MCP 读取最近一段时间的心率、HRV 和
-IMU 运动状态。
+分析和保存派生健康数据；Agent 只通过 MCP 读取最近一段时间的心率、HRV、
+IMU 运动状态和已完成的离线 SleepECG 报告。
 
 ## 1. 连接信息
 
@@ -31,12 +31,13 @@ Streamable HTTP 的 MCP 客户端，完成 `initialize`、`tools/list` 和
 }
 ```
 
-服务端只公开三个只读、幂等、非破坏性工具：
+服务端只公开四个只读、幂等、非破坏性工具：
 
 ```text
 health.get_heart_rate
 health.get_hrv
 health.get_imu_state
+health.get_sleep_report
 ```
 
 ## 2. Python MCP 客户端示例
@@ -66,6 +67,7 @@ async def read_recent_health(window_s: int = 30) -> dict[str, dict]:
                 "health.get_heart_rate",
                 "health.get_hrv",
                 "health.get_imu_state",
+                "health.get_sleep_report",
             }
             missing = required - available
             if missing:
@@ -111,7 +113,7 @@ SDK 返回的 `structuredContent` 是首选结果。兼容文本内容
   "ok": true,
   "data": {},
   "meta": {
-    "schema_version": "0.3.0",
+    "schema_version": "0.4.0",
     "generated_at": "2026-07-26T01:30:00.000Z",
     "wearer_id": "xwen",
     "window_s": 30,
@@ -214,7 +216,7 @@ Agent 必须区分两种状态：
   "ok": false,
   "data": null,
   "meta": {
-    "schema_version": "0.3.0",
+    "schema_version": "0.4.0",
     "generated_at": "2026-07-26T01:30:00.000Z",
     "wearer_id": "xwen",
     "window_s": 30,
@@ -276,8 +278,9 @@ window = clamp(evidence.recommended_window_s, 10, 300)
 
 1. CPE 能访问 `http://<windows-address>:8765/mcp`。
 2. MCP `initialize` 成功。
-3. `tools/list` 恰好看到上述三个业务工具。
-4. 三个工具用 `{}` 和 `{"window_s":30}` 均能调用。
+3. `tools/list` 恰好看到上述四个业务工具。
+4. 三个实时指标工具用 `{}` 和 `{"window_s":30}` 均能调用；睡眠工具用 `{}`
+   或带 epoch 分页参数的输入调用。
 5. 客户端使用 `structuredContent`，并正确区分 `ok` 与 `data.valid`。
 6. `window_s=9` 能被识别为 `INVALID_ARGUMENT`。
 7. 无数据、IMU 离线或 ECG 质量不足时不会把 `null` 当作零。
@@ -286,7 +289,7 @@ window = clamp(evidence.recommended_window_s, 10, 300)
 冻结的机器可读合约是：
 
 ```text
-docs/specs/health-mcp-v0.3.contract.json
+docs/specs/health-mcp-v0.4.contract.json
 ```
 
 若本文与合约发生冲突，以该 JSON Schema 和服务端 `tools/list` 返回为准。

@@ -34,6 +34,15 @@ serial = [
 health = [
     "mcp==1.28.0",
 ]
+sleep = [
+    "edfio>=0.4.4,<0.5",
+    "joblib>=1.4.2",
+    "matplotlib>=3.9.2",
+    "numba>=0.61.0",
+    "sleepecg==0.5.9",
+    "tensorflow>=2.17,<2.22",
+    "wfdb>=4.2,<5",
+]
 ble = [
     "bleak>=1.0",
 ]

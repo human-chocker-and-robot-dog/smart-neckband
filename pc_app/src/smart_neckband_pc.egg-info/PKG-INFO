@@ -2,18 +2,33 @@ Metadata-Version: 2.4
 Name: smart-neckband-pc
 Version: 0.1.0
 Summary: PC-side tools for the AI Smart Collar V0 prototype.
-Requires-Python: >=3.12
+Requires-Python: >=3.11
 Provides-Extra: dev
 Requires-Dist: pytest>=8; extra == "dev"
 Provides-Extra: gui
+Requires-Dist: bleak>=1.0; extra == "gui"
 Requires-Dist: neurokit2>=0.2; extra == "gui"
 Requires-Dist: numpy>=1.26; extra == "gui"
 Requires-Dist: PyOpenGL>=3.1.7; extra == "gui"
 Requires-Dist: pyqtgraph>=0.13; extra == "gui"
 Requires-Dist: pyserial>=3.5; extra == "gui"
 Requires-Dist: PySide6>=6.7; extra == "gui"
+Requires-Dist: sleepecg==0.5.9; extra == "gui"
+Requires-Dist: websocket-client>=1.8; extra == "gui"
 Provides-Extra: serial
 Requires-Dist: pyserial>=3.5; extra == "serial"
+Provides-Extra: health
+Requires-Dist: mcp==1.28.0; extra == "health"
+Provides-Extra: sleep
+Requires-Dist: edfio<0.5,>=0.4.4; extra == "sleep"
+Requires-Dist: joblib>=1.4.2; extra == "sleep"
+Requires-Dist: matplotlib>=3.9.2; extra == "sleep"
+Requires-Dist: numba>=0.61.0; extra == "sleep"
+Requires-Dist: sleepecg==0.5.9; extra == "sleep"
+Requires-Dist: tensorflow<2.22,>=2.17; extra == "sleep"
+Requires-Dist: wfdb<5,>=4.2; extra == "sleep"
+Provides-Extra: ble
+Requires-Dist: bleak>=1.0; extra == "ble"
 Provides-Extra: upload
 Requires-Dist: neurokit2>=0.2; extra == "upload"
 Requires-Dist: numpy>=1.26; extra == "upload"

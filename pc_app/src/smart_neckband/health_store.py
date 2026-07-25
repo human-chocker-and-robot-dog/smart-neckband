@@ -59,7 +59,7 @@ class HealthStore:
                     migration_version INTEGER NOT NULL
                 );
                 INSERT INTO health_schema(id, migration_version)
-                VALUES(1, 4)
+                VALUES(1, 5)
                 ON CONFLICT(id) DO UPDATE SET
                     migration_version=MAX(
                         health_schema.migration_version,
@@ -209,6 +209,72 @@ class HealthStore:
                 );
                 CREATE INDEX IF NOT EXISTS health_rr_intervals_window
                     ON health_rr_intervals(wearer_id, observed_at);
+
+                CREATE TABLE IF NOT EXISTS health_sleep_records (
+                    sleep_record_id TEXT PRIMARY KEY,
+                    wearer_id TEXT NOT NULL,
+                    source_type TEXT NOT NULL,
+                    source_session_id TEXT,
+                    source_sha256 TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    source_name TEXT NOT NULL,
+                    lead_name TEXT NOT NULL,
+                    sample_rate_hz REAL NOT NULL,
+                    sample_count INTEGER NOT NULL,
+                    duration_s REAL NOT NULL,
+                    recording_start_time TEXT,
+                    demographics_json TEXT NOT NULL,
+                    provenance_json TEXT NOT NULL,
+                    imported_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS health_sleep_records_wearer
+                    ON health_sleep_records(wearer_id, imported_at DESC);
+
+                CREATE TABLE IF NOT EXISTS health_sleep_analysis_runs (
+                    analysis_run_id TEXT PRIMARY KEY,
+                    sleep_record_id TEXT NOT NULL,
+                    wearer_id TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(
+                        status IN ('running', 'completed', 'failed', 'cancelled')
+                    ),
+                    model_name TEXT NOT NULL,
+                    stages_mode TEXT,
+                    sleepecg_version TEXT,
+                    tensorflow_version TEXT,
+                    heartbeat_count INTEGER,
+                    parameters_json TEXT NOT NULL,
+                    summary_json TEXT,
+                    quality_json TEXT,
+                    error_message TEXT,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    FOREIGN KEY(sleep_record_id)
+                        REFERENCES health_sleep_records(sleep_record_id)
+                        ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS health_sleep_runs_latest
+                    ON health_sleep_analysis_runs(
+                        wearer_id, status, completed_at DESC, analysis_run_id DESC
+                    );
+
+                CREATE TABLE IF NOT EXISTS health_sleep_epochs (
+                    analysis_run_id TEXT NOT NULL,
+                    epoch_index INTEGER NOT NULL,
+                    start_offset_s INTEGER NOT NULL,
+                    stage TEXT NOT NULL CHECK(
+                        stage IN ('UNDEFINED', 'WAKE', 'REM', 'NREM')
+                    ),
+                    confidence REAL NOT NULL,
+                    probabilities_json TEXT NOT NULL,
+                    reference_stage TEXT CHECK(
+                        reference_stage IS NULL OR
+                        reference_stage IN ('UNDEFINED', 'WAKE', 'REM', 'NREM')
+                    ),
+                    PRIMARY KEY(analysis_run_id, epoch_index),
+                    FOREIGN KEY(analysis_run_id)
+                        REFERENCES health_sleep_analysis_runs(analysis_run_id)
+                        ON DELETE CASCADE
+                );
 
                 CREATE TABLE IF NOT EXISTS health_mcp_audit (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -727,6 +793,325 @@ class HealthStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def create_sleep_record(
+        self,
+        *,
+        wearer_id: str,
+        source_type: str,
+        source_session_id: str | None,
+        source_sha256: str,
+        display_name: str,
+        source_name: str,
+        lead_name: str,
+        sample_rate_hz: float,
+        sample_count: int,
+        duration_s: float,
+        recording_start_time: str | None,
+        demographics: dict[str, object],
+        provenance: dict[str, object],
+        sleep_record_id: str | None = None,
+        imported_at: str | None = None,
+    ) -> str:
+        record_id = sleep_record_id or str(uuid4())
+        imported = imported_at or utc_now_millisecond_z()
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO health_sleep_records(
+                    sleep_record_id, wearer_id, source_type, source_session_id,
+                    source_sha256, display_name, source_name, lead_name,
+                    sample_rate_hz, sample_count, duration_s,
+                    recording_start_time, demographics_json, provenance_json,
+                    imported_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record_id,
+                    wearer_id,
+                    source_type,
+                    source_session_id,
+                    source_sha256,
+                    display_name,
+                    source_name,
+                    lead_name,
+                    float(sample_rate_hz),
+                    int(sample_count),
+                    float(duration_s),
+                    recording_start_time,
+                    compact_json(demographics),
+                    compact_json(provenance),
+                    imported,
+                ),
+            )
+        return record_id
+
+    def start_sleep_analysis_run(
+        self,
+        *,
+        sleep_record_id: str,
+        wearer_id: str,
+        model_name: str,
+        parameters: dict[str, object],
+        analysis_run_id: str | None = None,
+        started_at: str | None = None,
+    ) -> str:
+        run_id = analysis_run_id or str(uuid4())
+        with self._connection() as connection:
+            record = connection.execute(
+                """
+                SELECT wearer_id FROM health_sleep_records
+                WHERE sleep_record_id=?
+                """,
+                (sleep_record_id,),
+            ).fetchone()
+            if record is None:
+                raise KeyError(sleep_record_id)
+            if str(record["wearer_id"]) != wearer_id:
+                raise ValueError("sleep record wearer_id does not match analysis wearer_id")
+            connection.execute(
+                """
+                INSERT INTO health_sleep_analysis_runs(
+                    analysis_run_id, sleep_record_id, wearer_id, status,
+                    model_name, parameters_json, started_at
+                ) VALUES(?, ?, ?, 'running', ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    sleep_record_id,
+                    wearer_id,
+                    model_name,
+                    compact_json(parameters),
+                    started_at or utc_now_millisecond_z(),
+                ),
+            )
+        return run_id
+
+    def complete_sleep_analysis_run(
+        self,
+        *,
+        analysis_run_id: str,
+        stages_mode: str,
+        sleepecg_version: str,
+        tensorflow_version: str,
+        heartbeat_count: int,
+        summary: dict[str, object],
+        quality: dict[str, object],
+        epochs: Sequence[dict[str, object]],
+        completed_at: str | None = None,
+    ) -> None:
+        completed = completed_at or utc_now_millisecond_z()
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            run = connection.execute(
+                """
+                SELECT status FROM health_sleep_analysis_runs
+                WHERE analysis_run_id=?
+                """,
+                (analysis_run_id,),
+            ).fetchone()
+            if run is None:
+                raise KeyError(analysis_run_id)
+            if str(run["status"]) != "running":
+                raise ValueError("only running sleep analyses can be completed")
+            connection.executemany(
+                """
+                INSERT INTO health_sleep_epochs(
+                    analysis_run_id, epoch_index, start_offset_s, stage,
+                    confidence, probabilities_json, reference_stage
+                ) VALUES(?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        analysis_run_id,
+                        int(epoch["epoch_index"]),
+                        int(epoch["start_offset_s"]),
+                        str(epoch["stage"]),
+                        float(epoch["confidence"]),
+                        compact_json(epoch["probabilities"]),
+                        epoch.get("reference_stage"),
+                    )
+                    for epoch in epochs
+                ],
+            )
+            connection.execute(
+                """
+                UPDATE health_sleep_analysis_runs
+                SET status='completed', stages_mode=?, sleepecg_version=?,
+                    tensorflow_version=?, heartbeat_count=?, summary_json=?,
+                    quality_json=?, error_message=NULL, completed_at=?
+                WHERE analysis_run_id=?
+                """,
+                (
+                    stages_mode,
+                    sleepecg_version,
+                    tensorflow_version,
+                    int(heartbeat_count),
+                    compact_json(summary),
+                    compact_json(quality),
+                    completed,
+                    analysis_run_id,
+                ),
+            )
+
+    def fail_sleep_analysis_run(
+        self,
+        *,
+        analysis_run_id: str,
+        error_message: str,
+        cancelled: bool = False,
+        completed_at: str | None = None,
+    ) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                """
+                UPDATE health_sleep_analysis_runs
+                SET status=?, error_message=?, completed_at=?
+                WHERE analysis_run_id=? AND status='running'
+                """,
+                (
+                    "cancelled" if cancelled else "failed",
+                    error_message[:1024],
+                    completed_at or utc_now_millisecond_z(),
+                    analysis_run_id,
+                ),
+            )
+
+    def get_sleep_record(
+        self,
+        *,
+        wearer_id: str,
+        sleep_record_id: str,
+    ) -> dict[str, object] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM health_sleep_records
+                WHERE wearer_id=? AND sleep_record_id=?
+                """,
+                (wearer_id, sleep_record_id),
+            ).fetchone()
+        return _sleep_record_from_row(row) if row is not None else None
+
+    def get_sleep_report(
+        self,
+        *,
+        wearer_id: str,
+        sleep_record_id: str | None = None,
+        include_epochs: bool = False,
+        epoch_offset: int = 0,
+        epoch_limit: int = 240,
+    ) -> dict[str, object] | None:
+        offset = max(0, int(epoch_offset))
+        limit = min(240, max(1, int(epoch_limit)))
+        with self._connection() as connection:
+            if sleep_record_id is None:
+                run = connection.execute(
+                    """
+                    SELECT runs.*, records.*
+                    FROM health_sleep_analysis_runs AS runs
+                    JOIN health_sleep_records AS records
+                      ON records.sleep_record_id=runs.sleep_record_id
+                    WHERE runs.wearer_id=? AND runs.status='completed'
+                    ORDER BY runs.completed_at DESC, runs.analysis_run_id DESC
+                    LIMIT 1
+                    """,
+                    (wearer_id,),
+                ).fetchone()
+            else:
+                run = connection.execute(
+                    """
+                    SELECT runs.*, records.*
+                    FROM health_sleep_analysis_runs AS runs
+                    JOIN health_sleep_records AS records
+                      ON records.sleep_record_id=runs.sleep_record_id
+                    WHERE runs.wearer_id=? AND runs.sleep_record_id=?
+                      AND runs.status='completed'
+                    ORDER BY runs.completed_at DESC, runs.analysis_run_id DESC
+                    LIMIT 1
+                    """,
+                    (wearer_id, sleep_record_id),
+                ).fetchone()
+            if run is None:
+                return None
+            total_epochs = int(
+                connection.execute(
+                    """
+                    SELECT COUNT(*) AS count FROM health_sleep_epochs
+                    WHERE analysis_run_id=?
+                    """,
+                    (run["analysis_run_id"],),
+                ).fetchone()["count"]
+            )
+            epoch_rows: list[sqlite3.Row] = []
+            if include_epochs:
+                epoch_rows = connection.execute(
+                    """
+                    SELECT * FROM health_sleep_epochs
+                    WHERE analysis_run_id=?
+                    ORDER BY epoch_index ASC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (run["analysis_run_id"], limit, offset),
+                ).fetchall()
+        record = _sleep_record_from_row(run)
+        analysis = {
+            "analysis_run_id": str(run["analysis_run_id"]),
+            "status": str(run["status"]),
+            "model_name": str(run["model_name"]),
+            "stages_mode": run["stages_mode"],
+            "sleepecg_version": run["sleepecg_version"],
+            "tensorflow_version": run["tensorflow_version"],
+            "heartbeat_count": int(run["heartbeat_count"] or 0),
+            "parameters": json.loads(str(run["parameters_json"])),
+            "summary": json.loads(str(run["summary_json"])),
+            "quality": json.loads(str(run["quality_json"])),
+            "started_at": str(run["started_at"]),
+            "completed_at": str(run["completed_at"]),
+        }
+        epochs = [_sleep_epoch_from_row(row) for row in epoch_rows]
+        returned = len(epochs)
+        return {
+            "record": record,
+            "analysis": analysis,
+            "epochs": epochs,
+            "pagination": {
+                "offset": offset,
+                "limit": limit,
+                "returned": returned,
+                "total": total_epochs,
+                "next_offset": (
+                    offset + returned if include_epochs and offset + returned < total_epochs else None
+                ),
+            },
+        }
+
+    def get_sleep_analysis_status(
+        self,
+        *,
+        wearer_id: str,
+        sleep_record_id: str,
+    ) -> str | None:
+        with self._connection() as connection:
+            record = connection.execute(
+                """
+                SELECT 1 FROM health_sleep_records
+                WHERE wearer_id=? AND sleep_record_id=?
+                """,
+                (wearer_id, sleep_record_id),
+            ).fetchone()
+            if record is None:
+                return None
+            run = connection.execute(
+                """
+                SELECT status FROM health_sleep_analysis_runs
+                WHERE wearer_id=? AND sleep_record_id=?
+                ORDER BY started_at DESC, analysis_run_id DESC
+                LIMIT 1
+                """,
+                (wearer_id, sleep_record_id),
+            ).fetchone()
+        return str(run["status"]) if run is not None else "not_started"
+
     def get_event(self, event_id: str) -> dict[str, object] | None:
         with self._connection() as connection:
             row = connection.execute(
@@ -1149,6 +1534,10 @@ class HealthStore:
                     "DELETE FROM health_rr_intervals "
                     "WHERE wearer_id=? AND observed_at<=?"
                 ),
+                "sleep_records": (
+                    "DELETE FROM health_sleep_records "
+                    "WHERE wearer_id=? AND imported_at<=?"
+                ),
             }
             deleted = {
                 name: int(
@@ -1237,6 +1626,10 @@ class HealthStore:
                 "SELECT COUNT(*) AS count FROM health_rr_intervals "
                 "WHERE wearer_id=? AND observed_at<=?"
             ),
+            "sleep_records": (
+                "SELECT COUNT(*) AS count FROM health_sleep_records "
+                "WHERE wearer_id=? AND imported_at<=?"
+            ),
         }
         counts = {
             name: int(
@@ -1290,6 +1683,7 @@ class HealthStore:
             "SELECT 1 FROM health_mcp_audit WHERE wearer_id=?",
             "SELECT 1 FROM health_metric_samples WHERE wearer_id=?",
             "SELECT 1 FROM health_rr_intervals WHERE wearer_id=?",
+            "SELECT 1 FROM health_sleep_records WHERE wearer_id=?",
         )
         return any(
             connection.execute(query + " LIMIT 1", (wearer_id,)).fetchone()
@@ -1337,6 +1731,10 @@ class HealthStore:
             (
                 "SELECT 1 FROM health_rr_intervals "
                 "WHERE wearer_id=? AND observed_at>?"
+            ),
+            (
+                "SELECT 1 FROM health_sleep_records "
+                "WHERE wearer_id=? AND imported_at>?"
             ),
         )
         return any(
@@ -2290,6 +2688,57 @@ def _rule_evidence(
         ],
         "required_duration_s": rule.for_s,
         "recommended_window_s": rule.recommended_window_s,
+    }
+
+
+def _sleep_record_from_row(row: sqlite3.Row) -> dict[str, object]:
+    recording_start_time = row["recording_start_time"]
+    return {
+        "sleep_record_id": str(row["sleep_record_id"]),
+        "wearer_id": str(row["wearer_id"]),
+        "source_type": str(row["source_type"]),
+        "source_session_id": row["source_session_id"],
+        "source_sha256": str(row["source_sha256"]),
+        "display_name": str(row["display_name"]),
+        "source_name": str(row["source_name"]),
+        "lead_name": str(row["lead_name"]),
+        "sample_rate_hz": float(row["sample_rate_hz"]),
+        "sample_count": int(row["sample_count"]),
+        "duration_s": float(row["duration_s"]),
+        "recording_start_time": recording_start_time,
+        "recording_end_time": _sleep_recording_end_time(
+            recording_start_time,
+            float(row["duration_s"]),
+        ),
+        "demographics": json.loads(str(row["demographics_json"])),
+        "provenance": json.loads(str(row["provenance_json"])),
+        "imported_at": str(row["imported_at"]),
+    }
+
+
+def _sleep_recording_end_time(
+    recording_start_time: object,
+    duration_s: float,
+) -> str | None:
+    if not isinstance(recording_start_time, str) or not recording_start_time.strip():
+        return None
+    value = recording_start_time.strip()
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    result = (parsed + timedelta(seconds=duration_s)).isoformat(timespec="seconds")
+    return result.replace("+00:00", "Z") if value.endswith("Z") else result
+
+
+def _sleep_epoch_from_row(row: sqlite3.Row) -> dict[str, object]:
+    return {
+        "epoch_index": int(row["epoch_index"]),
+        "start_offset_s": int(row["start_offset_s"]),
+        "stage": str(row["stage"]),
+        "confidence": float(row["confidence"]),
+        "probabilities": json.loads(str(row["probabilities_json"])),
+        "reference_stage": row["reference_stage"],
     }
 
 

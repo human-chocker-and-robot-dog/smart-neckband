@@ -1,23 +1,25 @@
-# PC Health MCP V0.3
+# PC Health MCP V0.4
 
 The single Windows main GUI owns sensor acquisition, NeuroKit2 analysis,
 derived metric history, health-event rules, SQLite, and lifecycle control for
 the Health MCP server. The RDK runs the Agent and acts as the remote MCP client.
 
-The business MCP surface contains exactly three read-only tools:
+The business MCP surface contains exactly four read-only tools:
 
 ```text
 health.get_heart_rate
 health.get_hrv
 health.get_imu_state
+health.get_sleep_report
 ```
 
 Agent / Gateway 的直接接入说明、SDK 示例和错误处理见
 [`health-mcp-agent-call-guide.md`](health-mcp-agent-call-guide.md)。
 
-No MCP tool exposes raw ECG, cleaned ECG, R peaks, raw IMU arrays, event
-history, deletion, threshold configuration, secrets, Webhook bodies, diagnosis,
-or robot-motion authorization.
+The sleep-report tool reads only completed SleepECG summaries and bounded epoch
+pages from the Health database. No MCP tool exposes raw ECG, cleaned ECG, R
+peaks, raw IMU arrays, deletion, threshold configuration, secrets, Webhook
+bodies, diagnosis, or robot-motion authorization.
 
 ## Install
 
@@ -27,6 +29,8 @@ or robot-motion authorization.
 
 The `health` extra pins `mcp==1.28.0`. Streamable HTTP uses the SDK's server
 transport together with Starlette/Uvicorn dependencies installed by the SDK.
+Sleep reports additionally require `.\tools\project.ps1 pc-sleep-setup`; see
+[`sleep-ecg.md`](sleep-ecg.md).
 
 ## Common configuration
 
@@ -55,7 +59,7 @@ Start the only supported user-facing PC application:
 ```
 
 Open the `Health / MCP` tab. It shows the wearer ID, SQLite path, rules file,
-HTTP bind address, endpoint, child-process PID, log path, and the exact three
+HTTP bind address, endpoint, child-process PID, log path, and the exact four
 MCP tools. The page can start or stop Health data production and MCP together.
 When the wearer ID is configured, both start automatically with the main GUI.
 
@@ -120,6 +124,14 @@ score = 100 * (0.6 * clamp(acc_activity / A_REF)
 The PC averages per-sample activity into one-second buckets and summarizes the
 recent 30-second IMU window. Reference values and rule thresholds require
 static, ordinary-motion, and vigorous-motion calibration.
+
+### `health.get_sleep_report`
+
+Returns the latest completed SleepECG report for the configured wearer, or a
+specified `sleep_record_id`. The response contains record provenance, model and
+version metadata, WAKE/REM/NREM summary values, quality warnings, and an optional
+page of 30-second stage probabilities. `epoch_limit` is capped at 240. The tool
+reads SQLite only: it never runs the model and never returns raw ECG samples.
 
 ## Local stdio MCP
 

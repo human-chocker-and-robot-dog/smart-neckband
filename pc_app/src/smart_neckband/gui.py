@@ -35,6 +35,7 @@ from .health_integration_ui import HealthIntegrationPanel
 from .protocol import ECG_SAMPLE_RATE_HZ, FLAG_LO_MINUS, FLAG_LO_PLUS, VoiceStatusPayload
 from .serial_io import PcDataStores, SerialPacketReader, list_serial_ports
 from .sessions import ExperimentSessionRecorder, PLACEMENT_PRESETS, WIRE_MAPS, RecordingState
+from .sleep_ecg_ui import SleepEcgPanel
 from .status import ConnectionSnapshot, ConnectionState, connection_state_text
 from .webhook_ui import WebhookTab
 from .unified_mic_ui import UnifiedMicPanel
@@ -367,11 +368,19 @@ class MainWindow:
             reader_provider=lambda: self.reader,
             analysis_provider=self.ecg_worker.latest,
         )
+        self.sleep_ecg_panel = SleepEcgPanel(
+            QtCore=QtCore,
+            QtWidgets=QtWidgets,
+            pg=pg,
+            settings_provider=self.health_panel.settings,
+            post_gui=self._post_gui,
+        )
         tabs.addTab(live_tab, "实时")
         tabs.addTab(diagnostics_tab, "诊断")
         tabs.addTab(history_tab, "历史记录")
         tabs.addTab(compare_tab, "双轨对比")
         tabs.addTab(self.mic_panel.widget, "Microphone / Hi ESP")
+        tabs.addTab(self.sleep_ecg_panel.widget, "Sleep ECG")
         tabs.addTab(self.health_panel.widget, "Health / MCP")
         tabs.addTab(self.webhook_tab.widget, "Webhook")
         self.window.setCentralWidget(tabs)
@@ -640,6 +649,7 @@ class MainWindow:
         self.window.show()
 
     def close(self) -> None:
+        self.sleep_ecg_panel.close()
         self.health_panel.close()
         self.mic_panel.close()
         self.webhook_tab.close()

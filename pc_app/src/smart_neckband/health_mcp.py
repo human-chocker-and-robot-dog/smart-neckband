@@ -28,6 +28,7 @@ from .health_contract import (
 )
 from .health_mcp_contract import MCP_SCHEMA_VERSION, mcp_tool_contracts
 from .health_store import HealthStore
+from .sleep_ecg import RESEARCH_DISCLAIMER
 from .source_coordinator import utc_now_millisecond_z
 
 
@@ -36,6 +37,7 @@ TOOL_LIMITS = {
     "health.get_heart_rate": 120,
     "health.get_hrv": 60,
     "health.get_imu_state": 120,
+    "health.get_sleep_report": 30,
 }
 
 
@@ -94,13 +96,15 @@ class HealthToolService:
         started = self.monotonic_ns()
         trace_id = str(uuid4())
         wearer_id = self.wearer_id
+        is_sleep_tool = tool_name == "health.get_sleep_report"
         try:
             try:
                 jsonschema.Draft202012Validator(
                     self.tools[tool_name]["inputSchema"]
                 ).validate(arguments)
             except jsonschema.ValidationError as exc:
-                result = self._metric_failure(
+                failure = self._sleep_failure if is_sleep_tool else self._metric_failure
+                result = failure(
                     code="INVALID_ARGUMENT",
                     message="Tool arguments do not match the Health MCP contract.",
                     retryable=False,
@@ -111,36 +115,52 @@ class HealthToolService:
                         "reason": exc.message[:256],
                     },
                     trace_id=trace_id,
-                    window_s=30,
+                    **({} if is_sleep_tool else {"window_s": 30}),
                 )
             else:
                 retry_after = self.rate_limiter.check(tool_name, "__process__")
                 if retry_after is not None:
-                    result = self._metric_failure(
+                    failure = self._sleep_failure if is_sleep_tool else self._metric_failure
+                    result = failure(
                         code="RATE_LIMITED",
                         message="Health MCP rate limit exceeded.",
                         retryable=True,
                         retry_after_ms=retry_after,
                         details={},
                         trace_id=trace_id,
-                        window_s=int(arguments.get("window_s", 30)),
+                        **(
+                            {}
+                            if is_sleep_tool
+                            else {"window_s": int(arguments.get("window_s", 30))}
+                        ),
                     )
                 elif tool_name == "health.get_heart_rate":
                     result = self._get_heart_rate(arguments, trace_id)
                 elif tool_name == "health.get_hrv":
                     result = self._get_hrv(arguments, trace_id)
-                else:
+                elif tool_name == "health.get_imu_state":
                     result = self._get_imu_state(arguments, trace_id)
+                else:
+                    result = self._get_sleep_report(arguments, trace_id)
         except Exception:
             LOGGER.exception("Health MCP tool failed; trace_id=%s", trace_id)
-            result = self._metric_failure(
+            failure = self._sleep_failure if is_sleep_tool else self._metric_failure
+            result = failure(
                 code="INTERNAL_ERROR",
                 message="The Health state store could not complete the request.",
                 retryable=True,
                 retry_after_ms=1_000,
                 details={},
                 trace_id=trace_id,
-                window_s=int(arguments.get("window_s", 30)) if isinstance(arguments, dict) else 30,
+                **(
+                    {}
+                    if is_sleep_tool
+                    else {
+                        "window_s": int(arguments.get("window_s", 30))
+                        if isinstance(arguments, dict)
+                        else 30
+                    }
+                ),
             )
 
         latency_ms = max(0, (self.monotonic_ns() - started) // 1_000_000)
@@ -160,6 +180,108 @@ class HealthToolService:
         except Exception:
             LOGGER.exception("Health MCP audit write failed; trace_id=%s", trace_id)
         return result
+
+    def _get_sleep_report(
+        self,
+        arguments: dict[str, object],
+        trace_id: str,
+    ) -> HealthToolResult:
+        record_id_value = arguments.get("sleep_record_id")
+        record_id = str(record_id_value) if record_id_value is not None else None
+        include_epochs = bool(arguments.get("include_epochs", False))
+        epoch_offset = int(arguments.get("epoch_offset", 0))
+        epoch_limit = int(arguments.get("epoch_limit", 240))
+        report = self.store.get_sleep_report(
+            wearer_id=self.wearer_id,
+            sleep_record_id=record_id,
+            include_epochs=include_epochs,
+            epoch_offset=epoch_offset,
+            epoch_limit=epoch_limit,
+        )
+        if report is None:
+            if record_id is None:
+                return self._sleep_failure(
+                    code="SLEEP_RECORD_NOT_FOUND",
+                    message="No completed Sleep ECG report exists for the configured wearer.",
+                    retryable=False,
+                    retry_after_ms=None,
+                    details={},
+                    trace_id=trace_id,
+                )
+            status = self.store.get_sleep_analysis_status(
+                wearer_id=self.wearer_id,
+                sleep_record_id=record_id,
+            )
+            if status is None:
+                return self._sleep_failure(
+                    code="SLEEP_RECORD_NOT_FOUND",
+                    message="The requested Sleep ECG record does not exist.",
+                    retryable=False,
+                    retry_after_ms=None,
+                    details={"sleep_record_id": record_id},
+                    trace_id=trace_id,
+                )
+            if status in {"running", "not_started"}:
+                return self._sleep_failure(
+                    code="SLEEP_ANALYSIS_NOT_READY",
+                    message="The requested Sleep ECG analysis is not complete.",
+                    retryable=True,
+                    retry_after_ms=2_000,
+                    details={"sleep_record_id": record_id, "status": status},
+                    trace_id=trace_id,
+                )
+            return self._sleep_failure(
+                code="SLEEP_ANALYSIS_FAILED",
+                message="The requested Sleep ECG analysis did not complete successfully.",
+                retryable=False,
+                retry_after_ms=None,
+                details={"sleep_record_id": record_id, "status": status},
+                trace_id=trace_id,
+            )
+        data = {**report, "disclaimer": RESEARCH_DISCLAIMER}
+        return HealthToolResult(
+            envelope={
+                "ok": True,
+                "data": data,
+                "meta": self._sleep_meta(trace_id),
+                "error": None,
+            },
+            is_error=False,
+        )
+
+    def _sleep_failure(
+        self,
+        *,
+        code: str,
+        message: str,
+        retryable: bool,
+        retry_after_ms: int | None,
+        details: dict[str, object],
+        trace_id: str,
+    ) -> HealthToolResult:
+        return HealthToolResult(
+            envelope={
+                "ok": False,
+                "data": None,
+                "meta": self._sleep_meta(trace_id),
+                "error": {
+                    "code": code,
+                    "message": message,
+                    "retryable": retryable,
+                    "retry_after_ms": retry_after_ms,
+                    "details": details,
+                },
+            },
+            is_error=True,
+        )
+
+    def _sleep_meta(self, trace_id: str) -> dict[str, object]:
+        return {
+            "schema_version": MCP_SCHEMA_VERSION,
+            "generated_at": self.utc_now(),
+            "wearer_id": self.wearer_id,
+            "trace_id": trace_id,
+        }
 
     def _get_heart_rate(
         self,

@@ -117,6 +117,12 @@ def load_session_ecg_samples(session_dir: Path) -> tuple[EcgSample, ...]:
         return ()
     parser = PacketParser()
     samples: list[EcgSample] = []
+    metadata_path = session_dir / "session.json"
+    expected_count = (
+        read_session_metadata(metadata_path).sample_count
+        if metadata_path.is_file() and (session_dir / "source.json").is_file()
+        else None
+    )
     with raw_path.open("rb") as raw_file:
         while chunk := raw_file.read(64 * 1024):
             for packet in parser.feed(chunk):
@@ -125,6 +131,8 @@ def load_session_ecg_samples(session_dir: Path) -> tuple[EcgSample, ...]:
                     continue
                 sample_period_us = int(1_000_000 / payload.sample_rate_hz)
                 for offset, raw_adc in enumerate(payload.samples):
+                    if expected_count is not None and len(samples) >= expected_count:
+                        return tuple(samples)
                     samples.append(
                         EcgSample(
                             sample_index=payload.first_sample_index + offset,

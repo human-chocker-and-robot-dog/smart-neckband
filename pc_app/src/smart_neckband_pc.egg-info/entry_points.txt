@@ -1,0 +1,3 @@
+[console_scripts]
+smart-neckband = smart_neckband.gui:main
+smart-neckband-mic = smart_neckband.gui:main

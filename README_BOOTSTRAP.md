@@ -88,6 +88,11 @@ The wheel is used for normal setup because an editable install from the cloned
 source requires Microsoft Visual C++ 14 or newer to compile SleepECG's native
 heartbeat-detection extension.
 
+For offline Sleep ECG staging, install the opt-in TensorFlow/WFDB/EDF dependencies
+with `.\tools\project.ps1 pc-sleep-setup`, then use the **Sleep ECG** tab in the
+unified GUI. See [the Sleep ECG guide](docs/sleep-ecg.md) for supported formats,
+the open PhysioNet fixture, database behavior, MCP access, and limitations.
+
 ## PC Agent Webhook
 
 The PC GUI includes a **Webhook** tab for submitting durable user-text instructions to an Agent Webhook Gateway and receiving de-duplicated final reply callbacks. The optional device gate enables ordinary sends only after the ESP32-C3 connection reaches `RECEIVING`; the HTTP integration does not change the BLE firmware protocol.
