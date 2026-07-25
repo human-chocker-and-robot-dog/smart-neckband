@@ -10,7 +10,8 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]
-smart-neckband-mic = "smart_neckband.mic_capture_gui:main"
+smart-neckband = "smart_neckband.gui:main"
+smart-neckband-mic = "smart_neckband.gui:main"
 
 [project.optional-dependencies]
 dev = [

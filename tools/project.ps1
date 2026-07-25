@@ -434,8 +434,8 @@ switch ($Action) {
         Push-Location $PcDir
         try {
             Invoke-PcPython -FilePath $venvPython -Arguments @(
-                "-m", "smart_neckband.mic_capture_gui"
-            ) -Description "INMP441 BLE capture GUI"
+                "-m", "smart_neckband"
+            ) -Description "Unified PC GUI (pc-mic compatibility alias)"
         }
         finally {
             Pop-Location

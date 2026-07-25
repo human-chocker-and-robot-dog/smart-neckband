@@ -1,8 +1,8 @@
 # PC Health MCP V0.3
 
-The Windows PC owns sensor acquisition, NeuroKit2 analysis, derived metric
-history, health-event rules, SQLite, and the Health MCP server. The RDK runs the
-Agent and acts as the remote MCP client.
+The single Windows main GUI owns sensor acquisition, NeuroKit2 analysis,
+derived metric history, health-event rules, SQLite, and lifecycle control for
+the Health MCP server. The RDK runs the Agent and acts as the remote MCP client.
 
 The business MCP surface contains exactly three read-only tools:
 
@@ -42,6 +42,24 @@ The wearer ID is a stable pseudonym matching:
 The rules path is optional. Copy `config/health_rules.example.json` to an
 ignored local path, set thresholds deliberately, and enable only the required
 rules.
+
+## Unified main application
+
+Start the only supported user-facing PC application:
+
+```powershell
+.\tools\project.ps1 pc-gui
+```
+
+Open the `Health / MCP` tab. It shows the wearer ID, SQLite path, rules file,
+HTTP bind address, bearer token, Host allowlist, endpoint, child-process PID,
+log path, and the exact three MCP tools. The page can start or stop Health data
+production and MCP together. If the environment variables above are complete,
+both start automatically with the main GUI.
+
+The `Microphone / Hi ESP`, Webhook, sensor, Health, and MCP functions are tabs
+of this same application. The old `pc-mic` command is only a compatibility
+alias and now opens `pc-gui`.
 
 ## Data ownership
 
@@ -136,7 +154,8 @@ SMART_COLLAR_HEALTH_MCP_BEARER_TOKEN=<32-or-more-random-characters>
 SMART_COLLAR_HEALTH_MCP_ALLOWED_HOSTS=<windows-ip>:8765,<hostname>:8765
 ```
 
-Start it with:
+The main GUI starts and supervises this server from its `Health / MCP` tab.
+For headless automation or diagnostics only, the equivalent command remains:
 
 ```powershell
 .\tools\project.ps1 pc-health-mcp-http

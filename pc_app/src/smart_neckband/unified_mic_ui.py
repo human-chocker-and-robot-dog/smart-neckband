@@ -42,6 +42,7 @@ class UnifiedMicPanel:
         self.device_identity: str | None = None
         self.connection_instance_id: str | None = None
         self.instruction_id: str | None = None
+        self.stream_stop_requested = False
         self.session_generation = 0
         self.asr_worker: VolcAsrClientThread | None = None
         self.vad_worker: AudioThresholdVadThread | None = None
@@ -122,6 +123,7 @@ class UnifiedMicPanel:
         self.device_identity = device_identity
         self.connection_instance_id = new_connection_instance_id() if reader else None
         self.instruction_id = None
+        self.stream_stop_requested = False
         self.samples.clear()
         self.curve.setData([])
         self._set_controls_enabled(reader is not None)
@@ -147,13 +149,16 @@ class UnifiedMicPanel:
             self.state_label.setText(f"MIC command failed: {exc}")
 
     def stop_stream(self) -> None:
-        self.send_command("STOP")
+        if not self.stream_stop_requested:
+            self.send_command("STOP")
+            self.stream_stop_requested = True
         self._finish_session(cancel=False)
         self.state_label.setText("Stopping / automatic rearm")
 
     def close(self) -> None:
         self.refresh_timer.stop()
         self._finish_session(cancel=True)
+        self.stream_stop_requested = False
         self.reader = None
 
     def refresh_plot(self) -> None:
@@ -184,6 +189,7 @@ class UnifiedMicPanel:
     def _handle_wake(self, frame: WakeEventFrame) -> None:
         self.session_generation += 1
         self._finish_session(cancel=True)
+        self.stream_stop_requested = False
         if self.device_identity is not None and self.connection_instance_id is not None:
             self.instruction_id = mic_asr_instruction_id(
                 device_identity=self.device_identity,
@@ -264,6 +270,7 @@ class UnifiedMicPanel:
                 self.asr_label.setText(
                     "ASR final queued for Webhook" if persisted else "ASR final persistence failed"
                 )
+            self.stop_stream()
         elif event.kind == "error":
             self.asr_label.setText(f"ASR error: {event.detail}")
         elif event.kind == "closed":

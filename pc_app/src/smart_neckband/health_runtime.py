@@ -9,6 +9,7 @@ import time
 from typing import Callable
 
 from .analysis import EcgAnalysisResult
+from .health_contract import validate_wearer_id
 from .health_state import HealthStateBuilder
 from .health_store import HealthStore
 from .health_rules import load_health_rules
@@ -56,6 +57,45 @@ class HealthRuntimeWorker:
         self._last_transport = "unknown"
 
     @classmethod
+    def from_settings(
+        cls,
+        *,
+        wearer_id: str,
+        db_path: Path,
+        rules_path: Path | None,
+        stores: PcDataStores,
+        reader_provider: Callable[[], object | None],
+        analysis_provider: Callable[[], EcgAnalysisResult | None],
+        webhook_url: str | None = None,
+        webhook_key_id: str | None = None,
+        webhook_secret_hex: str | None = None,
+    ) -> HealthRuntimeWorker:
+        validate_wearer_id(wearer_id)
+        alert_rules = load_health_rules(rules_path) if rules_path is not None else ()
+        store = HealthStore(db_path, alert_rules=alert_rules)
+        configured = (webhook_url, webhook_key_id, webhook_secret_hex)
+        if any(configured) and not all(configured):
+            raise ValueError(
+                "health webhook URL, key ID, and secret must be configured together"
+            )
+        dispatcher = None
+        if all(configured):
+            client = HealthWebhookClient(
+                url=str(webhook_url),
+                key_id=str(webhook_key_id),
+                secret=parse_secret_hex(webhook_secret_hex),
+            )
+            dispatcher = HealthWebhookDispatcher(store=store, client=client)
+        return cls(
+            wearer_id=wearer_id,
+            stores=stores,
+            reader_provider=reader_provider,
+            analysis_provider=analysis_provider,
+            store=store,
+            dispatcher=dispatcher,
+        )
+
+    @classmethod
     def from_environment(
         cls,
         *,
@@ -75,32 +115,19 @@ class HealthRuntimeWorker:
             / "health"
             / "health_state.db"
         )
-        rules_path = os.environ.get("SMART_COLLAR_HEALTH_RULES_PATH")
-        alert_rules = load_health_rules(rules_path) if rules_path else ()
-        store = HealthStore(db_path, alert_rules=alert_rules)
-        webhook_url = os.environ.get("SMART_COLLAR_HEALTH_WEBHOOK_URL")
-        key_id = os.environ.get("SMART_COLLAR_HEALTH_WEBHOOK_KEY_ID")
-        secret_hex = os.environ.get("SMART_COLLAR_HEALTH_WEBHOOK_SECRET_HEX")
-        configured = (webhook_url, key_id, secret_hex)
-        if any(configured) and not all(configured):
-            raise ValueError(
-                "health webhook URL, key ID, and secret must be configured together"
-            )
-        dispatcher = None
-        if all(configured):
-            client = HealthWebhookClient(
-                url=str(webhook_url),
-                key_id=str(key_id),
-                secret=parse_secret_hex(secret_hex),
-            )
-            dispatcher = HealthWebhookDispatcher(store=store, client=client)
-        return cls(
+        rules_value = os.environ.get("SMART_COLLAR_HEALTH_RULES_PATH")
+        return cls.from_settings(
             wearer_id=wearer_id,
+            db_path=db_path,
+            rules_path=Path(rules_value) if rules_value else None,
             stores=stores,
             reader_provider=reader_provider,
             analysis_provider=analysis_provider,
-            store=store,
-            dispatcher=dispatcher,
+            webhook_url=os.environ.get("SMART_COLLAR_HEALTH_WEBHOOK_URL"),
+            webhook_key_id=os.environ.get("SMART_COLLAR_HEALTH_WEBHOOK_KEY_ID"),
+            webhook_secret_hex=os.environ.get(
+                "SMART_COLLAR_HEALTH_WEBHOOK_SECRET_HEX"
+            ),
         )
 
     def start(self) -> None:
@@ -123,6 +150,10 @@ class HealthRuntimeWorker:
             self._thread.join(timeout)
         if self.dispatcher is not None:
             self.dispatcher.stop(timeout)
+
+    @property
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
 
     def update_once(self, *, now_monotonic_ns: int | None = None) -> bool:
         now_ns = time.monotonic_ns() if now_monotonic_ns is None else now_monotonic_ns

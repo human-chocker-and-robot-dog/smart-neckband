@@ -80,4 +80,18 @@ def test_unified_mic_panel_constructs_and_uses_stable_wake_id(monkeypatch) -> No
     assert instruction_id is not None and instruction_id.startswith("mic-")
     assert submitted == [("forward", instruction_id), ("forward", instruction_id)]
     assert reader.commands == ["STOP"]
+
+    panel.handle_frame(
+        WakeEventFrame(
+            encoding=ENCODING_IMA_ADPCM,
+            sequence=2,
+            sample_rate=16_000,
+            detected_sample_index=96_000,
+            wake_count=4,
+            word_index=1,
+        ),
+        ParserStats(wake_events=2),
+    )
+    panel.stop_stream()
+    assert reader.commands == ["STOP", "STOP"]
     panel.close()

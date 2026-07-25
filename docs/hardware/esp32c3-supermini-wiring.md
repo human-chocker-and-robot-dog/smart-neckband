@@ -81,7 +81,8 @@ esptool.py --chip esp32c3 -p COM21 flash_id
 
 默认 `build -Target esp32c3` 现在是统一传感器与 Hi ESP 固件；
 `-SensorsOnly` 只用于诊断回滚。统一设备使用 `CollarC3-*` 和主 GUI，
-`pc-mic`/`CollarMic-*` 只用于独立 INMP441 实验固件。
+`CollarMic-*` 仅属于旧的独立 INMP441 实验固件。`pc-mic` 已改为兼容
+别名并打开统一 `pc-gui`，不再提供第二套上位机。
 
 首次安装和日常启动分别使用以下入口：
 

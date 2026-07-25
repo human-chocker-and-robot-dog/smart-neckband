@@ -36,6 +36,14 @@ from .webhook_ui import WebhookTab
 
 
 def main() -> int:
+    """Compatibility entry point: open the single unified PC application."""
+
+    from .gui import main as unified_main
+
+    return unified_main()
+
+
+def legacy_main() -> int:
     try:
         import numpy as np
         import pyqtgraph as pg

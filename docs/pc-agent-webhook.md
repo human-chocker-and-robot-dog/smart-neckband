@@ -85,7 +85,14 @@ For every instruction it:
 
 An interrupted `submitting` row is recovered after PC restart and retried with the same ID and text. This is safe because the Gateway contract de-duplicates an identical instruction ID and text.
 
-The `smart-neckband-mic` application embeds this same Webhook tab. A PC ASR final uses a deterministic `mic-<32-lowercase-hex>` ID derived from the BLE device identity, one connection instance, the wake sample index, and wake count. The final text is written to `webhook_client.sqlite3` before the dispatcher is notified. A repeated identical final is idempotent; reusing the same ID for different text is a local conflict and is not submitted with a replacement ID.
+The main GUI embeds the microphone and this same Webhook tab. The legacy
+`smart-neckband-mic` launcher is a compatibility alias for that unified GUI.
+A PC ASR final uses a deterministic `mic-<32-lowercase-hex>` ID derived from
+the BLE device identity, one connection instance, the wake sample index, and
+wake count. The final text is written to `webhook_client.sqlite3` before the
+dispatcher is notified. A repeated identical final is idempotent; reusing the
+same ID for different text is a local conflict and is not submitted with a
+replacement ID.
 
 ## Reply receiver behavior
 

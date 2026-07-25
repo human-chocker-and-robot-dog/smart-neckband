@@ -119,8 +119,9 @@ ASR 配置沿用 `data/volc_asr_settings.json` 或环境变量；VAD 配置沿�
 `mic-<32 lowercase hex>` instruction ID，重复 final 对 ordinary Webhook
 写入保持幂等。
 
-`pc-mic` 和 `CollarMic-*` 仅属于独立麦克风实验固件。统一设备使用
-`CollarC3-*` 和主 GUI。
+统一设备使用 `CollarC3-*` 和主 GUI 的 `Microphone / Hi ESP` 页面。旧
+`pc-mic` 命令现在只是兼容别名，也会打开同一个主 GUI，不再启动第二套
+麦克风上位机。
 
 ## 安全与硬件验证
 

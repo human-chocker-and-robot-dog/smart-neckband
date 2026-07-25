@@ -31,7 +31,7 @@ from .history import (
     write_compare_csv,
     y_range_for,
 )
-from .health_runtime import HealthRuntimeWorker
+from .health_integration_ui import HealthIntegrationPanel
 from .protocol import ECG_SAMPLE_RATE_HZ, FLAG_LO_MINUS, FLAG_LO_PLUS, VoiceStatusPayload
 from .serial_io import PcDataStores, SerialPacketReader, list_serial_ports
 from .sessions import ExperimentSessionRecorder, PLACEMENT_PRESETS, WIRE_MAPS, RecordingState
@@ -213,18 +213,6 @@ class MainWindow:
         self.attitude_worker = AttitudeWorker(self.stores)
         self.ecg_worker.start()
         self.attitude_worker.start()
-        try:
-            self.health_worker = HealthRuntimeWorker.from_environment(
-                stores=self.stores,
-                reader_provider=lambda: self.reader,
-                analysis_provider=self.ecg_worker.latest,
-            )
-        except ValueError:
-            LOGGER.exception("Health runtime configuration rejected")
-            self.health_worker = None
-        if self.health_worker is not None:
-            self.health_worker.start()
-
         self.window = QtWidgets.QMainWindow()
         self.window.setWindowTitle("AI 智能颈环 V0 上位机")
         self.window.resize(1280, 820)
@@ -372,11 +360,19 @@ class MainWindow:
             post_gui=self._post_gui,
             webhook_submit=self.webhook_tab.enqueue_pc_asr_text,
         )
+        self.health_panel = HealthIntegrationPanel(
+            QtCore=QtCore,
+            QtWidgets=QtWidgets,
+            stores=self.stores,
+            reader_provider=lambda: self.reader,
+            analysis_provider=self.ecg_worker.latest,
+        )
         tabs.addTab(live_tab, "实时")
         tabs.addTab(diagnostics_tab, "诊断")
         tabs.addTab(history_tab, "历史记录")
         tabs.addTab(compare_tab, "双轨对比")
         tabs.addTab(self.mic_panel.widget, "Microphone / Hi ESP")
+        tabs.addTab(self.health_panel.widget, "Health / MCP")
         tabs.addTab(self.webhook_tab.widget, "Webhook")
         self.window.setCentralWidget(tabs)
         self.refresh_button.clicked.connect(self.refresh_ports)
@@ -644,11 +640,10 @@ class MainWindow:
         self.window.show()
 
     def close(self) -> None:
+        self.health_panel.close()
         self.mic_panel.close()
         self.webhook_tab.close()
         self.disconnect_serial()
-        if self.health_worker is not None:
-            self.health_worker.stop()
         self.ecg_worker.stop()
         self.attitude_worker.stop()
 
