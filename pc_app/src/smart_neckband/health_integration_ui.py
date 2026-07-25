@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import secrets
 
 from .health_integration import (
     MCP_TOOL_NAMES,
@@ -68,24 +67,9 @@ class HealthIntegrationPanel:
         self.mcp_port.setRange(1, 65_535)
         self.mcp_port.setValue(configured.mcp_port)
         self.mcp_path = QtWidgets.QLineEdit(configured.mcp_path)
-        self.bearer_token = QtWidgets.QLineEdit(configured.bearer_token)
-        self.bearer_token.setEchoMode(QtWidgets.QLineEdit.Password)
-        self.bearer_token.setPlaceholderText("至少 32 字符，不写入日志")
-        token_row = QtWidgets.QWidget()
-        token_layout = QtWidgets.QHBoxLayout(token_row)
-        token_layout.setContentsMargins(0, 0, 0, 0)
-        token_layout.addWidget(self.bearer_token, 1)
-        self.generate_token_button = QtWidgets.QPushButton("生成令牌")
-        token_layout.addWidget(self.generate_token_button)
-        self.allowed_hosts = QtWidgets.QLineEdit(",".join(configured.allowed_hosts))
-        self.allowed_hosts.setPlaceholderText(
-            "Windows-IP:8765,hostname:8765；逗号分隔"
-        )
         mcp_form.addRow("监听地址", self.mcp_host)
         mcp_form.addRow("端口", self.mcp_port)
         mcp_form.addRow("路径", self.mcp_path)
-        mcp_form.addRow("Bearer token", token_row)
-        mcp_form.addRow("允许 Host", self.allowed_hosts)
         layout.addWidget(mcp_group)
 
         tools_group = QtWidgets.QGroupBox("Agent 可调用的三个 MCP 工具")
@@ -108,14 +92,13 @@ class HealthIntegrationPanel:
         layout.addLayout(controls)
 
         notice = QtWidgets.QLabel(
-            "MCP 只读且仅用于工程数据。0.0.0.0 监听必须配合 Bearer token、"
-            "Host 白名单和仅允许 RDK 地址的 Windows 防火墙规则。"
+            "黑客松可信内网模式：MCP 不做应用层鉴权，由 CPE 内网边界负责访问控制。"
+            "不要把此端口直接暴露到公网。"
         )
         notice.setWordWrap(True)
         layout.addWidget(notice)
         layout.addStretch(1)
 
-        self.generate_token_button.clicked.connect(self.generate_token)
         self.start_health_button.clicked.connect(self.start_health)
         self.start_mcp_button.clicked.connect(self.start_mcp)
         self.stop_mcp_button.clicked.connect(self.stop_mcp)
@@ -128,20 +111,8 @@ class HealthIntegrationPanel:
         self.refresh_status()
 
     def settings(self) -> HealthIntegrationSettings:
-        allowed_hosts = tuple(
-            item.strip()
-            for item in self.allowed_hosts.text().split(",")
-            if item.strip()
-        )
         host = self.mcp_host.text().strip()
         port = int(self.mcp_port.value())
-        if not allowed_hosts and host in {"127.0.0.1", "::1", "localhost"}:
-            allowed_hosts = (
-                f"127.0.0.1:{port}",
-                f"localhost:{port}",
-                f"[::1]:{port}",
-            )
-            self.allowed_hosts.setText(",".join(allowed_hosts))
         rules_value = self.rules_path.text().strip()
         return HealthIntegrationSettings(
             wearer_id=self.wearer_id.text().strip(),
@@ -150,12 +121,7 @@ class HealthIntegrationPanel:
             mcp_host=host,
             mcp_port=port,
             mcp_path=self.mcp_path.text().strip(),
-            bearer_token=self.bearer_token.text().strip(),
-            allowed_hosts=allowed_hosts,
         )
-
-    def generate_token(self) -> None:
-        self.bearer_token.setText(secrets.token_urlsafe(32))
 
     def auto_start(self) -> None:
         configured = self.settings()

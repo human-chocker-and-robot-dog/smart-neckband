@@ -15,8 +15,6 @@ import pytest
 from smart_neckband.health_mcp import (
     HealthToolService,
     SlidingWindowRateLimiter,
-    _BearerAuthMiddleware,
-    _validate_bearer_token,
     _validate_http_path,
     create_mcp_server,
 )
@@ -204,45 +202,10 @@ def test_rate_limiter_matches_product_tool_limits() -> None:
     assert limiter.check("health.get_hrv", "xwen") is None
 
 
-def test_http_configuration_and_bearer_middleware() -> None:
+def test_http_path_configuration() -> None:
     assert _validate_http_path("/mcp") == "/mcp"
-    assert _validate_bearer_token("a" * 32) == "a" * 32
     with pytest.raises(ValueError):
         _validate_http_path("mcp")
-    with pytest.raises(ValueError):
-        _validate_bearer_token("short")
-
-    calls: list[str] = []
-
-    async def downstream(scope, receive, send) -> None:
-        del receive, send
-        calls.append(scope["path"])
-
-    middleware = _BearerAuthMiddleware(
-        downstream,
-        token="a" * 32,
-        protected_path="/mcp",
-    )
-
-    async def invoke(authorization: str | None) -> list[dict]:
-        sent: list[dict] = []
-        headers = [] if authorization is None else [(b"authorization", authorization.encode())]
-
-        async def send(message: dict) -> None:
-            sent.append(message)
-
-        await middleware(
-            {"type": "http", "path": "/mcp", "headers": headers},
-            lambda: None,
-            send,
-        )
-        return sent
-
-    unauthorized = asyncio.run(invoke(None))
-    assert unauthorized[0]["status"] == 401
-    authorized = asyncio.run(invoke("Bearer " + "a" * 32))
-    assert authorized == []
-    assert calls == ["/mcp"]
 
 
 def test_official_client_can_list_and_call_stdio_server(tmp_path) -> None:
@@ -284,8 +247,7 @@ def test_official_client_can_list_and_call_stdio_server(tmp_path) -> None:
     asyncio.run(exercise())
 
 
-def test_official_client_can_call_authenticated_streamable_http(tmp_path) -> None:
-    import httpx
+def test_official_client_can_call_trusted_lan_streamable_http(tmp_path) -> None:
     from mcp import ClientSession
     from mcp.client.streamable_http import streamable_http_client
 
@@ -295,7 +257,6 @@ def test_official_client_can_call_authenticated_streamable_http(tmp_path) -> Non
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = int(listener.getsockname()[1])
-    token = "r" * 48
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(
         __import__("pathlib").Path(__file__).resolve().parents[1] / "src"
@@ -318,10 +279,6 @@ def test_official_client_can_call_authenticated_streamable_http(tmp_path) -> Non
             str(port),
             "--path",
             "/mcp",
-            "--bearer-token",
-            token,
-            "--allowed-host",
-            f"127.0.0.1:{port}",
             env=environment,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
@@ -340,38 +297,34 @@ def test_official_client_can_call_authenticated_streamable_http(tmp_path) -> Non
                 raise AssertionError("Streamable HTTP server did not start")
 
             url = f"http://127.0.0.1:{port}/mcp"
-            async with httpx.AsyncClient(timeout=5) as unauthorized:
-                assert (await unauthorized.post(url, json={})).status_code == 401
-            async with httpx.AsyncClient(
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=10,
-            ) as client:
-                async with streamable_http_client(url, http_client=client) as streams:
-                    read_stream, write_stream, _session_id = streams
-                    async with ClientSession(read_stream, write_stream) as session:
-                        await session.initialize()
-                        listed = await session.list_tools()
-                        assert [tool.name for tool in listed.tools] == [
-                            "health.get_heart_rate",
-                            "health.get_hrv",
-                            "health.get_imu_state",
-                        ]
-                        result = await session.call_tool(
-                            "health.get_imu_state",
-                            {"window_s": 30},
-                        )
-                        assert result.isError is False
-                        payload = result.structuredContent
-                        assert json.loads(result.content[0].text) == payload
-                        assert payload["meta"]["wearer_id"] == "xwen"
-                        assert payload["meta"]["window_s"] == 30
-                        assert isinstance(payload["data"]["valid"], bool)
+            async with streamable_http_client(url) as streams:
+                read_stream, write_stream, _session_id = streams
+                async with ClientSession(read_stream, write_stream) as session:
+                    await session.initialize()
+                    listed = await session.list_tools()
+                    assert [tool.name for tool in listed.tools] == [
+                        "health.get_heart_rate",
+                        "health.get_hrv",
+                        "health.get_imu_state",
+                    ]
+                    result = await session.call_tool(
+                        "health.get_imu_state",
+                        {"window_s": 30},
+                    )
+                    assert result.isError is False
+                    payload = result.structuredContent
+                    assert json.loads(result.content[0].text) == payload
+                    assert payload["meta"]["wearer_id"] == "xwen"
+                    assert payload["meta"]["window_s"] == 30
+                    assert isinstance(payload["data"]["valid"], bool)
         finally:
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
+            if process.returncode is None:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
+            assert process.returncode is not None
 
     asyncio.run(exercise())

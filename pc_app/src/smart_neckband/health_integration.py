@@ -10,7 +10,7 @@ from typing import Callable, TextIO
 
 from .analysis import EcgAnalysisResult
 from .health_contract import validate_wearer_id
-from .health_mcp import _validate_bearer_token, _validate_http_path
+from .health_mcp import _validate_http_path
 from .health_runtime import HealthRuntimeWorker
 from .serial_io import PcDataStores
 
@@ -33,54 +33,29 @@ def _environment_port(value: str | None) -> int:
         return 8765
 
 
-def _split_hosts(value: str | None) -> tuple[str, ...]:
-    if not value:
-        return ()
-    return tuple(item.strip() for item in value.split(",") if item.strip())
-
-
-def _loopback_hosts(port: int) -> tuple[str, ...]:
-    return (
-        f"127.0.0.1:{port}",
-        f"localhost:{port}",
-        f"[::1]:{port}",
-    )
-
-
 @dataclass(frozen=True, slots=True)
 class HealthIntegrationSettings:
     wearer_id: str
     db_path: Path
     rules_path: Path | None
-    mcp_host: str = "127.0.0.1"
+    mcp_host: str = "0.0.0.0"
     mcp_port: int = 8765
     mcp_path: str = "/mcp"
-    bearer_token: str = ""
-    allowed_hosts: tuple[str, ...] = ()
 
     @classmethod
     def from_environment(cls) -> HealthIntegrationSettings:
         db_value = os.environ.get("SMART_COLLAR_HEALTH_DB_PATH")
         rules_value = os.environ.get("SMART_COLLAR_HEALTH_RULES_PATH")
-        host = os.environ.get("SMART_COLLAR_HEALTH_MCP_HOST", "127.0.0.1").strip()
+        host = os.environ.get("SMART_COLLAR_HEALTH_MCP_HOST", "0.0.0.0").strip()
         port = _environment_port(os.environ.get("SMART_COLLAR_HEALTH_MCP_PORT"))
-        allowed_hosts = _split_hosts(
-            os.environ.get("SMART_COLLAR_HEALTH_MCP_ALLOWED_HOSTS")
-        )
-        if not allowed_hosts and host in {"127.0.0.1", "::1", "localhost"}:
-            allowed_hosts = _loopback_hosts(port)
         return cls(
             wearer_id=os.environ.get("SMART_COLLAR_WEARER_ID", "").strip(),
             db_path=Path(db_value) if db_value else _default_db_path(),
             rules_path=Path(rules_value) if rules_value else None,
-            mcp_host=host or "127.0.0.1",
+            mcp_host=host or "0.0.0.0",
             mcp_port=port,
             mcp_path=os.environ.get("SMART_COLLAR_HEALTH_MCP_PATH", "/mcp").strip()
             or "/mcp",
-            bearer_token=os.environ.get(
-                "SMART_COLLAR_HEALTH_MCP_BEARER_TOKEN", ""
-            ).strip(),
-            allowed_hosts=allowed_hosts,
         )
 
     @property
@@ -89,7 +64,7 @@ class HealthIntegrationSettings:
 
     @property
     def mcp_configured(self) -> bool:
-        return self.health_configured and bool(self.bearer_token)
+        return self.health_configured
 
     @property
     def endpoint(self) -> str:
@@ -106,8 +81,6 @@ class HealthIntegrationSettings:
             self.mcp_host,
             self.mcp_port,
             self.mcp_path,
-            self.bearer_token,
-            self.allowed_hosts,
         )
 
     def validate_health(self) -> None:
@@ -120,13 +93,10 @@ class HealthIntegrationSettings:
     def validate_mcp(self) -> None:
         self.validate_health()
         _validate_http_path(self.mcp_path)
-        _validate_bearer_token(self.bearer_token)
         if not 1 <= self.mcp_port <= 65_535:
             raise ValueError("Health MCP port must be in 1..65535")
         if not self.mcp_host:
             raise ValueError("Health MCP host is required")
-        if not self.allowed_hosts:
-            raise ValueError("Health MCP allowed hosts must not be empty")
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,18 +150,15 @@ class HealthMcpProcessController:
             "--path",
             settings.mcp_path,
         ]
-        for allowed_host in settings.allowed_hosts:
-            arguments.extend(("--allowed-host", allowed_host))
         return arguments
 
-    def environment(self, settings: HealthIntegrationSettings) -> dict[str, str]:
+    def environment(self) -> dict[str, str]:
         environment = os.environ.copy()
         src_path = str(self.project_root / "pc_app" / "src")
         old_python_path = environment.get("PYTHONPATH", "")
         environment["PYTHONPATH"] = (
             src_path if not old_python_path else f"{src_path};{old_python_path}"
         )
-        environment["SMART_COLLAR_HEALTH_MCP_BEARER_TOKEN"] = settings.bearer_token
         return environment
 
     @property
@@ -233,7 +200,7 @@ class HealthMcpProcessController:
             self._process = self.popen_factory(
                 self.command(settings),
                 cwd=str(self.project_root / "pc_app"),
-                env=self.environment(settings),
+                env=self.environment(),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=self._log_handle,

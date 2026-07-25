@@ -467,9 +467,6 @@ switch ($Action) {
         if ([string]::IsNullOrWhiteSpace($env:SMART_COLLAR_WEARER_ID)) {
             throw "SMART_COLLAR_WEARER_ID must be set before starting Health MCP."
         }
-        if ([string]::IsNullOrWhiteSpace($env:SMART_COLLAR_HEALTH_MCP_BEARER_TOKEN)) {
-            throw "SMART_COLLAR_HEALTH_MCP_BEARER_TOKEN must be set for Streamable HTTP."
-        }
         $mcpHost = if ([string]::IsNullOrWhiteSpace($env:SMART_COLLAR_HEALTH_MCP_HOST)) {
             "0.0.0.0"
         }
@@ -488,14 +485,6 @@ switch ($Action) {
         else {
             $env:SMART_COLLAR_HEALTH_MCP_PATH
         }
-        $allowedHosts = @(
-            $env:SMART_COLLAR_HEALTH_MCP_ALLOWED_HOSTS -split "," |
-                ForEach-Object { $_.Trim() } |
-                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-        )
-        if ($allowedHosts.Count -eq 0) {
-            throw "SMART_COLLAR_HEALTH_MCP_ALLOWED_HOSTS must list the Windows host:port used by the RDK."
-        }
         $arguments = @(
             "-m", "smart_neckband.health_mcp",
             "--transport", "streamable-http",
@@ -503,9 +492,6 @@ switch ($Action) {
             "--port", $mcpPort,
             "--path", $mcpPath
         )
-        foreach ($allowedHost in $allowedHosts) {
-            $arguments += @("--allowed-host", $allowedHost)
-        }
         Push-Location $PcDir
         try {
             Invoke-PcPython -FilePath $venvPython -Arguments $arguments -Description "Health MCP Streamable HTTP"

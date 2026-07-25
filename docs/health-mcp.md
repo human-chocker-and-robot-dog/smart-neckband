@@ -52,10 +52,9 @@ Start the only supported user-facing PC application:
 ```
 
 Open the `Health / MCP` tab. It shows the wearer ID, SQLite path, rules file,
-HTTP bind address, bearer token, Host allowlist, endpoint, child-process PID,
-log path, and the exact three MCP tools. The page can start or stop Health data
-production and MCP together. If the environment variables above are complete,
-both start automatically with the main GUI.
+HTTP bind address, endpoint, child-process PID, log path, and the exact three
+MCP tools. The page can start or stop Health data production and MCP together.
+When the wearer ID is configured, both start automatically with the main GUI.
 
 The `Microphone / Hi ESP`, Webhook, sensor, Health, and MCP functions are tabs
 of this same application. The old `pc-mic` command is only a compatibility
@@ -141,7 +140,6 @@ to Windows:
 
 ```text
 RDK Agent -> http://<windows-address>:8765/mcp
-Authorization: Bearer <token>
 ```
 
 Windows configuration:
@@ -150,8 +148,6 @@ Windows configuration:
 SMART_COLLAR_HEALTH_MCP_HOST=0.0.0.0
 SMART_COLLAR_HEALTH_MCP_PORT=8765
 SMART_COLLAR_HEALTH_MCP_PATH=/mcp
-SMART_COLLAR_HEALTH_MCP_BEARER_TOKEN=<32-or-more-random-characters>
-SMART_COLLAR_HEALTH_MCP_ALLOWED_HOSTS=<windows-ip>:8765,<hostname>:8765
 ```
 
 The main GUI starts and supervises this server from its `Health / MCP` tab.
@@ -161,15 +157,9 @@ For headless automation or diagnostics only, the equivalent command remains:
 .\tools\project.ps1 pc-health-mcp-http
 ```
 
-`SMART_COLLAR_HEALTH_MCP_ALLOWED_HOSTS` is checked against the HTTP `Host`
-header to reduce DNS-rebinding risk. Configure the Windows firewall manually so
-only the RDK address can reach TCP 8765. The project does not modify firewall
-rules automatically.
-
-Plain HTTP plus Bearer authentication is acceptable only on an isolated demo
-LAN because the token is not encrypted. Production requires HTTPS or an
-encrypted private overlay such as Tailscale/WireGuard. Never expose this port
-directly to the public Internet.
+This hackathon build intentionally has no MCP Bearer authentication or Host
+allowlist. The CPE-managed private LAN is the access boundary. Never expose
+TCP 8765 directly to the public Internet.
 
 ## Active health Webhook
 

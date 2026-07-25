@@ -18,7 +18,6 @@ import sys
 import time
 from typing import Callable
 from uuid import uuid4
-import hmac
 
 import jsonschema
 
@@ -838,37 +837,6 @@ async def _run_stdio(service: HealthToolService) -> None:
         )
 
 
-class _BearerAuthMiddleware:
-    def __init__(self, app, *, token: str, protected_path: str) -> None:
-        self.app = app
-        self.token = token
-        self.protected_path = protected_path
-
-    async def __call__(self, scope, receive, send) -> None:
-        if scope.get("type") == "http" and scope.get("path") == self.protected_path:
-            headers = {
-                key.decode("latin-1").lower(): value.decode("latin-1")
-                for key, value in scope.get("headers", [])
-            }
-            expected = f"Bearer {self.token}"
-            if not hmac.compare_digest(headers.get("authorization", ""), expected):
-                body = b'{"error":"unauthorized"}'
-                await send(
-                    {
-                        "type": "http.response.start",
-                        "status": 401,
-                        "headers": [
-                            (b"content-type", b"application/json; charset=utf-8"),
-                            (b"www-authenticate", b"Bearer"),
-                            (b"content-length", str(len(body)).encode("ascii")),
-                        ],
-                    }
-                )
-                await send({"type": "http.response.body", "body": body})
-                return
-        await self.app(scope, receive, send)
-
-
 class _StreamableHttpASGIApp:
     def __init__(self, manager) -> None:
         self.manager = manager
@@ -886,26 +854,15 @@ def _validate_http_path(value: str) -> str:
     return path
 
 
-def _validate_bearer_token(value: str | None) -> str:
-    if value is None or len(value) < 32 or len(value) > 512:
-        raise ValueError("Health MCP bearer token must contain 32..512 characters")
-    if any(character.isspace() for character in value):
-        raise ValueError("Health MCP bearer token must not contain whitespace")
-    return value
-
-
 async def _run_streamable_http(
     service: HealthToolService,
     *,
     host: str,
     port: int,
     path: str,
-    bearer_token: str,
-    allowed_hosts: list[str],
 ) -> None:
     import uvicorn
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-    from mcp.server.transport_security import TransportSecuritySettings
     from starlette.applications import Starlette
     from starlette.routing import Route
 
@@ -914,11 +871,6 @@ async def _run_streamable_http(
         app=server,
         json_response=True,
         stateless=True,
-        security_settings=TransportSecuritySettings(
-            enable_dns_rebinding_protection=True,
-            allowed_hosts=allowed_hosts,
-            allowed_origins=[],
-        ),
     )
 
     @asynccontextmanager
@@ -930,13 +882,8 @@ async def _run_streamable_http(
         routes=[Route(path, endpoint=_StreamableHttpASGIApp(manager))],
         lifespan=lifespan,
     )
-    protected = _BearerAuthMiddleware(
-        application,
-        token=bearer_token,
-        protected_path=path,
-    )
     config = uvicorn.Config(
-        protected,
+        application,
         host=host,
         port=port,
         log_level="info",
@@ -1040,7 +987,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--host",
-        default=os.environ.get("SMART_COLLAR_HEALTH_MCP_HOST", "127.0.0.1"),
+        default=os.environ.get("SMART_COLLAR_HEALTH_MCP_HOST", "0.0.0.0"),
     )
     parser.add_argument(
         "--port",
@@ -1050,16 +997,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--path",
         default=os.environ.get("SMART_COLLAR_HEALTH_MCP_PATH", "/mcp"),
-    )
-    parser.add_argument(
-        "--bearer-token",
-        default=os.environ.get("SMART_COLLAR_HEALTH_MCP_BEARER_TOKEN"),
-    )
-    parser.add_argument(
-        "--allowed-host",
-        action="append",
-        default=None,
-        help="Accepted HTTP Host header; repeat for multiple RDK-visible names.",
     )
     args = parser.parse_args(argv)
     if not args.wearer_id:
@@ -1086,31 +1023,16 @@ def main(argv: list[str] | None = None) -> int:
     else:
         try:
             path = _validate_http_path(args.path)
-            token = _validate_bearer_token(args.bearer_token)
         except ValueError as exc:
             parser.error(str(exc))
         if not 1 <= args.port <= 65_535:
             parser.error("--port must be in 1..65535")
-        allowed_hosts = args.allowed_host
-        if allowed_hosts is None:
-            if args.host not in {"127.0.0.1", "::1", "localhost"}:
-                parser.error(
-                    "LAN Streamable HTTP requires at least one --allowed-host "
-                    "matching the Windows address used by the RDK"
-                )
-            allowed_hosts = [
-                f"127.0.0.1:{args.port}",
-                f"localhost:{args.port}",
-                f"[::1]:{args.port}",
-            ]
         asyncio.run(
             _run_streamable_http(
                 service,
                 host=args.host,
                 port=args.port,
                 path=path,
-                bearer_token=token,
-                allowed_hosts=allowed_hosts,
             )
         )
     return 0

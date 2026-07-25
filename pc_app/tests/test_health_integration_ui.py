@@ -10,7 +10,6 @@ def test_health_panel_exposes_mcp_inside_main_gui(monkeypatch, tmp_path) -> None
     os.environ.setdefault("PYQTGRAPH_QT_LIB", "PySide6")
     monkeypatch.setenv("SMART_COLLAR_WEARER_ID", "xwen")
     monkeypatch.setenv("SMART_COLLAR_HEALTH_DB_PATH", str(tmp_path / "health.db"))
-    monkeypatch.setenv("SMART_COLLAR_HEALTH_MCP_BEARER_TOKEN", "r" * 48)
 
     from PySide6 import QtCore, QtWidgets
 
@@ -65,7 +64,8 @@ def test_health_panel_exposes_mcp_inside_main_gui(monkeypatch, tmp_path) -> None
 
     assert panel.tools_label.text().splitlines() == list(MCP_TOOL_NAMES)
     assert controller.runtime_settings.wearer_id == "xwen"
-    assert controller.mcp_settings.bearer_token == "r" * 48
+    assert controller.mcp_settings.mcp_host == "0.0.0.0"
+    assert not hasattr(panel, "bearer_token")
     assert "PID 1234" in panel.mcp_status.text()
 
     panel.close()
