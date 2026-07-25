@@ -1,0 +1,225 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://smart-neckband.local/contracts/health-mcp-v0.3.contract.json",
+  "title": "Smart Collar Health MCP V0.3",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "Uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "WindowInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "window_s": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 300,
+          "default": 30
+        }
+      }
+    },
+    "Meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {"const": "0.3.0"},
+        "generated_at": {"$ref": "#/$defs/Timestamp"},
+        "wearer_id": {"type": "string", "minLength": 1, "maxLength": 64},
+        "window_s": {"type": "integer", "minimum": 10, "maximum": 300},
+        "data_source": {
+          "type": ["string", "null"],
+          "enum": ["live", "replay", "synthetic", null]
+        },
+        "test_mode": {"type": ["boolean", "null"]},
+        "source_instance_id": {
+          "oneOf": [{"$ref": "#/$defs/Uuid"}, {"type": "null"}]
+        },
+        "latest_observed_at": {
+          "oneOf": [{"$ref": "#/$defs/Timestamp"}, {"type": "null"}]
+        },
+        "age_ms": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "trace_id": {"$ref": "#/$defs/Uuid"}
+      },
+      "required": [
+        "schema_version", "generated_at", "wearer_id", "window_s",
+        "data_source", "test_mode", "source_instance_id",
+        "latest_observed_at", "age_ms", "trace_id"
+      ]
+    },
+    "Error": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "code": {"type": "string", "minLength": 1, "maxLength": 64},
+        "message": {"type": "string", "minLength": 1, "maxLength": 512},
+        "retryable": {"type": "boolean"},
+        "retry_after_ms": {"type": ["integer", "null"], "minimum": 1},
+        "details": {"type": "object"}
+      },
+      "required": ["code", "message", "retryable", "retry_after_ms", "details"]
+    },
+    "HeartRatePoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "observed_at": {"$ref": "#/$defs/Timestamp"},
+        "bpm": {"type": "number", "minimum": 20, "maximum": 240}
+      },
+      "required": ["observed_at", "bpm"]
+    },
+    "MotionPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "observed_at": {"$ref": "#/$defs/Timestamp"},
+        "score": {"type": "number", "minimum": 0, "maximum": 100}
+      },
+      "required": ["observed_at", "score"]
+    },
+    "HeartRateData": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "valid": {"type": "boolean"},
+        "latest_bpm": {"type": ["number", "null"], "minimum": 20, "maximum": 240},
+        "mean_bpm": {"type": ["number", "null"], "minimum": 20, "maximum": 240},
+        "min_bpm": {"type": ["number", "null"], "minimum": 20, "maximum": 240},
+        "max_bpm": {"type": ["number", "null"], "minimum": 20, "maximum": 240},
+        "valid_sample_count": {"type": "integer", "minimum": 0},
+        "total_sample_count": {"type": "integer", "minimum": 0},
+        "coverage_ratio": {"type": "number", "minimum": 0, "maximum": 1},
+        "signal_quality_mean": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "lead_off_seen": {"type": "boolean"},
+        "clipping_seen": {"type": "boolean"},
+        "series": {"type": "array", "maxItems": 300, "items": {"$ref": "#/$defs/HeartRatePoint"}},
+        "unavailable_reason": {"type": ["string", "null"]}
+      },
+      "required": [
+        "valid", "latest_bpm", "mean_bpm", "min_bpm", "max_bpm",
+        "valid_sample_count", "total_sample_count", "coverage_ratio",
+        "signal_quality_mean", "lead_off_seen", "clipping_seen", "series",
+        "unavailable_reason"
+      ]
+    },
+    "HrvData": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "valid": {"type": "boolean"},
+        "estimate_type": {"const": "ultra_short_time_domain"},
+        "rmssd_ms": {"type": ["number", "null"], "minimum": 0},
+        "sdnn_ms": {"type": ["number", "null"], "minimum": 0},
+        "pnn50_percent": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+        "mean_nn_ms": {"type": ["number", "null"], "minimum": 300, "maximum": 2000},
+        "valid_nn_count": {"type": "integer", "minimum": 0},
+        "signal_quality_mean": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "lead_off_seen": {"type": "boolean"},
+        "clipping_seen": {"type": "boolean"},
+        "unavailable_reason": {"type": ["string", "null"]}
+      },
+      "required": [
+        "valid", "estimate_type", "rmssd_ms", "sdnn_ms",
+        "pnn50_percent", "mean_nn_ms", "valid_nn_count",
+        "signal_quality_mean", "lead_off_seen", "clipping_seen",
+        "unavailable_reason"
+      ]
+    },
+    "ImuStateData": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "valid": {"type": "boolean"},
+        "motion_score": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+        "still_ratio_percent": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+        "level": {
+          "type": ["string", "null"],
+          "enum": ["still", "light", "moderate", "vigorous", null]
+        },
+        "coverage_ratio": {"type": "number", "minimum": 0, "maximum": 1},
+        "imu_online": {"type": ["boolean", "null"]},
+        "method": {"const": "mpu6050_accel_gyro_activity_v1"},
+        "series": {"type": "array", "maxItems": 300, "items": {"$ref": "#/$defs/MotionPoint"}},
+        "unavailable_reason": {"type": ["string", "null"]}
+      },
+      "required": [
+        "valid", "motion_score", "still_ratio_percent", "level",
+        "coverage_ratio", "imu_online", "method", "series",
+        "unavailable_reason"
+      ]
+    },
+    "HeartRateEnvelope": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "ok": {"type": "boolean"},
+        "data": {"oneOf": [{"$ref": "#/$defs/HeartRateData"}, {"type": "null"}]},
+        "meta": {"$ref": "#/$defs/Meta"},
+        "error": {"oneOf": [{"$ref": "#/$defs/Error"}, {"type": "null"}]}
+      },
+      "required": ["ok", "data", "meta", "error"]
+    },
+    "HrvEnvelope": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "ok": {"type": "boolean"},
+        "data": {"oneOf": [{"$ref": "#/$defs/HrvData"}, {"type": "null"}]},
+        "meta": {"$ref": "#/$defs/Meta"},
+        "error": {"oneOf": [{"$ref": "#/$defs/Error"}, {"type": "null"}]}
+      },
+      "required": ["ok", "data", "meta", "error"]
+    },
+    "ImuStateEnvelope": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "ok": {"type": "boolean"},
+        "data": {"oneOf": [{"$ref": "#/$defs/ImuStateData"}, {"type": "null"}]},
+        "meta": {"$ref": "#/$defs/Meta"},
+        "error": {"oneOf": [{"$ref": "#/$defs/Error"}, {"type": "null"}]}
+      },
+      "required": ["ok", "data", "meta", "error"]
+    }
+  },
+  "x-contract": {
+    "contract_version": "0.3.0",
+    "mcp_protocol_version": "2025-11-25",
+    "default_window_s": 30,
+    "minimum_window_s": 10,
+    "maximum_window_s": 300,
+    "business_tool_count": 3
+  },
+  "x-mcp-tools": [
+    {
+      "name": "health.get_heart_rate",
+      "title": "Get recent heart rate",
+      "description": "Return bounded derived heart-rate statistics and trend points for the recent window. Does not return ECG samples or R peaks.",
+      "inputSchema": {"$ref": "#/$defs/WindowInput"},
+      "outputSchema": {"$ref": "#/$defs/HeartRateEnvelope"},
+      "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}
+    },
+    {
+      "name": "health.get_hrv",
+      "title": "Get recent HRV",
+      "description": "Return an ultra-short time-domain HRV estimate from valid NN intervals in the recent window, with RMSSD as the primary rule metric.",
+      "inputSchema": {"$ref": "#/$defs/WindowInput"},
+      "outputSchema": {"$ref": "#/$defs/HrvEnvelope"},
+      "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}
+    },
+    {
+      "name": "health.get_imu_state",
+      "title": "Get recent IMU motion state",
+      "description": "Return the local 0-100 motion score, still-time percentage, level, coverage, and bounded trend for the recent window.",
+      "inputSchema": {"$ref": "#/$defs/WindowInput"},
+      "outputSchema": {"$ref": "#/$defs/ImuStateEnvelope"},
+      "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}
+    }
+  ]
+}

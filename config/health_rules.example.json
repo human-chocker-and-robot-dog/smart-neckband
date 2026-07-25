@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "rules": [
+    {
+      "enabled": false,
+      "rule_id": "low_motion_high_hr",
+      "event_type": "cardio.high_hr_low_motion",
+      "summary": "Heart rate stayed above the configured threshold while recent motion remained low.",
+      "severity": "warning",
+      "priority": "urgent",
+      "conditions": [
+        {"metric": "motion_score", "operator": "lte", "threshold": 20},
+        {"metric": "heart_rate_bpm", "operator": "gte", "threshold": 110}
+      ],
+      "for_s": 10,
+      "clear_for_s": 10,
+      "cooldown_s": 300,
+      "minimum_signal_quality": 0.7,
+      "recommended_window_s": 30,
+      "recommended_capabilities": ["health.inspect_recent_metrics"]
+    },
+    {
+      "enabled": false,
+      "rule_id": "low_motion_hrv_threshold",
+      "event_type": "cardio.hrv_threshold_low_motion",
+      "summary": "The configured RMSSD threshold was crossed while recent motion remained low.",
+      "severity": "warning",
+      "priority": "normal",
+      "conditions": [
+        {"metric": "motion_score", "operator": "lte", "threshold": 20},
+        {"metric": "hrv_rmssd_ms", "operator": "gte", "threshold": 100}
+      ],
+      "for_s": 10,
+      "clear_for_s": 10,
+      "cooldown_s": 300,
+      "minimum_signal_quality": 0.7,
+      "recommended_window_s": 30,
+      "recommended_capabilities": ["health.inspect_recent_metrics"]
+    },
+    {
+      "enabled": false,
+      "rule_id": "high_motion_extreme_hr",
+      "event_type": "cardio.extreme_hr_high_motion",
+      "summary": "Heart rate stayed above the configured extreme threshold during high recent motion.",
+      "severity": "critical",
+      "priority": "urgent",
+      "conditions": [
+        {"metric": "motion_score", "operator": "gte", "threshold": 70},
+        {"metric": "heart_rate_bpm", "operator": "gte", "threshold": 200}
+      ],
+      "for_s": 3,
+      "clear_for_s": 10,
+      "cooldown_s": 300,
+      "minimum_signal_quality": 0.7,
+      "recommended_window_s": 30,
+      "recommended_capabilities": ["health.inspect_recent_metrics"]
+    }
+  ]
+}
