@@ -94,8 +94,8 @@ authorized.
 - [x] Merge `feat/health-event-bridge-v0.3`.
 - [x] Complete PC, contract, static, and merge-boundary validation.
 - [ ] Repair the local ESP-IDF Python environment and rerun firmware build/size.
-- [ ] Push main.
-- [ ] Delete obsolete branches and worktrees.
+- [x] Push main.
+- [x] Delete obsolete branches and detach obsolete worktrees.
 
 ## Discoveries
 
@@ -120,7 +120,19 @@ authorized.
   Python environment points to a removed Python 3.12 executable. CMake did not
   reach source compilation. This is an environment blocker, not a firmware
   compiler result, and no firmware file changed in this integration.
+- Main was pushed at `c6664e2`. All merged local branches were removed. The
+  only local named branches are now `main` and the intentionally independent
+  `fix/live-fb892fa-reliability`.
+- All non-main remote branches were deleted; `git ls-remote --heads origin`
+  reports only `refs/heads/main`.
+- The primary and former webhook worktrees are clean and detached at main.
+  The named main worktree remains at `data/worktrees/unified-integration`.
 
 ## Result
 
-Work is in progress.
+The requested branch consolidation is complete. The Health MCP specification
+and Health Event Bridge V0.3 are merged into and pushed on main. Obsolete local
+and remote branches were deleted, while `fix/live-fb892fa-reliability` remains
+independent. The unified PC suite passed with 204 tests. Firmware build/size
+remain unverified because the local ESP-IDF Python environment is broken; no
+firmware source changed in this consolidation.
