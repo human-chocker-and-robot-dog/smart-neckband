@@ -198,7 +198,7 @@ authorized by this plan.
 - [x] Implement motion scoring, alert rules, and V0.3 health Webhooks.
 - [x] Complete the full PC suite, contract checks, HTTP client integration,
   and bounded soak validation.
-- [ ] Inspect the final diff, commit the intended feature files, and push.
+- [x] Inspect the final diff, commit the intended feature files, and push.
 
 ## Discoveries
 
@@ -233,6 +233,9 @@ authorized by this plan.
 - The user changed the Health MCP soak policy from 30 minutes to a maximum of
   five minutes for future validation; the wrapper default and current
   documentation now enforce that bound.
+- The intended 48-file feature boundary was committed as `5c74673` and pushed
+  to `origin/feat/health-event-bridge-v0.3`. The user-owned HANDOFF deletion
+  and two untracked HANDOFF files were excluded and remain untouched.
 
 ## Result
 
