@@ -12,6 +12,9 @@ health.get_hrv
 health.get_imu_state
 ```
 
+Agent / Gateway 的直接接入说明、SDK 示例和错误处理见
+[`health-mcp-agent-call-guide.md`](health-mcp-agent-call-guide.md)。
+
 No MCP tool exposes raw ECG, cleaned ECG, R peaks, raw IMU arrays, event
 history, deletion, threshold configuration, secrets, Webhook bodies, diagnosis,
 or robot-motion authorization.
