@@ -351,6 +351,35 @@ class WebhookTab:
         )
         self._refresh_records()
 
+    def enqueue_pc_asr_text(self, text: str, *, instruction_id: str) -> bool:
+        """Persist PC-generated final ASR text in the ordinary instruction queue."""
+
+        try:
+            record = self.dispatcher.enqueue_text(
+                text,
+                instruction_id=instruction_id,
+            )
+        except Exception as exc:
+            self._queue_debug(
+                "PC ASR final 持久化失败："
+                f"{type(exc).__name__}: {exc}"
+            )
+            return False
+
+        def update_ui() -> None:
+            self.last_instruction_label.setText(
+                f"instruction_id：{record.instruction_id}"
+            )
+            self.voice_transcript_label.setText(f"最终文本：{record.text}")
+            self._append_debug(
+                "PC ASR final 已写入 SQLite，等待 Gateway 提交："
+                f"instruction_id={record.instruction_id}"
+            )
+            self._refresh_records()
+
+        self.post_gui(update_ui)
+        return True
+
     def enqueue_voice_text(self, transcript: VoiceTranscript) -> bool:
         """Persist a final device transcript before the BLE reader emits ACK."""
 

@@ -233,7 +233,7 @@ class MainWindow:
         layout = QtWidgets.QVBoxLayout(live_tab)
         toolbar = QtWidgets.QHBoxLayout()
         self.transport_combo = QtWidgets.QComboBox()
-        self.transport_combo.addItem("串口 / Bluetooth Classic SPP", "serial")
+        self.transport_combo.addItem("USB 串口（仅台架）", "serial")
         self.transport_combo.addItem("ESP32-C3 BLE", "ble")
         self.port_combo = QtWidgets.QComboBox()
         self.refresh_button = QtWidgets.QPushButton("刷新设备")
@@ -740,19 +740,7 @@ class MainWindow:
                 raw_log_path=raw_path,
                 raw_chunk_callback=self._record_raw_chunk,
             )
-            selected = next(
-                (
-                    port
-                    for port in list_serial_ports()
-                    if port.device == endpoint
-                ),
-                None,
-            )
-            self.reader.health_transport = (
-                "spp"
-                if selected is not None and selected.is_bluetooth_candidate
-                else "uart"
-            )
+            self.reader.health_transport = "uart"
         self.reader.start()
         self.connection_label.setText(f"正在连接 {endpoint}……")
 
@@ -1026,7 +1014,7 @@ class MainWindow:
             connection_type=(
                 "Bluetooth LE GATT"
                 if self.transport_combo.currentData() == "ble"
-                else "Bluetooth Classic SPP / serial"
+                else "USB serial bench connection"
             ),
         )
         delay_seconds = int(self.delay_combo.currentData())

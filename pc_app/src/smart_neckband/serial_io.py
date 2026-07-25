@@ -229,7 +229,7 @@ class SerialPacketReader:
         try:
             import serial
         except ImportError as exc:  # pragma: no cover - depends on optional pyserial
-            self._last_error = RuntimeError("pyserial is required for SPP virtual COM reading")
+            self._last_error = RuntimeError("pyserial is required for USB serial reading")
             self._last_error.__cause__ = exc
             return
 

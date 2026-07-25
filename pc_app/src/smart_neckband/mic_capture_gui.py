@@ -9,6 +9,7 @@ from threading import Thread
 
 from .mic_capture_debug import DebugLogger
 from .mic_capture_ble import MicBleClientThread, scan_mic_devices
+from .mic_webhook import mic_asr_instruction_id, new_connection_instance_id
 from .mic_capture_protocol import (
     AudioFrame,
     DeviceStatusFrame,
@@ -31,12 +32,14 @@ from .volc_asr_client import (
     load_volc_asr_settings,
     save_volc_asr_settings,
 )
+from .webhook_ui import WebhookTab
 
 
 def main() -> int:
     try:
         import numpy as np
         import pyqtgraph as pg
+        from PySide6 import QtCore, QtWidgets
         from PySide6.QtCore import QObject, QTimer, Signal
         from PySide6.QtWidgets import (
             QApplication,
@@ -70,6 +73,7 @@ def main() -> int:
         scan_finished = Signal(int, object, object)
         asr_event = Signal(object)
         vad_event = Signal(object)
+        gui_call = Signal(object)
 
     class Window(QMainWindow):
         def __init__(self) -> None:
@@ -83,6 +87,7 @@ def main() -> int:
             self.bridge.scan_finished.connect(self.finish_scan)
             self.bridge.asr_event.connect(self.on_asr_event)
             self.bridge.vad_event.connect(self.on_vad_event)
+            self.bridge.gui_call.connect(lambda callback: callback())
             self.worker: MicBleClientThread | None = None
             self.asr_worker: VolcAsrClientThread | None = None
             self.vad_worker: AudioThresholdVadThread | None = None
@@ -97,6 +102,10 @@ def main() -> int:
             self.calibration_peak_values: list[int] = []
             self.calibration_samples = 0
             self.calibration_kind: str | None = None
+            self.mic_device_identity: str | None = None
+            self.mic_connection_instance_id: str | None = None
+            self.mic_instruction_id: str | None = None
+            self.webhook_receiving = False
 
             root = QWidget()
             layout = QVBoxLayout(root)
@@ -284,6 +293,8 @@ def main() -> int:
             self.shift = QSpinBox()
             self.shift.setRange(10, 20)
             self.shift.setValue(16)
+            self.save_wake_wav = QCheckBox("保存唤醒 WAV（诊断）")
+            self.save_wake_wav.setChecked(False)
             self.start_button = QPushButton("等待 Hi ESP 并识别")
             self.stop_button = QPushButton("停止并等待 final")
             self.start_button.setEnabled(False)
@@ -292,6 +303,7 @@ def main() -> int:
             controls.addWidget(self.encoding)
             controls.addWidget(QLabel("I2S 右移"))
             controls.addWidget(self.shift)
+            controls.addWidget(self.save_wake_wav)
             controls.addWidget(self.start_button)
             controls.addWidget(self.stop_button)
             asr_layout.addLayout(controls)
@@ -344,6 +356,12 @@ def main() -> int:
 
             tabs.addTab(asr_tab, "ASR")
             tabs.addTab(diagnostic_tab, "诊断")
+            self.webhook_tab = WebhookTab(
+                QtCore=QtCore,
+                QtWidgets=QtWidgets,
+                post_gui=self.bridge.gui_call.emit,
+            )
+            tabs.addTab(self.webhook_tab.widget, "Agent Webhook")
             layout.addWidget(tabs, 1)
             self.setCentralWidget(root)
 
@@ -419,6 +437,9 @@ def main() -> int:
             if not address:
                 QMessageBox.information(self, "未选择设备", "请先扫描并选择 CollarMic 设备。")
                 return
+            self.mic_device_identity = str(address)
+            self.mic_connection_instance_id = new_connection_instance_id()
+            self.mic_instruction_id = None
             self.worker = MicBleClientThread(
                 str(address),
                 on_frame=self.bridge.frame.emit,
@@ -446,7 +467,12 @@ def main() -> int:
             )
             self.connect_button.setText("断开" if connected else "连接")
             self.connect_button.setEnabled(True)
+            if connected:
+                self.webhook_receiving = False
+                self.webhook_tab.set_receiving(False)
             if state == "disconnected":
+                self.webhook_receiving = False
+                self.webhook_tab.set_receiving(False)
                 self.worker = None
                 self.finish_recording()
 
@@ -474,7 +500,10 @@ def main() -> int:
                 mode="wake",
                 log_path=str(self.debug_log_path),
             )
-            if not self.begin_recording("wake"):
+            if not self.begin_recording(
+                "wake",
+                save_wav=self.save_wake_wav.isChecked(),
+            ):
                 return
             self.worker.send(f"SHIFT {self.shift.value()}")
             self.worker.send(f"ARM {self.encoding.currentData()}")
@@ -489,9 +518,12 @@ def main() -> int:
                 "VAD 等待唤醒" if self.vad_enabled.isChecked() else "VAD 已关闭"
             )
             self.asr_final_text.clear()
-            self.file_label.setText(
-                f"等待设备确认；唤醒前不会显示波形，唤醒后写入 {self.path.text()}"
-            )
+            if self.recorder is not None:
+                self.file_label.setText(
+                    f"等待设备确认；唤醒前不会显示波形，唤醒后写入 {self.path.text()}"
+                )
+            else:
+                self.file_label.setText("等待设备确认；正常唤醒不会保存 WAV")
             self.arm_timer.start(3000)
 
         def start_wave_test(self) -> None:
@@ -554,14 +586,16 @@ def main() -> int:
                 target_ms=int(self.vad_calibration_ms.value()),
             )
 
-        def begin_recording(self, mode: str) -> bool:
+        def begin_recording(self, mode: str, *, save_wav: bool = True) -> bool:
             if self.worker is None:
                 return False
-            try:
-                self.recorder = PcmWaveRecorder(self.path.text())
-            except Exception as exc:
-                QMessageBox.critical(self, "无法创建 WAV", str(exc))
-                return False
+            self.recorder = None
+            if save_wav:
+                try:
+                    self.recorder = PcmWaveRecorder(self.path.text())
+                except Exception as exc:
+                    QMessageBox.critical(self, "无法创建 WAV", str(exc))
+                    return False
             self.capture_mode = mode
             self.samples.clear()
             self.curve.setData([])
@@ -628,11 +662,14 @@ def main() -> int:
 
         def finish_recording(self) -> None:
             self.arm_timer.stop()
+            finished_mode = self.capture_mode
             if self.recorder is not None:
                 count = self.recorder.sample_count
                 self.recorder.close()
                 self.file_label.setText(f"已保存 {count} 个样本：{self.path.text()}")
                 self.recorder = None
+            elif finished_mode == "wake":
+                self.file_label.setText("本次唤醒未保存 WAV")
             self.capture_mode = None
             self.calibration_kind = None
             self.stop_button.setEnabled(False)
@@ -662,6 +699,7 @@ def main() -> int:
                 self.asr_end_window_ms,
                 self.asr_force_speech_ms,
                 self.save_asr_settings_button,
+                self.save_wake_wav,
                 self.vad_enabled,
                 self.vad_analysis_window_ms,
                 self.vad_queue_depth,
@@ -824,6 +862,9 @@ def main() -> int:
 
         def on_frame(self, frame: object, stats: object) -> None:
             self.latest_stats = stats
+            if not self.webhook_receiving:
+                self.webhook_receiving = True
+                self.webhook_tab.set_receiving(True)
             if isinstance(frame, AudioFrame):
                 self.samples.extend(frame.samples)
                 if self.recorder is not None:
@@ -856,17 +897,34 @@ def main() -> int:
             elif isinstance(frame, WakeEventFrame):
                 self.arm_timer.stop()
                 self.state_label.setText("Hi ESP 已唤醒，正在录音")
+                if (
+                    self.mic_device_identity is not None
+                    and self.mic_connection_instance_id is not None
+                ):
+                    self.mic_instruction_id = mic_asr_instruction_id(
+                        device_identity=self.mic_device_identity,
+                        connection_instance_id=self.mic_connection_instance_id,
+                        detected_sample_index=frame.detected_sample_index,
+                        wake_count=frame.wake_count,
+                    )
+                else:
+                    self.mic_instruction_id = None
                 self.debug_logger.event(
                     "wake.detected",
                     wake_count=frame.wake_count,
                     detected_sample_index=frame.detected_sample_index,
                     word_index=frame.word_index,
+                    instruction_id=self.mic_instruction_id,
                 )
                 self.start_asr_session()
                 self.start_vad_session()
                 if self.recorder is not None:
                     self.file_label.setText(
                         f"第 {frame.wake_count} 次唤醒，正在写入 {self.path.text()}"
+                    )
+                else:
+                    self.file_label.setText(
+                        f"第 {frame.wake_count} 次唤醒，未保存 WAV"
                     )
 
             if self.latest_stats is not None:
@@ -958,9 +1016,28 @@ def main() -> int:
             elif event.kind == "partial":
                 self.asr_partial_label.setText(f"Partial：{event.text}")
             elif event.kind == "final":
-                self.asr_status_label.setText("ASR final 已返回")
                 self.asr_partial_label.setText("Partial：--")
                 self.asr_final_text.appendPlainText(event.text)
+                if self.mic_instruction_id is None:
+                    self.asr_status_label.setText("ASR final 已返回；缺少唤醒会话 ID，未提交")
+                    self.debug_logger.event(
+                        "webhook.asr_final_skipped",
+                        reason="missing_wake_session",
+                    )
+                else:
+                    persisted = self.webhook_tab.enqueue_pc_asr_text(
+                        event.text,
+                        instruction_id=self.mic_instruction_id,
+                    )
+                    self.asr_status_label.setText(
+                        "ASR final 已写入 Agent 队列"
+                        if persisted
+                        else "ASR final 持久化失败，未提交 Agent"
+                    )
+                    self.debug_logger.event(
+                        "webhook.asr_final_persisted" if persisted else "webhook.asr_final_failed",
+                        instruction_id=self.mic_instruction_id,
+                    )
             elif event.kind == "error":
                 self.asr_status_label.setText(f"ASR 错误：{event.detail}")
             elif event.kind == "closed":
@@ -980,7 +1057,7 @@ def main() -> int:
                 self.vad_status_label.setText(f"检测到开始说话：{event.detail}")
             elif event.kind == "speech_end":
                 self.vad_status_label.setText(f"检测到说话结束：{event.detail}")
-                if self.capture_mode == "wake" and self.recorder is not None:
+                if self.capture_mode == "wake":
                     self.stop_capture()
             elif event.kind == "error":
                 self.vad_status_label.setText(f"VAD 错误：{event.detail}")
@@ -999,6 +1076,7 @@ def main() -> int:
             if self.worker is not None:
                 self.worker.disconnect()
                 self.worker.join(timeout=2.0)
+            self.webhook_tab.close()
             event.accept()
 
     app = QApplication(sys.argv)

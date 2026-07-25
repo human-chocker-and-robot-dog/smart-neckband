@@ -1,5 +1,9 @@
 # Smart Collar Health MCP Handoff
 
+> Integration note (2026-07-25): the active hardware baseline is now ESP32-C3
+> only. References to classic ESP32/SPP below describe branch history or frozen
+> contract compatibility, not an active firmware target.
+
 Last updated: 2026-07-25.
 
 This handoff is for the upcoming large integration pass. Its purpose is to let

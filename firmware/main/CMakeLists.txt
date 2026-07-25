@@ -1,12 +1,5 @@
-set(transport_source "spp_transport.c")
-set(transport_requirements bt)
-set(voice_sources "")
-
-if(IDF_TARGET STREQUAL "esp32c3")
-    set(transport_source "ble_transport.c")
-    set(transport_requirements ble_uart)
-elseif(NOT IDF_TARGET STREQUAL "esp32")
-    message(FATAL_ERROR "Unsupported smart-neckband target: ${IDF_TARGET}")
+if(NOT IDF_TARGET STREQUAL "esp32c3")
+    message(FATAL_ERROR "Smart Neckband supports only IDF_TARGET=esp32c3")
 endif()
 
 set(main_sources
@@ -17,12 +10,11 @@ set(main_sources
     "protocol_v0.c"
     "sample_ring.c"
     "sensors.c"
-    ${voice_sources}
-    "${transport_source}"
+    "ble_transport.c"
 )
 
 set(main_requirements
-    ${transport_requirements}
+    ble_uart
     neckband_interfaces
     esp_adc
     esp_driver_gptimer
@@ -50,9 +42,6 @@ idf_component_register(
 )
 
 if(SMART_NECKBAND_VOICE)
-    if(NOT IDF_TARGET STREQUAL "esp32c3")
-        message(FATAL_ERROR "SMART_NECKBAND_VOICE is supported only on esp32c3")
-    endif()
     target_compile_definitions(${COMPONENT_LIB} PRIVATE SMART_NECKBAND_VOICE=1)
 else()
     target_compile_definitions(${COMPONENT_LIB} PRIVATE SMART_NECKBAND_VOICE=0)

@@ -1,24 +1,24 @@
-# ESP32-C3 SuperMini 移植接线与核验
+# ESP32-C3 SuperMini 接线与核验
 
 ## 当前结论
 
-固件已经支持经典 ESP32 和 ESP32-C3 两个独立构建目标，并已成功烧录到用户的 ESP32-C3 SuperMini。芯片、4 MB Flash 和原生 USB 已由烧录工具确认；下面的 C3 外设引脚仍是第一版候选映射，尚未完成丝印、板载负载和传感器台架核验，因此还不是最终量产接线表。
+ESP32-C3 SuperMini 是仓库唯一活动硬件目标。芯片、4 MB Flash 和原生 USB 已由烧录工具确认；下面的外设引脚仍需完成丝印、板载负载和传感器台架核验，因此还不是最终量产接线表。
 
-## 旧板与新板对照
+## 当前接线
 
-| 外设信号 | 经典 ESP32 / ESP-WROOM-32 | ESP32-C3 SuperMini 候选 | 迁移操作 |
-|---|---|---|---|
-| AD8232 `OUTPUT` | GPIO34 / ADC1_CH6 | GPIO0 / ADC1_CH0 | 从 34 改接 0 |
-| AD8232 `LO-` | GPIO25 | GPIO3 | 从 25 改接 3 |
-| AD8232 `LO+` | GPIO26 | GPIO10 | 从 26 改接 10 |
-| I2C `SDA` | GPIO21 | GPIO6 | 从 21 改接 6 |
-| I2C `SCL` | GPIO22 | GPIO7 | 从 22 改接 7 |
-| INMP441 `SCK/WS/SD` | 未配置 | GPIO4 / GPIO5 / GPIO20 | 仅 Voice 构建；先确认 GPIO20 引出 |
-| AD8232 `SDN` | 3.3 V | 3.3 V | 不变，V0 不由 MCU 控制 |
-| AD8232 / MPU6050 / OLED 电源 | 3.3 V、GND | 3V3、GND | 共地；GPIO 禁止接 5 V |
-| 无线链路 | Bluetooth Classic SPP | BLE GATT | PC 端改选 BLE |
+| 外设信号 | ESP32-C3 SuperMini | 约束 |
+|---|---|---|
+| AD8232 `OUTPUT` | GPIO0 / ADC1_CH0 | ECG 主链只用 ADC1 |
+| AD8232 `LO-` | GPIO3 | 数字输入 |
+| AD8232 `LO+` | GPIO10 | 数字输入 |
+| I2C `SDA` | GPIO6 | MPU6050 与 OLED 共用 |
+| I2C `SCL` | GPIO7 | MPU6050 与 OLED 共用 |
+| INMP441 `SCK/WS/SD` | GPIO4 / GPIO5 / GPIO20 | 先确认具体 SuperMini 引出 GPIO20 |
+| AD8232 `SDN` | 3.3 V | V0 不由 MCU 控制 |
+| 外设电源 | 3V3、GND | 共地；GPIO 禁止接 5 V |
+| 无线链路 | 加密 BLE GATT | 不使用 Bluetooth Classic SPP |
 
-对应固件定义集中在 [board_esp32_classic.h](../../firmware/main/board_esp32_classic.h) 和 [board_esp32c3_supermini.h](../../firmware/main/board_esp32c3_supermini.h)，业务代码不再散落硬编码 GPIO。
+对应固件定义集中在 [board_esp32c3_supermini.h](../../firmware/components/neckband_interfaces/include/board_esp32c3_supermini.h)，业务代码不得散落硬编码 GPIO。
 
 ## C3 接线顺序
 
@@ -95,7 +95,7 @@ esptool.py --chip esp32c3 -p COM21 flash_id
 .\tools\project.ps1 size -Target esp32c3
 ```
 
-先运行 `.\tools\project.ps1 pc-setup` 安装项目以及包含 Bleak 的 GUI/串口依赖。PC GUI 中选择 `BLE`，扫描 `CollarC3-XXXX` 后连接；上位机把首次配对作为连接过程的一部分完成，使用 LE Secure Connections Just Works 并保存绑定，不需要六位配对码，以后可复用绑定自动连接。不要优先在 Windows“添加设备”页面手工配对；如果那里残留旧的 `ESP32` 记录，应先在 Windows 中移除旧设备，再由上位机连接。经典 ESP32 仍可选择串口，通过 Windows 的 SPP COM 口工作。仓库目前仍默认 `esp32`；只有完成实板、传感器和 BLE 连续流验收后才切换默认目标。
+先运行 `.\tools\project.ps1 pc-setup` 安装项目以及包含 Bleak 的 GUI/串口依赖。PC GUI 中选择 `BLE`，扫描 `CollarC3-XXXX` 后连接；上位机把首次配对作为连接过程的一部分完成，使用 LE Secure Connections Just Works 并保存绑定，不需要六位配对码，以后可复用绑定自动连接。不要优先在 Windows“添加设备”页面手工配对；如果那里残留旧设备记录，应先在 Windows 中移除，再由上位机连接。USB 串口只用于无人体电极的电子台架调试。仓库默认且唯一固件目标为 `esp32c3`。
 
 Just Works 配对仍会加密 GATT 链路并保存 Bond，但首次配对不具备数字比较/口令带来的 MITM 身份校验。仓库内的 C3 BLE UART 适配组件因此让 RX 和 TX CCCD 只要求 `ENC`，不要求 Just Works 无法提供的 `AUTHEN`；它没有把链路降级为明文。后续可在 OLED 可用后改成显示动态配对码的认证模式。
 
@@ -119,7 +119,6 @@ Just Works 配对仍会加密 GATT 链路并保存 Bond，但首次配对不具�
 | 项目 | 状态 |
 |---|---|
 | ESP32-C3 编译与尺寸检查 | 已通过 |
-| 经典 ESP32 回归编译与尺寸检查 | 已通过 |
 | PC BLE 字节流/分段解析测试 | 已通过自动化测试 |
 | 芯片型号、Flash、USB | 已由 COM21 烧录握手确认 |
 | Windows 自动配对与短时 BLE 闭环 | 已通过：`CollarC3-2E4A` 可连接、收包、断开并恢复广播；CRC 错误 0 |

@@ -25,7 +25,7 @@ param(
     )]
     [string]$Action = "build",
 
-    [ValidateSet("esp32", "esp32c3")]
+    [ValidateSet("esp32c3")]
     [string]$Target,
 
     [switch]$Voice,
@@ -55,11 +55,8 @@ if (-not (Test-Path -LiteralPath $LocalConfig)) {
 if ([string]::IsNullOrWhiteSpace($Target)) {
     $Target = $ExpectedTarget
 }
-if ($Target -notin @("esp32", "esp32c3")) {
-    throw "Unsupported target '$Target'. Expected esp32 or esp32c3."
-}
-if ($Voice -and $Target -ne "esp32c3") {
-    throw "-Voice is supported only with -Target esp32c3."
+if ($Target -ne "esp32c3") {
+    throw "Unsupported target '$Target'. Expected esp32c3."
 }
 if ($Action -in @("voice-provision", "voice-model-provision") -and -not $Voice) {
     throw "$Action requires -Voice."
@@ -91,6 +88,24 @@ if ($Voice) {
 
 function Invoke-Idf {
     param([Parameter(Mandatory)][string[]]$Arguments)
+
+    if (-not [string]::IsNullOrWhiteSpace($env:IDF_PATH) -and
+        -not [string]::IsNullOrWhiteSpace($env:IDF_PYTHON_ENV_PATH)) {
+        $idfPython = Join-Path $env:IDF_PYTHON_ENV_PATH "Scripts\python.exe"
+        $idfScript = Join-Path $env:IDF_PATH "tools\idf.py"
+        if ((Test-Path -LiteralPath $idfPython) -and
+            (Test-Path -LiteralPath $idfScript)) {
+            $ninjaPath = Initialize-LocalIdfToolEnvironment
+            $Arguments = @(
+                "-DCMAKE_MAKE_PROGRAM=$ninjaPath"
+            ) + $Arguments
+            & $idfPython $idfScript -C $FirmwareDir @Arguments
+            if ($LASTEXITCODE -ne 0) {
+                throw "idf.py failed with exit code $LASTEXITCODE"
+            }
+            return
+        }
+    }
 
     $idf = Get-Command idf.py -ErrorAction SilentlyContinue
     if ($null -ne $idf) {
@@ -162,16 +177,8 @@ function Initialize-LocalIdfToolEnvironment {
         Add-PathPrefix -PathPrefix (Split-Path -Parent $ccache.FullName)
     }
 
-    $compilerRoot = if ($Target -eq "esp32c3") {
-        "C:\Espressif\tools\riscv32-esp-elf"
-    } else {
-        "C:\Espressif\tools\xtensa-esp-elf"
-    }
-    $compilerName = if ($Target -eq "esp32c3") {
-        "riscv32-esp-elf-gcc.exe"
-    } else {
-        "xtensa-esp32-elf-gcc.exe"
-    }
+    $compilerRoot = "C:\Espressif\tools\riscv32-esp-elf"
+    $compilerName = "riscv32-esp-elf-gcc.exe"
     $targetGcc = Get-ChildItem -LiteralPath $compilerRoot -Recurse -Filter $compilerName -ErrorAction SilentlyContinue |
         Sort-Object FullName -Descending |
         Select-Object -First 1
@@ -187,11 +194,7 @@ function Initialize-LocalIdfToolEnvironment {
     }
     Add-PathPrefix -PathPrefix (Split-Path -Parent $ninja.FullName)
 
-    $romElfName = if ($Target -eq "esp32c3") {
-        "esp32c3_rev0_rom.elf"
-    } else {
-        "esp32_rev0_rom.elf"
-    }
+    $romElfName = "esp32c3_rev0_rom.elf"
     $romElf = Get-ChildItem -LiteralPath "C:\Espressif\tools\esp-rom-elfs" -Recurse -Filter $romElfName -ErrorAction SilentlyContinue |
         Sort-Object FullName -Descending |
         Select-Object -First 1

@@ -7,12 +7,10 @@
 
 #define BOARD_FIRMWARE_VERSION "0.1.0"
 
-#if CONFIG_IDF_TARGET_ESP32C3
-#include "board_esp32c3_supermini.h"
-#elif CONFIG_IDF_TARGET_ESP32
-#include "board_esp32_classic.h"
+#if !CONFIG_IDF_TARGET_ESP32C3
+#error "AI Smart Collar supports only the esp32c3 target"
 #else
-#error "AI Smart Collar supports only esp32 and esp32c3 targets"
+#include "board_esp32c3_supermini.h"
 #endif
 
 #define BOARD_FLASH_SIZE_MB 4U

@@ -33,7 +33,7 @@
 
 | 能力 | 当前事实 | 实现锚点 |
 |---|---|---|
-| 固件实时协议 | 二进制 V0；UART、SPP、BLE 共用同一字节协议 | `docs/protocol/v0.md` |
+| 固件实时协议 | 二进制 V0；当前 ESP32-C3 使用 USB UART 台架链路与 BLE，历史 SPP 名称仅作合同兼容 | `docs/protocol/v0.md` |
 | ECG | 500 Hz，原始 ADC counts，不在固件过滤 | `firmware/main/protocol_v0.*`、`firmware/main/sensors.*` |
 | IMU | 50 Hz，原始六轴数据 | `firmware/main/sensors.*` |
 | 设备状态 | lead-off、clipping、采样/队列/传输/I2C 计数 | `DeviceStatusPayload` |
@@ -60,7 +60,7 @@
 ### 1.3 P0 最终边界
 
 ```text
-ESP32 / ESP32-C3
+ESP32-C3
   │  固件二进制 V0：raw ECG + raw IMU + device status
   ▼
 PC PacketParser / PcDataStores

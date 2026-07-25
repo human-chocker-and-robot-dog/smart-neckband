@@ -7,7 +7,7 @@ The Windows PC application has a dedicated **Webhook** tab that acts as both:
 1. an input client for `POST /v1/instructions`; and
 2. a reply receiver for `agent.reply.completed`.
 
-This is PC-side HTTP integration. The ESP32-C3 continues to send the unchanged V0 ECG, IMU, and device-status byte stream over BLE. No Webhook data is placed in the firmware stream.
+This is PC-side HTTP integration. The ESP32-C3 sends the unchanged V0 ECG, IMU, and device-status byte stream over BLE. No Webhook data is placed in the firmware stream.
 
 ## Data flow
 
@@ -18,6 +18,8 @@ ESP32-C3 -- BLE V0 packets --> PC connection state
 
 PC Webhook tab -- POST /v1/instructions --> Agent Webhook Gateway
 PC reply server <-- agent.reply.completed -- Agent Webhook Gateway
+
+Hi ESP -> BLE MIC1 audio -> PC ASR final -> same Webhook SQLite/dispatcher
 ```
 
 The optional connection gate only enables ordinary instruction submission after the PC application is actually receiving valid packets. The callback listener remains independent of the device connection so delayed Agent replies are not lost.
@@ -82,6 +84,8 @@ For every instruction it:
 6. treats HTTP `400`, `404`, `409`, and other contract errors as terminal until the operator explicitly retries.
 
 An interrupted `submitting` row is recovered after PC restart and retried with the same ID and text. This is safe because the Gateway contract de-duplicates an identical instruction ID and text.
+
+The `smart-neckband-mic` application embeds this same Webhook tab. A PC ASR final uses a deterministic `mic-<32-lowercase-hex>` ID derived from the BLE device identity, one connection instance, the wake sample index, and wake count. The final text is written to `webhook_client.sqlite3` before the dispatcher is notified. A repeated identical final is idempotent; reusing the same ID for different text is a local conflict and is not submitted with a replacement ID.
 
 ## Reply receiver behavior
 

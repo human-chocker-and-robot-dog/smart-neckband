@@ -171,7 +171,7 @@ class ExperimentSessionRecorder:
         electrode_type: str,
         notes: str,
         port: str,
-        connection_type: str = "Bluetooth Classic SPP",
+        connection_type: str = "USB serial bench connection",
         created_at: datetime | None = None,
     ) -> None:
         created_at = created_at or datetime.now(timezone.utc).astimezone()

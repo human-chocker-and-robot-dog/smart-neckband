@@ -1,17 +1,18 @@
 # First Codex implementation prompt
 
 ```text
-Start from the repository root. Read AGENTS.md, PLANS.md, CONTRIBUTING.md, docs/POWERSHELL_SKILL_LOCALIZATION.md, and docs/V0_Codex_ESP-IDF_Classic_ESP32_Software_Plan.md before changing files.
+Start from the repository root. Read AGENTS.md, PLANS.md, CONTRIBUTING.md, docs/POWERSHELL_SKILL_LOCALIZATION.md, and docs/hardware/esp32c3-supermini-wiring.md before changing files.
 
 Before running any Windows or PowerShell command, invoke $powershell-command-runner from .agents/skills/powershell-command-runner and follow its original SKILL.md and core execution contract. If the Skill is not exposed by the UI, use the AGENTS.md fallback to read the same checked-in files. Do not install another copy and do not rewrite the helper scripts.
 
 Confirmed hardware:
-- classic ESP32, ESP-WROOM-32, dual core, revision v3.0
-- ESP-IDF target esp32
+- ESP32-C3 SuperMini, single-core RISC-V, observed revision v1.1
+- ESP-IDF target esp32c3 only
 - physical Flash 4 MB
-- ECG input GPIO34 / ADC1_CH6
-- LO- GPIO25, LO+ GPIO26
-- I2C SDA GPIO21, SCL GPIO22
+- ECG input GPIO0 / ADC1_CH0
+- LO- GPIO3, LO+ GPIO10
+- I2C SDA GPIO6, SCL GPIO7
+- INMP441 BCLK GPIO4, WS GPIO5, SD GPIO20
 
 Hello World already runs. Do not repeat environment installation.
 
@@ -30,5 +31,5 @@ For this first implementation round:
 12. Do not flash, erase, commit, push, or perform a body-connected test.
 13. Report files changed, commands run, test results, warnings, and unverified hardware assumptions.
 
-Do not use ADC continuous mode at 500 Hz. The later ECG sampler will use GPTimer to notify a high-priority task, which calls adc_oneshot_read() on ADC1.
+Do not use ADC continuous mode at 500 Hz. The ECG sampler uses GPTimer to notify a high-priority task, which calls adc_oneshot_read() on ADC1.
 ```

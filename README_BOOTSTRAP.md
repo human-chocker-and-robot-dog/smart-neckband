@@ -1,6 +1,6 @@
 # AI Smart Collar Codex Bootstrap v4
 
-This bundle supports both the classic ESP32 / ESP-WROOM-32 board and an ESP32-C3 SuperMini migration profile. The classic ESP32 remains the default until the C3 hardware gates pass. The repository embeds the user's complete upstream `powershell-command-runner` Skill without replacing its `core/`.
+This bundle targets the ESP32-C3 SuperMini only. The retired classic ESP32 / ESP-WROOM-32 build and Bluetooth Classic SPP backend are no longer active. The repository embeds the user's complete upstream `powershell-command-runner` Skill without replacing its `core/`.
 
 ## Copy into the repository
 
@@ -31,25 +31,25 @@ Only one normalization was applied: the UTF-8 BOM before the first `---` in `SKI
 
 ## Hardware/software baseline
 
-- classic ESP32 / ESP-WROOM-32, dual core, revision v3.0;
-- target `esp32`;
+- ESP32-C3 SuperMini, single-core RISC-V, observed revision v1.1;
+- target `esp32c3`;
 - physical Flash 4 MB;
-- ECG input GPIO34 / ADC1_CH6;
-- LO- GPIO25, LO+ GPIO26;
-- I2C SDA GPIO21, SCL GPIO22;
+- ECG input GPIO0 / ADC1_CH0;
+- LO- GPIO3, LO+ GPIO10;
+- I2C SDA GPIO6, SCL GPIO7;
+- INMP441 BCLK GPIO4, WS GPIO5, SD GPIO20;
 - ECG 500 Hz via GPTimer notification plus ADC oneshot task;
-- classic ESP32 uses Bluetooth Classic SPP; the C3 profile uses BLE GATT;
+- encrypted BLE GATT is the production wireless transport;
+- native USB serial is reserved for electronics-only bench debugging;
 - raw ECG remains unfiltered in the primary firmware stream.
 
-The provisional ESP32-C3 profile uses GPIO0 / ADC1_CH0 for ECG, GPIO3 and GPIO10 for lead-off, GPIO6/7 for I2C, and BLE GATT instead of Classic SPP. See [the wiring and verification guide](docs/hardware/esp32c3-supermini-wiring.md) before connecting a clone board.
+See [the wiring and verification guide](docs/hardware/esp32c3-supermini-wiring.md) before connecting sensors to a specific SuperMini clone.
 
-Select a target explicitly when validating the migration:
+Validate the only supported target explicitly:
 
 ```powershell
 .\tools\project.ps1 build -Target esp32c3
 .\tools\project.ps1 size -Target esp32c3
-.\tools\project.ps1 build -Target esp32
-.\tools\project.ps1 size -Target esp32
 ```
 
 ## GitHub remote
@@ -68,10 +68,9 @@ The PC GUI includes a **Webhook** tab for submitting durable user-text instructi
 
 See [the PC Agent Webhook guide](docs/pc-agent-webhook.md) for same-PC setup, remote-LAN setup, callback configuration, retry behavior, security limits, and troubleshooting.
 
-## Optional ESP32-C3 Voice path
+## ESP32-C3 Voice path
 
-The optional Voice profile adds an INMP441, exact local WakeNet9s wake word,
-Volcengine streaming ASR, and reliable BLE final-text delivery into the same
-durable Agent Webhook path. It is gated until the official custom
-“主人主人” model is supplied and reviewed. See
+The current microphone path uses INMP441 audio, the official local `Hi ESP`
+WakeNet model, BLE MIC1 audio, PC-side Volcengine streaming ASR and threshold
+VAD, then the same durable Agent Webhook queue used by manual text. See
 [the Voice setup and safety guide](docs/voice-wake-asr.md).

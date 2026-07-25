@@ -1,5 +1,9 @@
 # Smart Neckband Webhook Integration Handoff
 
+> Integration note (2026-07-25): ESP32-C3 is now the only active hardware
+> target. Classic ESP32/SPP references below are historical or contract
+> compatibility context.
+
 Last verified against repository history on 2026-07-25.
 
 ## 1. Purpose
