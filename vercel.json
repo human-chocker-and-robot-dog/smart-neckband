@@ -25,6 +25,10 @@
     {
       "source": "/live/:path*",
       "destination": "/index.html"
+    },
+    {
+      "source": "/dashboard/:path*",
+      "destination": "/dashboard.html"
     }
   ]
 }

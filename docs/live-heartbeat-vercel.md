@@ -1,6 +1,6 @@
 # AI Smart Collar V0 Live Heartbeat on Vercel
 
-This service is a Vercel-native realtime backend and viewer for PC-derived heartbeat data.
+This service is a Vercel-native realtime backend and viewer for PC-derived heartbeat and Health Dashboard data.
 
 Flow:
 
@@ -13,6 +13,11 @@ Windows uploader
 ```
 
 The uploader sends NeuroKit2-derived clean ECG, R peaks, HR, SQI, and lead-off state. The service does not filter ECG, run NeuroKit2, diagnose medical conditions, or store long-term raw ECG.
+
+The independent `/dashboard` route additionally receives derived IMU attitude,
+the existing 0-100 motion score, bounded device diagnostics, UWB distance state,
+and recent engineering health events. It does not expose raw IMU arrays, voice
+content, MCP calls, dog-state inference, or medical conclusions.
 
 ## Vercel Deployment
 
@@ -57,6 +62,8 @@ Required Redis features:
 | `LIVE_SESSION_ID` | recommended | Fixed public `/live` room id, for example `sess_live_main_...`. |
 | `LIVE_INGEST_TOKEN` | recommended | Private token used by the Windows uploader for `/live`. |
 | `LIVE_VIEWER_TOKEN` | recommended | Viewer token used by `/api/live-session`; public viewers do not see it in the URL. |
+| `LIVE_WS_URL` | Windows PC | Absolute `wss://.../api/ws` URL used by the main-GUI Dashboard relay. |
+| `SMART_COLLAR_DASHBOARD_PUBLIC_URL` | no | Public `/dashboard` URL shown in the PC GUI. |
 | `PUBLIC_BASE_URL` | no | Optional override for `viewer_url`; when omitted, the API derives the origin from forwarded Vercel request headers. |
 | `SESSION_TTL_SECONDS` | no | Defaults to `43200` seconds / 12 hours. |
 | `SESSION_CREATE_LIMIT_PER_MINUTE` | no | Defaults to `10` per IP. |
@@ -82,6 +89,50 @@ LIVE_SESSION_ID + LIVE_INGEST_TOKEN -> wss://<public-host>/api/ws
 ```
 
 The fixed live room does not rely on Redis session metadata expiring. Redis still stores the current snapshot, status, producer lock, sequence, and Pub/Sub live channel. If upload stops, the public page becomes stale/offline instead of replaying old ECG.
+
+## Fixed Public Health Dashboard
+
+The event-demo QR target is:
+
+```text
+https://<public-host>/dashboard
+```
+
+It uses the same fixed live-session discovery as `/live`; the viewer token is
+returned to browser memory by `/api/live-session` and never appears in the URL
+or `localStorage`. `/live` and `/viewer` remain unchanged.
+
+For an explicitly marked, deterministic presentation fallback use:
+
+```text
+https://<public-host>/dashboard?demo=1
+```
+
+Demo mode never activates automatically. The page continuously displays
+`演示数据 · 非真实采集`, and its scripted UWB distance is not mixed with live
+measurements.
+
+The Windows main GUI starts the Dashboard relay automatically when these three
+variables are configured together:
+
+```text
+LIVE_WS_URL=wss://<public-host>/api/ws
+LIVE_SESSION_ID=sess_live_main_...
+LIVE_INGEST_TOKEN=<private-ingest-token>
+```
+
+The relay reads the GUI's existing `PcDataStores`, ECG analysis, attitude
+worker, and Health event store. It must not be run alongside the standalone
+`smart_neckband.live_uploader` against the same session: the server intentionally
+allows only one ingest connection, and the standalone command opens its own
+serial reader. Relay endpoint, connection state, last successful upload, public
+URL, and errors are visible on the PC application's `Health / MCP` tab; tokens
+are never rendered or logged.
+
+Real UWB hardware is not connected in this version. The PC publishes
+`source=unavailable` with null distance and quality through the stable
+`DistanceProvider` interface. A later real adapter can populate that interface
+without changing the browser protocol.
 
 ## Admin Session API
 
@@ -120,7 +171,8 @@ Invoke-RestMethod `
   -Body (@{ session_id = 'sess_...' } | ConvertTo-Json)
 ```
 
-Stopping a session deletes Redis status, snapshot, ingest lock, and last sequence keys, then publishes `session_stopped`.
+Stopping a session deletes Redis status, ECG snapshot, telemetry, recent-event,
+ingest-lock, and last-sequence keys, then publishes `session_stopped`.
 
 ## Windows Uploader Example
 
@@ -195,6 +247,8 @@ Rules enforced by the server:
 - `seq` must strictly increase per session.
 - Samples are not modified, interpolated, filtered, or stored long-term.
 - Only one active ingest connection is allowed per session.
+- Telemetry contains derived values only and is capped by the 128 KB message limit.
+- Recent events are deduplicated by `event_id + event_revision` and capped at 20 per session.
 
 ## Viewer URL and QR Flow
 
@@ -227,6 +281,8 @@ On connect or reconnect, the viewer:
 session:{id}:meta
 session:{id}:status
 session:{id}:snapshot
+session:{id}:telemetry
+session:{id}:recent_events
 session:{id}:ingest_lock
 session:{id}:last_seq
 session:{id}:live
