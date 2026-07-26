@@ -4,7 +4,13 @@ import WebSocket from "ws";
 import { hashToken } from "../lib/auth.js";
 import { publicBaseUrlFromHeaders } from "../lib/http.js";
 import { FakeRedis } from "../lib/redis.js";
-import { ECG_SAMPLE_RATE_HZ, EcgBatch, ServerEvent } from "../lib/protocol.js";
+import {
+  ECG_SAMPLE_RATE_HZ,
+  EcgBatch,
+  HealthEventUpdate,
+  ServerEvent,
+  TelemetryUpdate
+} from "../lib/protocol.js";
 import { deriveState, SessionManager } from "../lib/session-manager.js";
 import { createHeartbeatServer } from "../lib/ws-server.js";
 import { reconnectDelayMs, shouldAcceptLiveBatch, shouldLoadPublicLiveSession } from "../src/live-client.js";
@@ -27,6 +33,46 @@ function testBatch(seq: number, overrides: Partial<EcgBatch> = {}): EcgBatch {
     sqi: 0.91,
     lead_off: false,
     ...overrides
+  };
+}
+
+function testTelemetry(timestampMs = 2_000): TelemetryUpdate {
+  return {
+    type: "telemetry",
+    timestamp_ms: timestampMs,
+    heart: { bpm: 72, sqi: 0.91, lead_off: false },
+    imu: {
+      online: true,
+      roll_deg: 4,
+      pitch_deg: -8,
+      yaw_deg: 12,
+      motion_score: 31,
+      still_ratio_percent: 46,
+      level: "light"
+    },
+    uwb: { distance_m: null, quality: null, source: "unavailable" },
+    device: {
+      transport: "ble",
+      ecg_sample_rate_hz: ECG_SAMPLE_RATE_HZ,
+      imu_sample_rate_hz: 50,
+      packet_loss: 0,
+      crc_errors: 0,
+      data_age_ms: 80
+    }
+  };
+}
+
+function testHealthEvent(revision = 1): HealthEventUpdate {
+  return {
+    type: "health_event",
+    event_id: "event-1",
+    event_revision: revision,
+    event_type: "signal.lead_off",
+    transition: revision === 1 ? "opened" : "resolved",
+    severity: "warning",
+    priority: "normal",
+    timestamp_ms: 2_000 + revision,
+    summary: revision === 1 ? "ECG lead-off detected." : "ECG lead contact restored."
   };
 }
 
@@ -115,6 +161,22 @@ describe("session manager", () => {
     expect(snapshot.snapshot).toBe(true);
     expect(snapshot.batches).toHaveLength(1);
     expect(snapshot.batches[0].snapshot).toBe(true);
+  });
+
+  it("stores latest telemetry and deduplicates health events by revision", async () => {
+    const redis = new FakeRedis();
+    const manager = new SessionManager({ redis });
+    const created = await manager.createSession("127.0.0.1");
+
+    await manager.updateTelemetry(created.session_id, testTelemetry());
+    await manager.updateHealthEvent(created.session_id, testHealthEvent(1));
+    await manager.updateHealthEvent(created.session_id, testHealthEvent(1));
+    await manager.updateHealthEvent(created.session_id, testHealthEvent(2));
+
+    const snapshot = await manager.getSnapshot(created.session_id);
+    expect(snapshot.telemetry?.imu.motion_score).toBe(31);
+    expect(snapshot.recent_events).toHaveLength(1);
+    expect(snapshot.recent_events[0]).toMatchObject({ event_revision: 2, transition: "resolved" });
   });
 
   it("derives stale, offline, and signal_lost status", () => {
@@ -250,6 +312,40 @@ describe("websocket flow", () => {
 
     expect(received.some((message) => message.type === "signal_lost")).toBe(true);
     await subscriber.quit();
+  });
+
+  it("broadcasts telemetry and health events without advancing ECG sequence", async () => {
+    const redis = new FakeRedis();
+    const manager = new SessionManager({ redis });
+    const created = await manager.createSession("127.0.0.1");
+    const server = createHeartbeatServer({ redis });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const port = (server.address() as AddressInfo).port;
+    const viewer = await openSocket(`ws://127.0.0.1:${port}/api/ws?session_id=${created.session_id}`);
+    viewer.send(JSON.stringify({ type: "auth", role: "viewer", viewer_token: created.viewer_token }));
+    await waitForMessage<ServerEvent>(viewer, (message) => message.type === "snapshot");
+    const ingest = await openSocket(`ws://127.0.0.1:${port}/api/ws`);
+    ingest.send(
+      JSON.stringify({ type: "auth", role: "ingest", session_id: created.session_id, token: created.ingest_token })
+    );
+    await waitForMessage<ServerEvent>(ingest, (message) => message.type === "auth_ok");
+
+    const telemetryPromise = waitForMessage<ServerEvent>(viewer, (message) => message.type === "telemetry");
+    const telemetryAck = waitForMessage<{ type: string; message_type?: string; next_seq?: number }>(
+      ingest,
+      (message) => message.type === "ingest_ack" && message.message_type === "telemetry"
+    );
+    ingest.send(JSON.stringify(testTelemetry()));
+    expect((await telemetryPromise).type).toBe("telemetry");
+    expect(await telemetryAck).toMatchObject({ message_type: "telemetry", next_seq: 0 });
+
+    const eventPromise = waitForMessage<ServerEvent>(viewer, (message) => message.type === "health_event");
+    ingest.send(JSON.stringify(testHealthEvent()));
+    expect(await eventPromise).toMatchObject({ type: "health_event", event_id: "event-1" });
+
+    viewer.close();
+    ingest.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 });
 

@@ -2,7 +2,10 @@ import {
   DEFAULT_SESSION_TTL_SECONDS,
   EcgBatch,
   ECG_SAMPLE_RATE_HZ,
+  HealthEventUpdate,
   LiveEcgBatch,
+  LiveHealthEvent,
+  LiveTelemetry,
   OFFLINE_AFTER_MS,
   PublicStatus,
   SessionIdSchema,
@@ -10,7 +13,8 @@ import {
   Snapshot,
   SNAPSHOT_SECONDS,
   STALE_AFTER_MS,
-  StatusUpdate
+  StatusUpdate,
+  TelemetryUpdate
 } from "./protocol.js";
 import { createSessionId, createToken, hashToken, safeEqualHash } from "./auth.js";
 import { getLiveSessionConfig, LiveSessionConfig } from "./live-session.js";
@@ -73,6 +77,14 @@ export class SessionManager {
 
   snapshotKey(sessionId: string): string {
     return `session:${sessionId}:snapshot`;
+  }
+
+  telemetryKey(sessionId: string): string {
+    return `session:${sessionId}:telemetry`;
+  }
+
+  recentEventsKey(sessionId: string): string {
+    return `session:${sessionId}:recent_events`;
   }
 
   ingestLockKey(sessionId: string): string {
@@ -239,6 +251,39 @@ export class SessionManager {
     return status;
   }
 
+  async updateTelemetry(sessionId: string, update: TelemetryUpdate): Promise<LiveTelemetry> {
+    const telemetry: LiveTelemetry = { ...update, session_id: sessionId };
+    await this.redis.set(this.telemetryKey(sessionId), JSON.stringify(telemetry), "EX", this.ttlSeconds);
+    await this.redis.publish(this.channel(sessionId), JSON.stringify(telemetry));
+    return telemetry;
+  }
+
+  async updateHealthEvent(sessionId: string, update: HealthEventUpdate): Promise<LiveHealthEvent> {
+    const event: LiveHealthEvent = { ...update, session_id: sessionId };
+    const raw = await this.redis.get(this.recentEventsKey(sessionId));
+    const previous = raw ? (JSON.parse(raw) as LiveHealthEvent[]) : [];
+    const existing = previous.find((item) => item.event_id === event.event_id);
+    if (existing && existing.event_revision >= event.event_revision) {
+      return existing;
+    }
+    const recent = [event, ...previous.filter((item) => item.event_id !== event.event_id)]
+      .sort((left, right) => right.timestamp_ms - left.timestamp_ms)
+      .slice(0, 20);
+    await this.redis.set(this.recentEventsKey(sessionId), JSON.stringify(recent), "EX", this.ttlSeconds);
+    await this.redis.publish(this.channel(sessionId), JSON.stringify(event));
+    return event;
+  }
+
+  async getTelemetry(sessionId: string): Promise<LiveTelemetry | null> {
+    const raw = await this.redis.get(this.telemetryKey(sessionId));
+    return raw ? (JSON.parse(raw) as LiveTelemetry) : null;
+  }
+
+  async getRecentEvents(sessionId: string): Promise<LiveHealthEvent[]> {
+    const raw = await this.redis.get(this.recentEventsKey(sessionId));
+    return raw ? (JSON.parse(raw) as LiveHealthEvent[]).slice(0, 20) : [];
+  }
+
   async getPublicStatus(sessionId: string): Promise<PublicStatus | null> {
     const raw = await this.redis.get(this.statusKey(sessionId));
     if (!raw) {
@@ -262,7 +307,9 @@ export class SessionManager {
       generated_at_ms: this.now(),
       sample_rate: ECG_SAMPLE_RATE_HZ,
       batches: batches.map((batch) => ({ ...batch, snapshot: true })),
-      status: await this.getPublicStatus(sessionId)
+      status: await this.getPublicStatus(sessionId),
+      telemetry: await this.getTelemetry(sessionId),
+      recent_events: await this.getRecentEvents(sessionId)
     };
   }
 
@@ -273,7 +320,14 @@ export class SessionManager {
     }
     meta.stopped = true;
     await this.redis.set(this.metaKey(sessionId), JSON.stringify(meta), "EX", 60);
-    await this.redis.del(this.statusKey(sessionId), this.snapshotKey(sessionId), this.ingestLockKey(sessionId), this.lastSeqKey(sessionId));
+    await this.redis.del(
+      this.statusKey(sessionId),
+      this.snapshotKey(sessionId),
+      this.telemetryKey(sessionId),
+      this.recentEventsKey(sessionId),
+      this.ingestLockKey(sessionId),
+      this.lastSeqKey(sessionId)
+    );
     await this.redis.publish(this.channel(sessionId), JSON.stringify({ type: "session_stopped", session_id: sessionId, timestamp_ms: this.now() }));
     return true;
   }

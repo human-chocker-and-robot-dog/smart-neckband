@@ -76,7 +76,12 @@ function sendError(socket: WebSocket, code: string, message: string): void {
   }
 }
 
-function sendIngestAck(socket: WebSocket, messageType: "ecg_batch" | "status", seq: number | undefined, nextSeq: number): void {
+function sendIngestAck(
+  socket: WebSocket,
+  messageType: "ecg_batch" | "status" | "telemetry" | "health_event",
+  seq: number | undefined,
+  nextSeq: number
+): void {
   if (socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: "ingest_ack", message_type: messageType, seq: seq ?? null, next_seq: nextSeq }));
   }
@@ -246,11 +251,19 @@ async function handleConnection(
         await manager.updateFromEcgBatch(sessionId, message.data);
         nextIngestSequence = message.data.seq + 1;
         sendIngestAck(socket, "ecg_batch", message.data.seq, nextIngestSequence);
-      } else {
+      } else if (message.data.type === "status") {
         const status = await manager.updateStatus(sessionId, message.data);
         await manager.redis.publish(manager.channel(sessionId), JSON.stringify(status));
         nextIngestSequence ??= await manager.nextSequence(sessionId);
         sendIngestAck(socket, "status", message.data.seq, nextIngestSequence);
+      } else if (message.data.type === "telemetry") {
+        await manager.updateTelemetry(sessionId, message.data);
+        nextIngestSequence ??= await manager.nextSequence(sessionId);
+        sendIngestAck(socket, "telemetry", undefined, nextIngestSequence);
+      } else {
+        await manager.updateHealthEvent(sessionId, message.data);
+        nextIngestSequence ??= await manager.nextSequence(sessionId);
+        sendIngestAck(socket, "health_event", undefined, nextIngestSequence);
       }
     })();
   });
