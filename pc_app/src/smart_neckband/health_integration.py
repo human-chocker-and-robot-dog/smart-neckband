@@ -9,6 +9,12 @@ import sys
 from typing import Callable, TextIO
 
 from .analysis import EcgAnalysisResult
+from .attitude import Orientation
+from .dashboard_relay import (
+    DashboardRelaySettings,
+    DashboardRelayStatus,
+    DashboardRelayWorker,
+)
 from .health_contract import validate_wearer_id
 from .health_mcp import _validate_http_path
 from .health_runtime import HealthRuntimeWorker
@@ -106,6 +112,7 @@ class HealthIntegrationStatus:
     mcp_pid: int | None
     mcp_exit_code: int | None
     mcp_log_path: Path | None
+    dashboard: DashboardRelayStatus
     last_error: str | None
 
 
@@ -247,12 +254,17 @@ class HealthIntegrationController:
         stores: PcDataStores,
         reader_provider: Callable[[], object | None],
         analysis_provider: Callable[[], EcgAnalysisResult | None],
+        orientation_provider: Callable[[], Orientation | None] = lambda: None,
         mcp_process: HealthMcpProcessController | None = None,
+        dashboard_settings: DashboardRelaySettings | None = None,
     ) -> None:
         self.stores = stores
         self.reader_provider = reader_provider
         self.analysis_provider = analysis_provider
+        self.orientation_provider = orientation_provider
         self.mcp_process = mcp_process or HealthMcpProcessController()
+        self.dashboard_settings = dashboard_settings or DashboardRelaySettings.from_environment()
+        self.dashboard_worker: DashboardRelayWorker | None = None
         self.runtime: HealthRuntimeWorker | None = None
         self._runtime_identity: tuple[str, Path, Path | None] | None = None
         self.last_error: str | None = None
@@ -297,6 +309,37 @@ class HealthIntegrationController:
             self.start_runtime(settings)
         if settings.mcp_configured:
             self.start_mcp(settings)
+        if self.dashboard_settings.configured:
+            self.start_dashboard()
+
+    def start_dashboard(self) -> None:
+        self.dashboard_settings.validate()
+        if self.dashboard_worker is not None and self.dashboard_worker.is_running:
+            return
+        self.stop_dashboard()
+        self.dashboard_worker = DashboardRelayWorker(
+            settings=self.dashboard_settings,
+            stores=self.stores,
+            reader_provider=self.reader_provider,
+            analysis_provider=self.analysis_provider,
+            orientation_provider=self.orientation_provider,
+            event_provider=self._dashboard_events,
+        )
+        self.dashboard_worker.start()
+
+    def stop_dashboard(self) -> None:
+        if self.dashboard_worker is not None:
+            self.dashboard_worker.stop()
+        self.dashboard_worker = None
+
+    def _dashboard_events(self) -> tuple[dict[str, object], ...]:
+        if self.runtime is None:
+            return ()
+        events, _cursor = self.runtime.store.list_events(
+            wearer_id=self.runtime.builder.wearer_id,
+            limit=20,
+        )
+        return tuple(events)
 
     def stop_runtime(self) -> None:
         if self.runtime is not None:
@@ -308,16 +351,35 @@ class HealthIntegrationController:
         self.mcp_process.stop()
 
     def close(self) -> None:
+        self.stop_dashboard()
         self.stop_mcp()
         self.stop_runtime()
 
     def status(self) -> HealthIntegrationStatus:
         mcp_running = self.mcp_process.running
+        dashboard_status = (
+            self.dashboard_worker.status()
+            if self.dashboard_worker is not None
+            else DashboardRelayStatus(
+                configured=self.dashboard_settings.configured,
+                running=False,
+                connected=False,
+                endpoint=self.dashboard_settings.endpoint_label,
+                public_url=self.dashboard_settings.public_url,
+                last_success_at=None,
+                last_error=None,
+            )
+        )
         return HealthIntegrationStatus(
             health_running=self.runtime is not None and self.runtime.is_running,
             mcp_running=mcp_running,
             mcp_pid=self.mcp_process.pid,
             mcp_exit_code=self.mcp_process.last_exit_code,
             mcp_log_path=self.mcp_process.log_path,
-            last_error=self.last_error or self.mcp_process.last_error,
+            dashboard=dashboard_status,
+            last_error=(
+                self.last_error
+                or self.mcp_process.last_error
+                or dashboard_status.last_error
+            ),
         )

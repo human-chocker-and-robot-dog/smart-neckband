@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 
+from smart_neckband.dashboard_relay import DashboardRelayStatus
 from smart_neckband.health_integration import HealthIntegrationStatus, MCP_TOOL_NAMES
 
 
@@ -47,6 +48,15 @@ def test_health_panel_exposes_mcp_inside_main_gui(monkeypatch, tmp_path) -> None
                 mcp_pid=1234 if self.mcp_settings is not None else None,
                 mcp_exit_code=None,
                 mcp_log_path=None,
+                dashboard=DashboardRelayStatus(
+                    configured=False,
+                    running=False,
+                    connected=False,
+                    endpoint="-",
+                    public_url="/dashboard",
+                    last_success_at=None,
+                    last_error=None,
+                ),
                 last_error=None,
             )
 

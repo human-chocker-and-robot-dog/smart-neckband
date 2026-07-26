@@ -366,6 +366,7 @@ class MainWindow:
             stores=self.stores,
             reader_provider=lambda: self.reader,
             analysis_provider=self.ecg_worker.latest,
+            orientation_provider=lambda: self.attitude_worker.latest()[0],
         )
         tabs.addTab(live_tab, "实时")
         tabs.addTab(diagnostics_tab, "诊断")

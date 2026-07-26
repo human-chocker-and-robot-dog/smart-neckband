@@ -18,6 +18,7 @@ class HealthIntegrationPanel:
         stores: object,
         reader_provider,
         analysis_provider,
+        orientation_provider=lambda: None,
         controller: HealthIntegrationController | None = None,
     ) -> None:
         self.QtWidgets = QtWidgets
@@ -25,6 +26,7 @@ class HealthIntegrationPanel:
             stores=stores,
             reader_provider=reader_provider,
             analysis_provider=analysis_provider,
+            orientation_provider=orientation_provider,
         )
         configured = HealthIntegrationSettings.from_environment()
 
@@ -37,13 +39,17 @@ class HealthIntegrationPanel:
         self.mcp_status = QtWidgets.QLabel("MCP：未启动")
         self.endpoint_status = QtWidgets.QLabel("RDK endpoint：--")
         self.log_status = QtWidgets.QLabel("MCP 日志：--")
+        self.dashboard_status = QtWidgets.QLabel("Dashboard Relay: not configured")
+        self.dashboard_endpoint = QtWidgets.QLabel("Dashboard: --")
         self.error_status = QtWidgets.QLabel("")
         self.error_status.setWordWrap(True)
         summary_layout.addWidget(self.health_status, 0, 0)
         summary_layout.addWidget(self.mcp_status, 0, 1)
         summary_layout.addWidget(self.endpoint_status, 1, 0, 1, 2)
         summary_layout.addWidget(self.log_status, 2, 0, 1, 2)
-        summary_layout.addWidget(self.error_status, 3, 0, 1, 2)
+        summary_layout.addWidget(self.dashboard_status, 3, 0, 1, 2)
+        summary_layout.addWidget(self.dashboard_endpoint, 4, 0, 1, 2)
+        summary_layout.addWidget(self.error_status, 5, 0, 1, 2)
         layout.addWidget(summary)
 
         health_group = QtWidgets.QGroupBox("Health 数据源")
@@ -83,10 +89,14 @@ class HealthIntegrationPanel:
         self.start_health_button = QtWidgets.QPushButton("启动 Health 数据")
         self.start_mcp_button = QtWidgets.QPushButton("启动 Health + MCP")
         self.stop_mcp_button = QtWidgets.QPushButton("停止 MCP")
+        self.start_dashboard_button = QtWidgets.QPushButton("Start Dashboard Relay")
+        self.stop_dashboard_button = QtWidgets.QPushButton("Stop Dashboard Relay")
         self.stop_all_button = QtWidgets.QPushButton("停止全部 Health 服务")
         controls.addWidget(self.start_health_button)
         controls.addWidget(self.start_mcp_button)
         controls.addWidget(self.stop_mcp_button)
+        controls.addWidget(self.start_dashboard_button)
+        controls.addWidget(self.stop_dashboard_button)
         controls.addWidget(self.stop_all_button)
         controls.addStretch(1)
         layout.addLayout(controls)
@@ -102,6 +112,8 @@ class HealthIntegrationPanel:
         self.start_health_button.clicked.connect(self.start_health)
         self.start_mcp_button.clicked.connect(self.start_mcp)
         self.stop_mcp_button.clicked.connect(self.stop_mcp)
+        self.start_dashboard_button.clicked.connect(self.start_dashboard)
+        self.stop_dashboard_button.clicked.connect(self.stop_dashboard)
         self.stop_all_button.clicked.connect(self.stop_all)
 
         self.refresh_timer = QtCore.QTimer()
@@ -151,6 +163,18 @@ class HealthIntegrationPanel:
         self.controller.stop_mcp()
         self.refresh_status()
 
+    def start_dashboard(self) -> None:
+        try:
+            self.controller.start_dashboard()
+            self.error_status.setText("")
+        except Exception as exc:
+            self._show_error("Dashboard relay failed", exc)
+        self.refresh_status()
+
+    def stop_dashboard(self) -> None:
+        self.controller.stop_dashboard()
+        self.refresh_status()
+
     def stop_all(self) -> None:
         self.controller.close()
         self.refresh_status()
@@ -176,6 +200,23 @@ class HealthIntegrationPanel:
             f"MCP 日志：{status.mcp_log_path}"
             if status.mcp_log_path is not None
             else "MCP 日志：--"
+        )
+        dashboard = status.dashboard
+        if dashboard.connected:
+            relay_text = "Dashboard Relay: connected"
+        elif dashboard.running:
+            relay_text = "Dashboard Relay: reconnecting"
+        elif dashboard.configured:
+            relay_text = "Dashboard Relay: stopped"
+        else:
+            relay_text = "Dashboard Relay: not configured"
+        if dashboard.last_success_at:
+            relay_text += f" / last upload {dashboard.last_success_at}"
+        self.dashboard_status.setText(relay_text)
+        self.dashboard_endpoint.setText(
+            f"Ingest: {dashboard.endpoint} / Viewer: {dashboard.public_url}"
+            if dashboard.configured
+            else "Dashboard: set LIVE_WS_URL, LIVE_SESSION_ID and LIVE_INGEST_TOKEN"
         )
         if status.last_error:
             self.error_status.setText(status.last_error)
