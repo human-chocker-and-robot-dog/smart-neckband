@@ -29,6 +29,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 pytest-cache-files-*/
+pc_app/pytest-*/
 .mypy_cache/
 .ruff_cache/
 .coverage

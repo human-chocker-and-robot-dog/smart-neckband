@@ -44,6 +44,48 @@ from .unified_mic_ui import UnifiedMicPanel
 LOGGER = logging.getLogger(__name__)
 
 
+def _build_collapsible_section(
+    *,
+    QtCore: object,
+    QtWidgets: object,
+    title: str,
+    body: object,
+    expanded: bool,
+) -> tuple[object, object]:
+    section = QtWidgets.QWidget()
+    section.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Maximum)
+    section_layout = QtWidgets.QVBoxLayout(section)
+    section_layout.setContentsMargins(0, 0, 0, 0)
+    section_layout.setSpacing(2)
+
+    toggle = QtWidgets.QToolButton()
+    toggle.setText(title)
+    toggle.setCheckable(True)
+    toggle.setChecked(expanded)
+    toggle.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+    toggle.setArrowType(QtCore.Qt.DownArrow if expanded else QtCore.Qt.RightArrow)
+    toggle.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+    toggle.setStyleSheet(
+        "QToolButton { border: none; text-align: left; padding: 4px 2px; font-weight: 600; }"
+    )
+
+    def set_expanded(checked: bool) -> None:
+        body.setVisible(checked)
+        toggle.setArrowType(QtCore.Qt.DownArrow if checked else QtCore.Qt.RightArrow)
+        section_layout.invalidate()
+        section.updateGeometry()
+        parent = section.parentWidget()
+        if parent is not None and parent.layout() is not None:
+            parent.layout().invalidate()
+            parent.layout().activate()
+
+    toggle.toggled.connect(set_expanded)
+    body.setVisible(expanded)
+    section_layout.addWidget(toggle)
+    section_layout.addWidget(body)
+    return section, toggle
+
+
 def configure_debug_logging() -> Path:
     log_dir = Path("data") / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -236,8 +278,9 @@ class MainWindow:
         toolbar.addWidget(self.disconnect_button)
         layout.addLayout(toolbar)
 
-        connection_group = QtWidgets.QGroupBox("连接状态")
-        connection_layout = QtWidgets.QGridLayout(connection_group)
+        self.connection_group = QtWidgets.QFrame()
+        self.connection_group.setFrameShape(QtWidgets.QFrame.StyledPanel)
+        connection_layout = QtWidgets.QGridLayout(self.connection_group)
         self.connection_label = QtWidgets.QLabel("未连接")
         self.port_status_label = QtWidgets.QLabel("串口 --")
         self.packet_status_label = QtWidgets.QLabel("包 0 / ECG 包 0")
@@ -253,9 +296,17 @@ class MainWindow:
             )
         ):
             connection_layout.addWidget(widget, index // 3, index % 3)
-        layout.addWidget(connection_group)
+        self.connection_section, self.connection_toggle_button = _build_collapsible_section(
+            QtCore=QtCore,
+            QtWidgets=QtWidgets,
+            title="连接状态",
+            body=self.connection_group,
+            expanded=True,
+        )
+        layout.addWidget(self.connection_section)
 
-        self.debug_group = QtWidgets.QGroupBox("BLE DEBUG 日志")
+        self.debug_group = QtWidgets.QFrame()
+        self.debug_group.setFrameShape(QtWidgets.QFrame.StyledPanel)
         debug_layout = QtWidgets.QVBoxLayout(self.debug_group)
         self.debug_log_output = QtWidgets.QPlainTextEdit()
         self.debug_log_output.setReadOnly(True)
@@ -264,10 +315,18 @@ class MainWindow:
         debug_layout.addWidget(self.debug_log_output)
         self.clear_debug_button = QtWidgets.QPushButton("清空显示")
         debug_layout.addWidget(self.clear_debug_button)
-        layout.addWidget(self.debug_group)
+        self.debug_section, self.debug_toggle_button = _build_collapsible_section(
+            QtCore=QtCore,
+            QtWidgets=QtWidgets,
+            title="BLE DEBUG 日志",
+            body=self.debug_group,
+            expanded=False,
+        )
+        layout.addWidget(self.debug_section)
 
-        record_group = QtWidgets.QGroupBox("实验记录")
-        record_layout = QtWidgets.QGridLayout(record_group)
+        self.record_group = QtWidgets.QFrame()
+        self.record_group.setFrameShape(QtWidgets.QFrame.StyledPanel)
+        record_layout = QtWidgets.QGridLayout(self.record_group)
         self.record_name_edit = QtWidgets.QLineEdit()
         self.record_name_edit.setPlaceholderText("例如：锁骨内侧第一次")
         self.placement_combo = QtWidgets.QComboBox()
@@ -319,7 +378,14 @@ class MainWindow:
         record_layout.addWidget(self.turn_marker_button, 5, 3)
         record_layout.addWidget(self.custom_marker_edit, 6, 0, 1, 3)
         record_layout.addWidget(self.custom_marker_button, 6, 3)
-        layout.addWidget(record_group)
+        self.record_section, self.record_toggle_button = _build_collapsible_section(
+            QtCore=QtCore,
+            QtWidgets=QtWidgets,
+            title="实验记录",
+            body=self.record_group,
+            expanded=False,
+        )
+        layout.addWidget(self.record_section)
 
         status_layout = QtWidgets.QGridLayout()
         self.hr_label = QtWidgets.QLabel("心率（HR）--")
@@ -334,17 +400,20 @@ class MainWindow:
             status_layout.addWidget(widget, 0, column)
         layout.addLayout(status_layout)
 
-        splitter = QtWidgets.QSplitter()
-        splitter.setOrientation(QtCore.Qt.Vertical)
+        self.live_splitter = QtWidgets.QSplitter()
+        self.live_splitter.setOrientation(QtCore.Qt.Vertical)
         self.raw_plot = pg.PlotWidget(title="原始 ECG（Raw）- 最近 10 秒")
         self.clean_plot = pg.PlotWidget(title="清洗后 ECG（Clean）- 最近 10 秒")
         self.raw_curve = self.raw_plot.plot(pen=pg.mkPen("#1769aa", width=1))
         self.clean_curve = self.clean_plot.plot(pen=pg.mkPen("#2e7d32", width=1))
         self.peak_scatter = pg.ScatterPlotItem(pen=pg.mkPen("#c62828"), brush=pg.mkBrush("#c62828"), size=8)
         self.clean_plot.addItem(self.peak_scatter)
-        splitter.addWidget(self.raw_plot)
-        splitter.addWidget(self.clean_plot)
-        layout.addWidget(splitter, 3)
+        self.live_splitter.addWidget(self.raw_plot)
+        self.live_splitter.addWidget(self.clean_plot)
+        self.live_splitter.setChildrenCollapsible(False)
+        self.live_splitter.setStretchFactor(0, 1)
+        self.live_splitter.setStretchFactor(1, 1)
+        layout.addWidget(self.live_splitter, 3)
 
         diagnostics_tab = self._build_diagnostics_tab()
         history_tab = self._build_history_tab()
@@ -810,7 +879,7 @@ class MainWindow:
 
     def _set_debug_enabled(self, enabled: bool) -> None:
         self._debug_enabled = bool(enabled)
-        self.debug_group.setVisible(self._debug_enabled)
+        self.debug_section.setVisible(self._debug_enabled)
         level = logging.DEBUG if self._debug_enabled else logging.INFO
         logging.getLogger("smart_neckband").setLevel(level)
         logging.getLogger("bleak").setLevel(level)
