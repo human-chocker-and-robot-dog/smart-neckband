@@ -11,7 +11,7 @@ from .epaper_ble import (
     EpaperRuntimeStatus,
     list_epaper_devices,
 )
-from .epaper_protocol import DisplayStateCode, RefreshMode
+from .epaper_protocol import DisplayStateCode, RefreshMode, StatusFlag
 from .epaper_sync import (
     EpaperDisplayState,
     EpaperDisplayStateBuilder,
@@ -57,6 +57,7 @@ class EpaperSyncPanel:
         self.waveform_snapshotter = EpaperWaveformSnapshotter(
             interval_seconds=WAVEFORM_REFRESH_SECONDS
         )
+        self.latest_live_state: EpaperDisplayState | None = None
         self.latest_state: EpaperDisplayState | None = None
         self.latest_rendered: RenderedEpaperFrame | None = None
         self._last_render_monotonic_s = 0.0
@@ -237,39 +238,39 @@ class EpaperSyncPanel:
             return
         self._last_render_monotonic_s = now
         self._render_preview(force=False)
-        if self.client is None or not self.client.runtime_status.connected:
+        if self.client is None:
             return
-        if self.latest_state is None or self.latest_rendered is None:
+        runtime = self.client.runtime_status
+        if not runtime.connected or self._runtime_is_busy(runtime):
             return
-        scheduled = self.scheduler.consider(
-            rendered=self.latest_rendered,
-            state=self.latest_state,
-            auto_enabled=self.auto_sync_checkbox.isChecked(),
+        frame_id = self._dispatch_latest(
+            force=False,
+            force_full=False,
         )
-        if scheduled is not None:
-            frame_id = self.client.queue_frame(scheduled)
-            self.send_status_label.setText(f"已排队帧 {frame_id}，等待 Quote/0 刷新")
+        if frame_id is not None:
+            self.send_status_label.setText(f"开始发送最新帧 {frame_id}")
 
     def send_current(self, *, force_full: bool) -> None:
         if self.client is None or not self.client.runtime_status.connected:
             self.send_status_label.setText("墨水屏未连接，无法发送")
             return
         self._render_preview(force=True)
-        if self.latest_state is None or self.latest_rendered is None:
+        runtime = self.client.runtime_status
+        if self._runtime_is_busy(runtime):
+            self.send_status_label.setText("墨水屏正在刷新，本次未排队")
+            return
+        if self.latest_live_state is None:
             self.send_status_label.setText("尚无可发送画面")
             return
-        scheduled = self.scheduler.consider(
-            rendered=self.latest_rendered,
-            state=self.latest_state,
-            auto_enabled=self.auto_sync_checkbox.isChecked(),
+        frame_id = self._dispatch_latest(
             force=True,
             force_full=force_full,
         )
-        if scheduled is None:
+        if frame_id is None:
+            self.send_status_label.setText("墨水屏忙，本次未排队")
             return
-        frame_id = self.client.queue_frame(scheduled)
         mode = "强制全刷" if force_full else "自动刷新"
-        self.send_status_label.setText(f"已排队帧 {frame_id}（{mode}）")
+        self.send_status_label.setText(f"开始发送最新帧 {frame_id}（{mode}）")
 
     def close(self) -> None:
         self._scan_generation += 1
@@ -292,17 +293,25 @@ class EpaperSyncPanel:
             status=self.stores.status.latest(),
             source_sample=source_sample,
         )
-        state, _ = self.waveform_snapshotter.apply(
-            live_state,
-            force=force,
-        )
+        self.latest_live_state = live_state
+        state = self.waveform_snapshotter.preview(live_state)
+        self._apply_preview_state(state, force=force)
+
+    def _apply_preview_state(
+        self,
+        state: EpaperDisplayState,
+        *,
+        force: bool,
+        rendered: RenderedEpaperFrame | None = None,
+    ) -> None:
         if not force and state == self.latest_state:
             return
-        rendered = render_epaper_frame(
-            state,
-            QtCore=self.QtCore,
-            QtGui=self.QtGui,
-        )
+        if rendered is None:
+            rendered = render_epaper_frame(
+                state,
+                QtCore=self.QtCore,
+                QtGui=self.QtGui,
+            )
         self.latest_state = state
         self.latest_rendered = rendered
         image = framebuffer_to_qimage(rendered.frame, QtGui=self.QtGui)
@@ -331,6 +340,55 @@ class EpaperSyncPanel:
         self.age_label.setText(
             f"数据年龄 {state.data_age_ms} ms" if state.data_age_ms is not None else "数据年龄 --"
         )
+
+    def _dispatch_latest(
+        self,
+        *,
+        force: bool,
+        force_full: bool,
+    ) -> int | None:
+        if self.client is None or self.latest_live_state is None:
+            return None
+        state, waveform_updated = self.waveform_snapshotter.candidate(
+            self.latest_live_state,
+            force=force,
+        )
+        rendered = render_epaper_frame(
+            state,
+            QtCore=self.QtCore,
+            QtGui=self.QtGui,
+        )
+        scheduled = self.scheduler.consider(
+            rendered=rendered,
+            state=state,
+            auto_enabled=self.auto_sync_checkbox.isChecked(),
+            force=force,
+            force_full=force_full,
+        )
+        if scheduled is None:
+            return None
+        frame_id = self.client.try_queue_frame(scheduled)
+        if frame_id is None:
+            return None
+        self.waveform_snapshotter.mark_dispatched(
+            state,
+            waveform_updated=waveform_updated,
+        )
+        self._apply_preview_state(state, force=True, rendered=rendered)
+        return frame_id
+
+    @staticmethod
+    def _runtime_is_busy(runtime: EpaperRuntimeStatus) -> bool:
+        if runtime.pending_frame_id is not None or runtime.active_frame_id is not None:
+            return True
+        status = runtime.display_status
+        if status is None:
+            return False
+        return status.state in {
+            DisplayStateCode.RECEIVING,
+            DisplayStateCode.QUEUED,
+            DisplayStateCode.REFRESHING,
+        } or bool(status.flags & StatusFlag.PENDING_FRAME)
 
     def _refresh_runtime_status(self) -> None:
         if self.client is None:

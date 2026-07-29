@@ -216,7 +216,7 @@ def test_renderer_produces_quote0_frame_and_requested_layout() -> None:
     assert any(value != 0xFF for value in graph)
 
 
-def test_waveform_snapshotter_updates_metrics_without_replacing_ecg_until_due() -> None:
+def test_waveform_snapshotter_commits_only_when_latest_frame_is_dispatched() -> None:
     now = [0]
     snapshotter = EpaperWaveformSnapshotter(
         interval_seconds=10,
@@ -238,35 +238,49 @@ def test_waveform_snapshotter_updates_metrics_without_replacing_ecg_until_due() 
         waveform=(1.0, 2.0, 3.0),
     )
 
-    first, first_updated = snapshotter.apply(state)
+    first, first_updated = snapshotter.candidate(state)
     assert first_updated
     assert first.waveform == (1.0, 2.0, 3.0)
 
     now[0] = 1_000_000_000
-    metric_only, metric_updated = snapshotter.apply(
+    newer_unsent, newer_unsent_updated = snapshotter.candidate(
         replace(state, heart_rate_bpm=73.0, waveform=(4.0, 5.0, 6.0))
     )
-    assert not metric_updated
-    assert metric_only.heart_rate_bpm == 73.0
-    assert metric_only.waveform == first.waveform
-
-    now[0] = 10_000_000_000
-    waveform_due, waveform_updated = snapshotter.apply(
-        replace(state, waveform=(4.0, 5.0, 6.0))
+    assert newer_unsent_updated
+    assert newer_unsent.heart_rate_bpm == 73.0
+    assert newer_unsent.waveform == (4.0, 5.0, 6.0)
+    snapshotter.mark_dispatched(
+        newer_unsent,
+        waveform_updated=newer_unsent_updated,
     )
-    assert waveform_updated
-    assert waveform_due.waveform == (4.0, 5.0, 6.0)
+
+    now[0] = 5_000_000_000
+    metric_only, metric_updated = snapshotter.candidate(
+        replace(state, heart_rate_bpm=74.0, waveform=(7.0, 8.0, 9.0))
+    )
+    assert not metric_updated
+    assert metric_only.heart_rate_bpm == 74.0
+    assert metric_only.waveform == (4.0, 5.0, 6.0)
+    assert snapshotter.preview(
+        replace(state, waveform=(7.0, 8.0, 9.0))
+    ).waveform == (4.0, 5.0, 6.0)
 
     now[0] = 11_000_000_000
-    new_source, source_updated = snapshotter.apply(
+    waveform_due, waveform_updated = snapshotter.candidate(
+        replace(state, waveform=(7.0, 8.0, 9.0))
+    )
+    assert waveform_updated
+    assert waveform_due.waveform == (7.0, 8.0, 9.0)
+
+    new_source, source_updated = snapshotter.candidate(
         replace(
             state,
             source_instance_id="source-b",
-            waveform=(7.0, 8.0),
+            waveform=(10.0, 11.0),
         )
     )
     assert source_updated
-    assert new_source.waveform == (7.0, 8.0)
+    assert new_source.waveform == (10.0, 11.0)
 
 
 def test_renderer_uses_full_waveform_range_for_a_narrow_peak() -> None:

@@ -113,7 +113,7 @@ y=151
 - PC 内部 HR/SQI 可每 0.5–1 秒更新，但默认电子纸发送周期为 15 秒，可配置范围为 10–60 秒。
 - HRV 以 30 秒窗口更新；新 HRV 不要求立即打断正在进行的电子纸刷新。
 - 以下事件可请求优先帧：导联状态变化、SQI 有效性变化、严重 clipping、用户手动发送。
-- `FrameScheduler` 的待发送队列容量为 1；更新时覆盖尚未开始发送的旧帧。
+- PC 不在活动刷新后积压待发送帧；设备空闲时才从最新分析构造并派发一帧。
 - 屏幕正刷新时继续采集和分析 ECG。收到设备 `DONE` 后，只发送当时最新的一帧，不补发中间历史帧。
 - framebuffer 和关键显示字段均未变化时不发送。
 - 维护性全刷由 Quote/0 固件最终决定；PC 只提供普通 `auto` 与明确的手动 `force_full` 请求。
@@ -142,7 +142,7 @@ Quote/0 仓库中的 `docs/PROTOCOL_BLE_DISPLAY_V1.md` 是线协议规范原件�
 2. 实现 Quote/0 扫描和 `EpaperDisplayClient` 生命周期，使用假 Bleak client 测试连接、配对、重连、状态通知和有界写队列。
 3. 实现纯函数 296×152 framebuffer、星形图标、文本布局、HRV/SQI/导联状态渲染和 8 秒 ECG min/max 包络。
 4. 实现 30 秒 RR/NN 窗口和 HRV 有效性门限，复用项目已有 RMSSD 算法并补充边界测试。
-5. 实现 `DisplayStateBuilder` 和 `FrameScheduler`，覆盖节流、优先事件、无变化跳过、队列容量 1 和 stale 数据处理。
+5. 实现 `DisplayStateBuilder` 和 `FrameScheduler`，覆盖节流、优先事件、无变化跳过、零积压派发和 stale 数据处理。
 6. 新增 `EpaperSyncPanel`，将扫描、连接、预览、同步设置、设备状态和折叠日志集成到主 GUI。
 7. 将 panel 生命周期接入 `MainWindow.close()`，确保电子纸客户端停止不影响项圈 reader、Health、麦克风和其他页签。
 8. 与 Quote/0 固件联调 BEGIN/CHUNK/COMMIT/STATUS，验证 CRC 错误、超时、断连、重连和刷新期间新帧覆盖。
@@ -183,7 +183,7 @@ git status --short --branch
 ## Risks and rollback
 
 - Windows 同时维护两个 Bleak client 可能暴露 WinRT GATT 缓存或线程 apartment 问题。客户端必须分别记录连接阶段；如独立事件循环不稳定，回滚到共享 BLE runtime，而不是在 GUI 线程运行异步 I/O。
-- 电子纸刷新慢，发送过快会造成队列堆积。容量 1 和最新帧覆盖是硬约束。
+- 电子纸刷新慢，发送过快会造成旧快照。PC 使用零积压派发：忙碌时跳过，空闲后重新构造最新帧。
 - 过度压缩 Y 轴可能放大噪声；波形只作预览，必须显示 SQI/导联状态且不得用于诊断。
 - HRV 容易因窗口、伪峰或运动失真。无效时显示 `--`，并保留有效性原因供 GUI 查看。
 - 字体差异会导致 PC 预览与实际 framebuffer 不一致。渲染使用随项目提交的确定性像素字体或路径资源。
@@ -212,12 +212,12 @@ git status --short --branch
 - PySide6 字体渲染必须运行在现有 `QApplication` 生命周期内；测试使用 offscreen QApplication，渲染器不自行创建第二个 Qt 应用。
 - STATUS notification 订阅成功不代表 Windows 链路已经加密。客户端必须在任何 CONTROL/FRAME_DATA 写入前轮询 STATUS，直到 `LINK_ENCRYPTED` 与 `LINK_BONDED` 同时置位。BEGIN 遇到 GATT error 5 时重新读取 STATUS：若安全标志已经齐全，直接报告固件安全策略冲突（例如 SC Only 与 Just Works 不兼容），不做无效重配对；只有标志确实掉线时才重新配对并重试一次。认证失败期间不得发送数据块。
 - 真机出现 `flags=0x0027`（encrypted+bonded+connected+sync）但 CONTROL 仍返回 ATT 0x05，已定位为固件同时启用 `CONFIG_BT_NIMBLE_SM_SC_ONLY=1`、NoInputNoOutput 和 `sm_mitm=0`：Just Works 链路无法满足 NimBLE SC Only 对 authenticated Level 4 的要求。PC 只能明确诊断，根治需要固件关闭 SC Only，同时继续保留 characteristic 加密写权限。
-- 协议、显示状态/渲染、BLE 客户端和 Qt 页签共有 30 项聚焦测试通过；完整 `pc-test` 为 262 项全部通过。基础双设备联调已经完成，分层局刷效果仍需持续观察。
+- 协议、显示状态/渲染、BLE 客户端和 Qt 页签共有 31 项聚焦测试通过；完整 `pc-test` 为 263 项全部通过。基础双设备联调已经完成，零积压分层局刷效果仍需持续观察。
 
 ## Result
 
-PC 端计划内的软件工作已完成：新增 BLE Display v1 兼容副本和固件黄金向量、30 秒去重 HRV 窗口、296×152 1-bit 固定布局与 ECG min/max 包络、容量为 1 的最新帧调度、独立 Quote/0 Bleak 客户端、瞬时失败 CANCEL/单次重试、自动重连，以及主 Qt GUI 的“墨水屏同步”页和操作文档。协议实现已对齐固件 commit `cbb351deb634c6463e0e85cd271916f51f87e349` 的 UUID、控制消息、帧数据头、DEVICE_INFO、STATUS、能力位、状态位和错误码。BLE 发送循环现在把 encrypted+bonded STATUS 作为硬门槛；链路标志掉线时执行一次受控重配对重试，标志齐全却仍返回错误 5 时明确指向固件 SC Only/Just Works 策略冲突。
+PC 端计划内的软件工作已完成：新增 BLE Display v1 兼容副本和固件黄金向量、30 秒去重 HRV 窗口、296×152 1-bit 固定布局与 ECG min/max 包络、零积压最新帧派发、独立 Quote/0 Bleak 客户端、事务 CANCEL、自动重连，以及主 Qt GUI 的“墨水屏同步”页和操作文档。协议实现已对齐固件 commit `cbb351deb634c6463e0e85cd271916f51f87e349` 的 UUID、控制消息、帧数据头、DEVICE_INFO、STATUS、能力位、状态位和错误码。BLE 发送循环现在把 encrypted+bonded STATUS 作为硬门槛；链路标志掉线时执行一次受控重配对重试，标志齐全却仍返回错误 5 时明确指向固件 SC Only/Just Works 策略冲突。设备忙碌或传输失败时不保留旧帧，下一次空闲派发重新读取最新指标和最近 8 秒 ECG。
 
-验证结果：30 项电子纸聚焦测试通过；仓库完整 `pc-test` 为 `262 passed in 49.67s`；`git diff --check` 待最终提交前再次确认。没有修改任何固件、GPIO、采样率或 V0 原始协议。
+验证结果：31 项电子纸聚焦测试通过；仓库完整 `pc-test` 为 `263 passed in 67.10s`；`git diff --check` 待最终提交前再次确认。没有修改任何固件、GPIO、采样率或 V0 原始协议。
 
 尚未验证：修复后的上位机与 Quote/0 真机完整帧传输、Windows 同时连接两个真实 Peripheral、约 4.1 秒屏幕刷新期间的项圈持续吞吐、残影、刷新策略、电池功耗、绑定缓存和人体连接行为。

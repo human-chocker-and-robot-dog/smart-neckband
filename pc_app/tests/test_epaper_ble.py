@@ -9,6 +9,7 @@ from bleak.exc import BleakGATTProtocolError
 from smart_neckband.epaper_ble import (
     FRAME_COMPLETION_TIMEOUT_S,
     DisplayAuthenticationError,
+    EpaperDispatchBusyError,
     EpaperDisplayClient,
     LinkSecurityTimeoutError,
     _matches_epaper_device,
@@ -395,18 +396,20 @@ def test_secure_link_authentication_error_reports_firmware_policy_mismatch() -> 
     assert commands == [ControlCommand.BEGIN_FRAME]
 
 
-def test_client_sends_latest_pending_frame_and_reconstructs_exact_bytes() -> None:
+def test_client_rejects_a_second_pending_frame_and_sends_exact_bytes() -> None:
     FakeBleakClient.instances.clear()
     client = EpaperDisplayClient(
         address="AA:BB:CC:DD:EE:FF",
         client_factory=FakeBleakClient,
         completion_timeout_s=2,
     )
-    first_id = client.queue_frame(_scheduled(0x11))
-    second = _scheduled(0x22, force_full=True)
-    second_id = client.queue_frame(second)
-    assert second_id == first_id + 1
-    assert client.runtime_status.local_pending_replaced_count == 1
+    first = _scheduled(0x22, force_full=True)
+    first_id = client.try_queue_frame(first)
+    assert first_id is not None
+    assert client.try_queue_frame(_scheduled(0x33)) is None
+    with pytest.raises(EpaperDispatchBusyError, match="was not queued"):
+        client.queue_frame(_scheduled(0x44))
+    assert client.runtime_status.local_pending_replaced_count == 0
 
     client.start()
     deadline = time.monotonic() + 3
@@ -419,7 +422,7 @@ def test_client_sends_latest_pending_frame_and_reconstructs_exact_bytes() -> Non
     assert client.runtime_status.frame_completed_count == 1
     assert client.runtime_status.display_status is not None
     assert client.runtime_status.display_status.active_frame_id == 0
-    assert client.runtime_status.display_status.last_frame_id == second_id
+    assert client.runtime_status.display_status.last_frame_id == first_id
     fake = FakeBleakClient.instances[0]
     assert fake.kwargs["pair"] is True
     assert fake.kwargs["winrt"] == {"use_cached_services": False}
@@ -430,15 +433,26 @@ def test_client_sends_latest_pending_frame_and_reconstructs_exact_bytes() -> Non
     ]
     assert len(begin_packets) == 1
     begin = decode_begin_frame(begin_packets[0])
-    assert begin.frame_id == second_id
+    assert begin.frame_id == first_id
     assert begin.refresh_request is RefreshRequest.FORCE_FULL
     chunks = [
         decode_frame_chunk(data)
         for uuid, data, _response in fake.writes
         if uuid == FRAME_DATA_UUID
     ]
-    assert b"".join(chunk.data for chunk in chunks) == second.frame
+    assert b"".join(chunk.data for chunk in chunks) == first.frame
     assert all(response for _uuid, _data, response in fake.writes)
+
+
+def test_client_does_not_accept_a_frame_behind_an_active_transfer() -> None:
+    client = EpaperDisplayClient(address="AA:BB")
+    first_id = client.try_queue_frame(_scheduled(0x11))
+    assert first_id is not None
+    request = client._take_pending()
+    assert request is not None
+    assert client.runtime_status.pending_frame_id is None
+    assert client.runtime_status.active_frame_id == first_id
+    assert client.try_queue_frame(_scheduled(0x22)) is None
 
 
 def test_client_rejects_a_scheduled_crc_mismatch() -> None:
@@ -454,7 +468,7 @@ def test_client_rejects_a_scheduled_crc_mismatch() -> None:
         client.queue_frame(bad)
 
 
-def test_client_cancels_and_retries_one_transient_transfer_failure() -> None:
+def test_client_cancels_but_does_not_requeue_a_failed_transfer() -> None:
     FlakyBleakClient.instances.clear()
     FlakyBleakClient.failed_once = False
     client = EpaperDisplayClient(
@@ -466,16 +480,17 @@ def test_client_cancels_and_retries_one_transient_transfer_failure() -> None:
     client.start()
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
-        if client.runtime_status.frame_completed_count == 1:
+        if client.runtime_status.last_error is not None:
             break
         time.sleep(0.01)
     client.stop()
 
-    assert client.runtime_status.frame_completed_count == 1
+    assert client.runtime_status.frame_completed_count == 0
+    assert client.runtime_status.pending_frame_id is None
     fake = FlakyBleakClient.instances[0]
     commands = [
         data[1] for uuid, data, _response in fake.writes if uuid == CONTROL_UUID
     ]
-    assert commands.count(ControlCommand.BEGIN_FRAME) == 2
+    assert commands.count(ControlCommand.BEGIN_FRAME) == 1
     assert commands.count(ControlCommand.CANCEL_FRAME) == 1
-    assert commands.count(ControlCommand.COMMIT_FRAME) == 1
+    assert commands.count(ControlCommand.COMMIT_FRAME) == 0

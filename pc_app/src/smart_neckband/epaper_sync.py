@@ -279,7 +279,15 @@ class EpaperWaveformSnapshotter:
     def set_interval_seconds(self, value: float) -> None:
         self.interval_ns = _waveform_interval_ns(value)
 
-    def apply(
+    def preview(self, state: EpaperDisplayState) -> EpaperDisplayState:
+        if (
+            self._last_updated_ns is None
+            or state.source_instance_id != self._source_instance_id
+        ):
+            return state
+        return replace(state, waveform=self._waveform)
+
+    def candidate(
         self,
         state: EpaperDisplayState,
         *,
@@ -292,11 +300,20 @@ class EpaperWaveformSnapshotter:
             or now_ns - self._last_updated_ns >= self.interval_ns
         )
         updated = force or source_changed or interval_due
-        if updated:
-            self._waveform = state.waveform
-            self._source_instance_id = state.source_instance_id
-            self._last_updated_ns = now_ns
-        return replace(state, waveform=self._waveform), updated
+        waveform = state.waveform if updated else self._waveform
+        return replace(state, waveform=waveform), updated
+
+    def mark_dispatched(
+        self,
+        state: EpaperDisplayState,
+        *,
+        waveform_updated: bool,
+    ) -> None:
+        if not waveform_updated:
+            return
+        self._waveform = state.waveform
+        self._source_instance_id = state.source_instance_id
+        self._last_updated_ns = self.monotonic_ns()
 
 
 class EpaperFrameScheduler:

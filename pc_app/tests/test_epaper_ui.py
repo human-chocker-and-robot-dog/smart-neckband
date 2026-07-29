@@ -14,6 +14,8 @@ class FakeClient:
         self.started = False
         self.stopped = False
         self.queued = []
+        self.pending_frame_id = None
+        self.active_frame_id = None
 
     @property
     def runtime_status(self) -> EpaperRuntimeStatus:
@@ -23,8 +25,8 @@ class FakeClient:
             connected=self.started and not self.stopped,
             device_info=None,
             display_status=None,
-            pending_frame_id=None,
-            active_frame_id=None,
+            pending_frame_id=self.pending_frame_id,
+            active_frame_id=self.active_frame_id,
             frame_sent_count=0,
             frame_completed_count=0,
             local_pending_replaced_count=0,
@@ -38,6 +40,14 @@ class FakeClient:
         self.stopped = True
 
     def queue_frame(self, scheduled) -> int:
+        frame_id = self.try_queue_frame(scheduled)
+        if frame_id is None:
+            raise RuntimeError("busy")
+        return frame_id
+
+    def try_queue_frame(self, scheduled) -> int | None:
+        if self.pending_frame_id is not None or self.active_frame_id is not None:
+            return None
         self.queued.append(scheduled)
         return len(self.queued)
 
@@ -92,6 +102,11 @@ def test_epaper_panel_is_integrated_single_gui_surface() -> None:
         app.processEvents()
         assert clients[0].started
         assert clients[0].auto_reconnect is True
+        clients[0].active_frame_id = 99
+        panel.send_now_button.click()
+        assert len(clients[0].queued) == 0
+        assert "未排队" in panel.send_status_label.text()
+        clients[0].active_frame_id = None
         panel.send_now_button.click()
         assert len(clients[0].queued) == 1
         panel.debug_group.setChecked(True)

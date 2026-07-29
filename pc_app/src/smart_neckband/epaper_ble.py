@@ -67,7 +67,6 @@ class EpaperRuntimeStatus:
 class _FrameRequest:
     frame_id: int
     scheduled: ScheduledEpaperFrame
-    attempts: int = 0
 
 
 class DisplayRejectedError(RuntimeError):
@@ -79,6 +78,10 @@ class DisplayAuthenticationError(RuntimeError):
 
 
 class LinkSecurityTimeoutError(TimeoutError):
+    pass
+
+
+class EpaperDispatchBusyError(RuntimeError):
     pass
 
 
@@ -242,19 +245,27 @@ class EpaperDisplayClient:
             self._thread.join(timeout=timeout)
 
     def queue_frame(self, scheduled: ScheduledEpaperFrame) -> int:
+        frame_id = self.try_queue_frame(scheduled)
+        if frame_id is None:
+            raise EpaperDispatchBusyError(
+                "Quote/0 display client is busy; frame was not queued"
+            )
+        return frame_id
+
+    def try_queue_frame(self, scheduled: ScheduledEpaperFrame) -> int | None:
         if len(scheduled.frame) != FRAME_BYTES:
             raise ValueError(f"frame must contain {FRAME_BYTES} bytes")
         actual_crc = frame_crc32(scheduled.frame)
         if actual_crc != scheduled.crc32:
             raise ValueError("scheduled frame CRC does not match its bytes")
         with self._pending_lock:
-            frame_id = self._next_frame_id
-            self._next_frame_id = (self._next_frame_id + 1) & 0xFFFFFFFF
-            if self._next_frame_id == 0:
-                self._next_frame_id = 1
-            if self._pending is not None:
-                with self._runtime_lock:
-                    self._local_pending_replaced_count += 1
+            with self._runtime_lock:
+                if self._pending is not None or self._active_frame_id is not None:
+                    return None
+                frame_id = self._next_frame_id
+                self._next_frame_id = (self._next_frame_id + 1) & 0xFFFFFFFF
+                if self._next_frame_id == 0:
+                    self._next_frame_id = 1
             self._pending = _FrameRequest(frame_id=frame_id, scheduled=scheduled)
         return frame_id
 
@@ -262,19 +273,10 @@ class EpaperDisplayClient:
         with self._pending_lock:
             value = self._pending
             self._pending = None
+            if value is not None:
+                with self._runtime_lock:
+                    self._active_frame_id = value.frame_id
             return value
-
-    def _restore_pending_after_transient_failure(self, request: _FrameRequest) -> None:
-        if request.attempts >= 1:
-            return
-        retry = _FrameRequest(
-            frame_id=request.frame_id,
-            scheduled=request.scheduled,
-            attempts=request.attempts + 1,
-        )
-        with self._pending_lock:
-            if self._pending is None:
-                self._pending = retry
 
     def _run(self) -> None:
         while not self._stop.is_set():
@@ -357,15 +359,6 @@ class EpaperDisplayClient:
                     try:
                         await self._send_frame(client, request, info)
                     except Exception as exc:
-                        if not isinstance(
-                            exc,
-                            (
-                                DisplayRejectedError,
-                                DisplayAuthenticationError,
-                                LinkSecurityTimeoutError,
-                            ),
-                        ):
-                            self._restore_pending_after_transient_failure(request)
                         self._set_error(exc)
                         self._debug(
                             "墨水屏帧 %d 发送失败：%s: %s",

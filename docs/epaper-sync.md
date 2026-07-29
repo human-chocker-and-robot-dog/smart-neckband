@@ -2,7 +2,7 @@
 
 主 Windows Qt 上位机包含“墨水屏同步”页面，可在继续接收项圈原始 ECG 的同时，通过第二条加密 BLE GATT 连接向 MindReset Quote/0 发送低频健康摘要画面。
 
-当前实现完成了 PC 端协议、显示状态、HRV 窗口、1-bit 帧渲染、独立 BLE 客户端、最新帧队列和 Qt 页面，并已与 Quote/0 BLE Display v1 真机完成基础帧传输联调。
+当前实现完成了 PC 端协议、显示状态、HRV 窗口、1-bit 帧渲染、独立 BLE 客户端、零积压最新帧派发和 Qt 页面，并已与 Quote/0 BLE Display v1 真机完成基础帧传输联调。
 
 ## 数据链路
 
@@ -63,11 +63,14 @@ Quote/0 ESP32-C3 + UC8251D
 
 - PC 每约 0.5 秒更新内部分析和预览，但不会按该频率写电子纸。
 - BPM、HRV、SQI 和导联状态默认使用 5 秒最短发送间隔。Quote/0 真机刷新约 4.1 秒，因此当前不承诺 1 Hz 物理显示。
-- ECG 使用独立波形快照，默认每 10 秒才替换一次；中间指标帧复用上一张波形。
+- ECG 使用独立波形快照，默认每 10 秒才替换一次；中间指标帧复用上一张已实际发送的波形。
 - 只有顶部指标变化时，完整 framebuffer 的差异被限制在顶部区域，为 Quote/0 auto diff 选择局部刷新提供条件。
 - 导联状态、SQI 有效性、clipping 或 stale 状态变化可以优先调度下一帧。
 - framebuffer 未变化时跳过发送。
-- Quote/0 刷新期间只保留一张最新 pending 帧，旧 pending 帧被覆盖，不补发历史画面。
+- Quote/0 正在接收、排队或刷新时，PC 不创建待发帧，也不保留旧 framebuffer。
+- 设备恢复空闲后，PC 重新读取当时最新的 BPM、HRV、SQI、导联状态和最近 8 秒 ECG，再生成并立即派发一帧。
+- 传输失败的旧帧只执行必要的 CANCEL，不自动重新排队；下一次调度重新构造最新数据。
+- 5 秒指标时钟和 10 秒 ECG 时钟只在帧真正交给 BLE 发送线程后推进，忙碌期间不会把未发送的快照误记为已刷新。
 - PC 只请求 auto 或明确 force full；实际 none/full/partial 和维护性全刷由 Quote/0 固件决定。
 
 ## BLE Display v1
