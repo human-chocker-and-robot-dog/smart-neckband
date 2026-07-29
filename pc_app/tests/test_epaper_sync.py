@@ -11,6 +11,7 @@ from smart_neckband.epaper_sync import (
     EpaperDisplayStateBuilder,
     EpaperFrameScheduler,
     EpaperHrvWindow,
+    EpaperWaveformSnapshotter,
     HrvEstimate,
     EpaperDisplayState,
     minmax_envelope,
@@ -197,15 +198,97 @@ def test_renderer_produces_quote0_frame_and_requested_layout() -> None:
     assert len(rendered.frame) == FRAME_BYTES
     assert rendered.labels[0].endswith("BPM")
     assert rendered.labels[1].startswith("HRV ")
-    assert rendered.labels[2] == "导联正常"
-    assert "最近 8 秒" in rendered.labels[3]
-    assert "SQI" in rendered.labels[3]
+    assert rendered.labels[2] == "正常"
+    assert rendered.labels[3] == "ECG 最近 8 秒"
+    assert "SQI" in rendered.labels[4]
     assert all("更新时间" not in label for label in rendered.labels)
     assert rendered.graph_black_pixels > FRAME_WIDTH
-    top_left = rendered.frame[0 : 26 * FRAME_STRIDE]
-    graph = rendered.frame[80 * FRAME_STRIDE :]
+    top_left = rendered.frame[0 : 32 * FRAME_STRIDE]
+    top_right = b"".join(
+        rendered.frame[(row * FRAME_STRIDE) + 18 : (row + 1) * FRAME_STRIDE]
+        for row in range(32)
+    )
+    second_row = rendered.frame[32 * FRAME_STRIDE : 60 * FRAME_STRIDE]
+    graph = rendered.frame[61 * FRAME_STRIDE :]
     assert any(value != 0xFF for value in top_left)
+    assert any(value != 0xFF for value in top_right)
+    assert any(value != 0xFF for value in second_row)
     assert any(value != 0xFF for value in graph)
+
+
+def test_waveform_snapshotter_updates_metrics_without_replacing_ecg_until_due() -> None:
+    now = [0]
+    snapshotter = EpaperWaveformSnapshotter(
+        interval_seconds=10,
+        monotonic_ns=lambda: now[0],
+    )
+    state = EpaperDisplayState(
+        source_instance_id=SOURCE,
+        source_sample_index=10,
+        source_timestamp_us=20,
+        heart_rate_bpm=72.0,
+        hrv=HrvEstimate(30.0, True, 5, 30, "rmssd", None),
+        signal_quality=0.9,
+        lead_text="导联正常",
+        lead_off=False,
+        clipping=False,
+        stale=False,
+        data_age_ms=100,
+        analysis_message="ok",
+        waveform=(1.0, 2.0, 3.0),
+    )
+
+    first, first_updated = snapshotter.apply(state)
+    assert first_updated
+    assert first.waveform == (1.0, 2.0, 3.0)
+
+    now[0] = 1_000_000_000
+    metric_only, metric_updated = snapshotter.apply(
+        replace(state, heart_rate_bpm=73.0, waveform=(4.0, 5.0, 6.0))
+    )
+    assert not metric_updated
+    assert metric_only.heart_rate_bpm == 73.0
+    assert metric_only.waveform == first.waveform
+
+    now[0] = 10_000_000_000
+    waveform_due, waveform_updated = snapshotter.apply(
+        replace(state, waveform=(4.0, 5.0, 6.0))
+    )
+    assert waveform_updated
+    assert waveform_due.waveform == (4.0, 5.0, 6.0)
+
+    now[0] = 11_000_000_000
+    new_source, source_updated = snapshotter.apply(
+        replace(
+            state,
+            source_instance_id="source-b",
+            waveform=(7.0, 8.0),
+        )
+    )
+    assert source_updated
+    assert new_source.waveform == (7.0, 8.0)
+
+
+def test_renderer_uses_full_waveform_range_for_a_narrow_peak() -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6 import QtCore, QtGui, QtWidgets
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
+    state = EpaperDisplayStateBuilder(monotonic_ns=lambda: NOW_NS).build(
+        analysis=_analysis(),
+        status=_status(),
+        source_sample=_sample(),
+    )
+    waveform = [0.0] * 4_000
+    waveform[2_000] = 100.0
+    rendered = render_epaper_frame(
+        replace(state, waveform=tuple(waveform)),
+        QtCore=QtCore,
+        QtGui=QtGui,
+    )
+    graph_top_band = rendered.frame[61 * FRAME_STRIDE : 69 * FRAME_STRIDE]
+    assert any(value != 0xFF for value in graph_top_band)
 
 
 def test_scheduler_throttles_ordinary_updates_but_prioritizes_lead_change() -> None:

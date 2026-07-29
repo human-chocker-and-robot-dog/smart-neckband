@@ -16,7 +16,10 @@ from .epaper_sync import (
     EpaperDisplayState,
     EpaperDisplayStateBuilder,
     EpaperFrameScheduler,
+    EpaperWaveformSnapshotter,
+    METRIC_REFRESH_SECONDS,
     RenderedEpaperFrame,
+    WAVEFORM_REFRESH_SECONDS,
     framebuffer_to_qimage,
     render_epaper_frame,
 )
@@ -48,7 +51,12 @@ class EpaperSyncPanel:
         self.monotonic = monotonic
         self.client: EpaperDisplayClient | None = None
         self.state_builder = EpaperDisplayStateBuilder()
-        self.scheduler = EpaperFrameScheduler(interval_seconds=15.0)
+        self.scheduler = EpaperFrameScheduler(
+            interval_seconds=METRIC_REFRESH_SECONDS
+        )
+        self.waveform_snapshotter = EpaperWaveformSnapshotter(
+            interval_seconds=WAVEFORM_REFRESH_SECONDS
+        )
         self.latest_state: EpaperDisplayState | None = None
         self.latest_rendered: RenderedEpaperFrame | None = None
         self._last_render_monotonic_s = 0.0
@@ -80,14 +88,20 @@ class EpaperSyncPanel:
         sync_layout = QtWidgets.QHBoxLayout(sync_group)
         self.auto_sync_checkbox = QtWidgets.QCheckBox("启用自动同步")
         self.interval_spin = QtWidgets.QSpinBox()
-        self.interval_spin.setRange(10, 60)
-        self.interval_spin.setValue(15)
+        self.interval_spin.setRange(5, 60)
+        self.interval_spin.setValue(int(METRIC_REFRESH_SECONDS))
         self.interval_spin.setSuffix(" 秒")
+        self.waveform_interval_spin = QtWidgets.QSpinBox()
+        self.waveform_interval_spin.setRange(10, 60)
+        self.waveform_interval_spin.setValue(int(WAVEFORM_REFRESH_SECONDS))
+        self.waveform_interval_spin.setSuffix(" 秒")
         self.send_now_button = QtWidgets.QPushButton("立即发送")
         self.force_full_button = QtWidgets.QPushButton("下一帧强制全刷")
         sync_layout.addWidget(self.auto_sync_checkbox)
-        sync_layout.addWidget(QtWidgets.QLabel("最短发送间隔"))
+        sync_layout.addWidget(QtWidgets.QLabel("指标局刷间隔"))
         sync_layout.addWidget(self.interval_spin)
+        sync_layout.addWidget(QtWidgets.QLabel("ECG 更新间隔"))
+        sync_layout.addWidget(self.waveform_interval_spin)
         sync_layout.addWidget(self.send_now_button)
         sync_layout.addWidget(self.force_full_button)
         sync_layout.addStretch(1)
@@ -141,6 +155,9 @@ class EpaperSyncPanel:
         self.connect_button.clicked.connect(self.connect_device)
         self.disconnect_button.clicked.connect(self.disconnect_device)
         self.interval_spin.valueChanged.connect(self._set_interval)
+        self.waveform_interval_spin.valueChanged.connect(
+            self._set_waveform_interval
+        )
         self.send_now_button.clicked.connect(lambda: self.send_current(force_full=False))
         self.force_full_button.clicked.connect(lambda: self.send_current(force_full=True))
         self.debug_group.toggled.connect(self.debug_log.setVisible)
@@ -270,10 +287,14 @@ class EpaperSyncPanel:
                 ):
                     source_sample = sample
                     break
-        state = self.state_builder.build(
+        live_state = self.state_builder.build(
             analysis=analysis,
             status=self.stores.status.latest(),
             source_sample=source_sample,
+        )
+        state, _ = self.waveform_snapshotter.apply(
+            live_state,
+            force=force,
         )
         if not force and state == self.latest_state:
             return
@@ -369,6 +390,9 @@ class EpaperSyncPanel:
 
     def _set_interval(self, value: int) -> None:
         self.scheduler.set_interval_seconds(float(value))
+
+    def _set_waveform_interval(self, value: int) -> None:
+        self.waveform_snapshotter.set_interval_seconds(float(value))
 
     def _queue_debug(self, message: str) -> None:
         self.post_gui(lambda: self._append_debug(message))

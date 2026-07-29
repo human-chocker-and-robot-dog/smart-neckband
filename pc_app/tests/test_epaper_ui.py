@@ -69,13 +69,19 @@ def test_epaper_panel_is_integrated_single_gui_surface() -> None:
     )
     try:
         assert panel.auto_sync_checkbox.isChecked() is False
-        assert panel.interval_spin.value() == 15
+        assert panel.interval_spin.value() == 5
+        assert panel.waveform_interval_spin.value() == 10
         assert panel.auto_reconnect_checkbox.isChecked() is True
         assert panel.debug_group.isChecked() is False
         assert panel.debug_log.isHidden()
         assert panel.preview_label.pixmap() is not None
         assert panel.hr_label.text() == "BPM --"
         assert panel.hrv_label.text() == "HRV -- ms"
+
+        panel.interval_spin.setValue(6)
+        panel.waveform_interval_spin.setValue(12)
+        assert panel.scheduler.interval_ns == 6_000_000_000
+        assert panel.waveform_snapshotter.interval_ns == 12_000_000_000
 
         panel._apply_scan_result(
             generation=0,

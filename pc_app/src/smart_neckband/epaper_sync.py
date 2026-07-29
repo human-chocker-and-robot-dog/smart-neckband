@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from threading import Lock
 import time
@@ -18,6 +18,11 @@ HRV_WINDOW_SECONDS = 30
 ANALYSIS_STALE_MS = 2_000
 MIN_HRV_NN_COUNT = 5
 MIN_HRV_SQI = 0.5
+METRIC_REFRESH_SECONDS = 5.0
+WAVEFORM_REFRESH_SECONDS = 10.0
+MIN_METRIC_REFRESH_SECONDS = 5.0
+MIN_WAVEFORM_REFRESH_SECONDS = 10.0
+MAX_REFRESH_SECONDS = 60.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,25 +263,59 @@ class EpaperDisplayStateBuilder:
         )
 
 
+class EpaperWaveformSnapshotter:
+    def __init__(
+        self,
+        *,
+        interval_seconds: float = WAVEFORM_REFRESH_SECONDS,
+        monotonic_ns: Callable[[], int] = time.monotonic_ns,
+    ) -> None:
+        self.monotonic_ns = monotonic_ns
+        self.interval_ns = _waveform_interval_ns(interval_seconds)
+        self._last_updated_ns: int | None = None
+        self._source_instance_id: str | None = None
+        self._waveform: tuple[float, ...] = ()
+
+    def set_interval_seconds(self, value: float) -> None:
+        self.interval_ns = _waveform_interval_ns(value)
+
+    def apply(
+        self,
+        state: EpaperDisplayState,
+        *,
+        force: bool = False,
+    ) -> tuple[EpaperDisplayState, bool]:
+        now_ns = self.monotonic_ns()
+        source_changed = state.source_instance_id != self._source_instance_id
+        interval_due = (
+            self._last_updated_ns is None
+            or now_ns - self._last_updated_ns >= self.interval_ns
+        )
+        updated = force or source_changed or interval_due
+        if updated:
+            self._waveform = state.waveform
+            self._source_instance_id = state.source_instance_id
+            self._last_updated_ns = now_ns
+        return replace(state, waveform=self._waveform), updated
+
+
 class EpaperFrameScheduler:
     def __init__(
         self,
         *,
-        interval_seconds: float = 15.0,
+        interval_seconds: float = METRIC_REFRESH_SECONDS,
         monotonic_ns: Callable[[], int] = time.monotonic_ns,
     ) -> None:
         self.monotonic_ns = monotonic_ns
-        self.interval_ns = int(interval_seconds * 1_000_000_000)
+        self.interval_ns = _metric_interval_ns(interval_seconds)
         self._last_scheduled_ns: int | None = None
         self._last_crc32: int | None = None
         self._last_priority_signature: tuple[object, ...] | None = None
         self._lock = Lock()
 
     def set_interval_seconds(self, value: float) -> None:
-        if not 10.0 <= value <= 60.0:
-            raise ValueError("electronic-paper interval must be between 10 and 60 seconds")
         with self._lock:
-            self.interval_ns = int(value * 1_000_000_000)
+            self.interval_ns = _metric_interval_ns(value)
 
     def consider(
         self,
@@ -338,27 +377,48 @@ def render_epaper_frame(
     painter.setPen(QtGui.QPen(QtCore.Qt.black, 1))
     painter.setBrush(QtCore.Qt.black)
 
-    _draw_star(painter, QtCore, QtGui, center_x=14, center_y=13, outer_radius=10, inner_radius=4)
+    _draw_heart(painter, QtCore, QtGui, left=4, top=4, width=24, height=24)
     bpm_text = (
         f"{state.heart_rate_bpm:.0f} BPM"
         if state.heart_rate_bpm is not None
         else "-- BPM"
     )
     hrv_text = f"HRV {state.hrv.value_ms:.0f} ms" if state.hrv.valid else "HRV -- ms"
+    ecg_text = "ECG 最近 8 秒"
     sqi_text = (
-        f"ECG · 最近 8 秒 · SQI {state.signal_quality * 100:.0f}%"
+        f"SQI {state.signal_quality * 100:.0f}%"
         if state.signal_quality is not None
-        else "ECG · 最近 8 秒 · SQI --"
+        else "SQI --"
     )
-    labels = (bpm_text, hrv_text, state.lead_text, sqi_text)
+    lead_text = _compact_lead_text(state.lead_text)
+    labels = (bpm_text, hrv_text, lead_text, ecg_text, sqi_text)
 
-    _draw_text(painter, QtCore, QtGui, (29, 0, 263, 26), bpm_text, 18, bold=True)
-    _draw_text(painter, QtCore, QtGui, (5, 25, 286, 20), hrv_text, 12, bold=True)
-    _draw_text(painter, QtCore, QtGui, (5, 44, 286, 17), state.lead_text, 10)
-    _draw_text(painter, QtCore, QtGui, (5, 60, 286, 18), sqi_text, 9)
+    _draw_text(painter, QtCore, QtGui, (32, 0, 116, 32), bpm_text, 19, bold=True)
+    _draw_text(
+        painter,
+        QtCore,
+        QtGui,
+        (150, 0, 142, 32),
+        hrv_text,
+        19,
+        bold=True,
+        align_right=True,
+    )
+    _draw_text(painter, QtCore, QtGui, (4, 32, 70, 27), lead_text, 13, bold=True)
+    _draw_text(painter, QtCore, QtGui, (74, 32, 128, 27), ecg_text, 13, bold=True)
+    _draw_text(
+        painter,
+        QtCore,
+        QtGui,
+        (202, 32, 90, 27),
+        sqi_text,
+        13,
+        bold=True,
+        align_right=True,
+    )
 
     graph_left = 4
-    graph_top = 80
+    graph_top = 61
     graph_width = FRAME_WIDTH - 8
     graph_height = FRAME_HEIGHT - graph_top - 2
     graph_black_pixels = _draw_waveform(
@@ -429,6 +489,7 @@ def _draw_text(
     pixel_size: int,
     *,
     bold: bool = False,
+    align_right: bool = False,
 ) -> None:
     font = QtGui.QFont("Microsoft YaHei UI")
     font.setPixelSize(pixel_size)
@@ -436,32 +497,44 @@ def _draw_text(
     painter.setFont(font)
     painter.drawText(
         QtCore.QRect(*rect),
-        QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
+        (QtCore.Qt.AlignRight if align_right else QtCore.Qt.AlignLeft)
+        | QtCore.Qt.AlignVCenter,
         text,
     )
 
 
-def _draw_star(
+def _draw_heart(
     painter: object,
     QtCore: object,
     QtGui: object,
     *,
-    center_x: int,
-    center_y: int,
-    outer_radius: int,
-    inner_radius: int,
+    left: int,
+    top: int,
+    width: int,
+    height: int,
 ) -> None:
-    points = []
-    for index in range(10):
-        angle = (-math.pi / 2.0) + (index * math.pi / 5.0)
-        radius = outer_radius if index % 2 == 0 else inner_radius
-        points.append(
-            QtCore.QPointF(
-                center_x + math.cos(angle) * radius,
-                center_y + math.sin(angle) * radius,
-            )
+    points = (
+        (0.50, 1.00),
+        (0.08, 0.58),
+        (0.03, 0.35),
+        (0.11, 0.16),
+        (0.26, 0.08),
+        (0.40, 0.12),
+        (0.50, 0.25),
+        (0.60, 0.12),
+        (0.74, 0.08),
+        (0.89, 0.16),
+        (0.97, 0.35),
+        (0.92, 0.58),
+    )
+    painter.drawPolygon(
+        QtGui.QPolygonF(
+            [
+                QtCore.QPointF(left + x * width, top + y * height)
+                for x, y in points
+            ]
         )
-    painter.drawPolygon(QtGui.QPolygonF(points))
+    )
 
 
 def _draw_waveform(
@@ -488,25 +561,36 @@ def _draw_waveform(
             painter.drawPoint(x, baseline)
         return width // 4
 
-    ordered = sorted(finite_values)
-    low = _percentile(ordered, 0.02)
-    high = _percentile(ordered, 0.98)
+    low = min(finite_values)
+    high = max(finite_values)
     if high <= low:
         low -= 1.0
         high += 1.0
-    padding = (high - low) * 0.08
+    padding = (high - low) * 0.04
     low -= padding
     high += padding
 
     black_pixels = 0
+    previous_point: tuple[int, int] | None = None
     for column, pair in enumerate(envelope):
         if pair is None:
+            previous_point = None
             continue
         minimum, maximum = pair
         y_top = _map_y(maximum, low=low, high=high, top=top, height=height)
         y_bottom = _map_y(minimum, low=low, high=high, top=top, height=height)
-        painter.drawLine(left + column, y_top, left + column, y_bottom)
-        black_pixels += abs(y_bottom - y_top) + 1
+        x = left + column
+        midpoint = (y_top + y_bottom) // 2
+        if previous_point is not None:
+            painter.drawLine(previous_point[0], previous_point[1], x, midpoint)
+            black_pixels += max(
+                abs(x - previous_point[0]),
+                abs(midpoint - previous_point[1]),
+            ) + 1
+        if column % 2 == 0 or abs(y_bottom - y_top) >= 4:
+            painter.drawLine(x, y_top, x, y_bottom)
+            black_pixels += abs(y_bottom - y_top) + 1
+        previous_point = (x, midpoint)
     return black_pixels
 
 
@@ -514,18 +598,6 @@ def _map_y(value: float, *, low: float, high: float, top: int, height: int) -> i
     ratio = (value - low) / (high - low)
     ratio = min(1.0, max(0.0, ratio))
     return top + int(round((1.0 - ratio) * max(0, height - 1)))
-
-
-def _percentile(ordered: list[float], fraction: float) -> float:
-    if not ordered:
-        raise ValueError("cannot compute a percentile of an empty sequence")
-    position = fraction * (len(ordered) - 1)
-    lower = int(math.floor(position))
-    upper = int(math.ceil(position))
-    if lower == upper:
-        return ordered[lower]
-    weight = position - lower
-    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
 
 
 def _pack_grayscale_image(image: object) -> bytes:
@@ -547,3 +619,27 @@ def _age_ms(now_ns: int, evidence_ns: int | None) -> int | None:
     if evidence_ns is None or evidence_ns <= 0 or now_ns < evidence_ns:
         return None
     return int((now_ns - evidence_ns) / 1_000_000)
+
+
+def _compact_lead_text(value: str) -> str:
+    return {
+        "导联正常": "正常",
+        "导联脱落": "脱落",
+        "导联等待": "等待",
+    }.get(value, value)
+
+
+def _metric_interval_ns(value: float) -> int:
+    if not MIN_METRIC_REFRESH_SECONDS <= value <= MAX_REFRESH_SECONDS:
+        raise ValueError(
+            "electronic-paper metric interval must be between 5 and 60 seconds"
+        )
+    return int(value * 1_000_000_000)
+
+
+def _waveform_interval_ns(value: float) -> int:
+    if not MIN_WAVEFORM_REFRESH_SECONDS <= value <= MAX_REFRESH_SECONDS:
+        raise ValueError(
+            "electronic-paper waveform interval must be between 10 and 60 seconds"
+        )
+    return int(value * 1_000_000_000)
