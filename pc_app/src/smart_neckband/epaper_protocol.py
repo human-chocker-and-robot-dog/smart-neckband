@@ -7,12 +7,13 @@ import zlib
 
 
 PROTOCOL_VERSION = 1
+STRUCTURE_VERSION = 1
 
-DISPLAY_SERVICE_UUID = "7f510001-1b15-4a7b-9e9f-6b64d5f7c100"
-DEVICE_INFO_UUID = "7f510002-1b15-4a7b-9e9f-6b64d5f7c100"
-CONTROL_UUID = "7f510003-1b15-4a7b-9e9f-6b64d5f7c100"
-FRAME_DATA_UUID = "7f510004-1b15-4a7b-9e9f-6b64d5f7c100"
-STATUS_UUID = "7f510005-1b15-4a7b-9e9f-6b64d5f7c100"
+DISPLAY_SERVICE_UUID = "7b7d1000-4a30-4b15-9f41-5d2e6a8f6c20"
+DEVICE_INFO_UUID = "7b7d1001-4a30-4b15-9f41-5d2e6a8f6c20"
+CONTROL_UUID = "7b7d1002-4a30-4b15-9f41-5d2e6a8f6c20"
+FRAME_DATA_UUID = "7b7d1003-4a30-4b15-9f41-5d2e6a8f6c20"
+STATUS_UUID = "7b7d1004-4a30-4b15-9f41-5d2e6a8f6c20"
 
 FRAME_WIDTH = 296
 FRAME_HEIGHT = 152
@@ -29,8 +30,6 @@ class ControlCommand(IntEnum):
     BEGIN_FRAME = 1
     COMMIT_FRAME = 2
     CANCEL_FRAME = 3
-    GET_STATUS = 4
-    FORCE_FULL_NEXT = 5
 
 
 class RefreshRequest(IntEnum):
@@ -53,41 +52,58 @@ class RefreshMode(IntEnum):
     PARTIAL = 2
 
 
+class DisplayOwner(IntEnum):
+    NONE = 0
+    USB = 1
+    BLE = 2
+
+
 class DisplayErrorCode(IntEnum):
     NONE = 0
     BAD_VERSION = 1
-    BAD_LENGTH = 2
-    BAD_FRAME_ID = 3
-    BAD_OFFSET = 4
-    CRC_MISMATCH = 5
-    BUSY = 6
-    TIMEOUT = 7
-    DISPLAY_FAILED = 8
-    NOT_ENCRYPTED = 9
-    INTERNAL = 10
+    BAD_OPCODE = 2
+    NOT_ENCRYPTED = 3
+    BUSY = 4
+    INVALID_LENGTH = 5
+    INVALID_ROTATION = 6
+    INVALID_REFRESH_REQUEST = 7
+    FRAME_ID_MISMATCH = 8
+    OFFSET_MISMATCH = 9
+    OVERFLOW = 10
+    CRC_MISMATCH = 11
+    TIMEOUT = 12
+    NO_MEMORY = 13
+    QUEUE_FAILURE = 14
+    DISPLAY_FAILURE = 15
+    INVALID_STATE = 16
+    MALFORMED_MESSAGE = 17
+    INTERNAL = 255
 
 
 class DeviceCapability(IntFlag):
-    PARTIAL_REFRESH = 1 << 0
-    FORCE_FULL = 1 << 1
-    BATTERY_STATUS = 1 << 2
-    ENCRYPTED_WRITES = 1 << 3
-    LATEST_PENDING = 1 << 4
+    ENCRYPTED_WRITES = 1 << 0
+    BONDING = 1 << 1
+    STATUS_NOTIFY = 1 << 2
+    PARTIAL_REFRESH = 1 << 3
+    USB_TRANSPORT = 1 << 4
+    LATEST_PENDING = 1 << 5
 
 
 class StatusFlag(IntFlag):
     LINK_ENCRYPTED = 1 << 0
     LINK_BONDED = 1 << 1
-    PENDING_FRAME = 1 << 2
-    LOW_BATTERY = 1 << 3
+    LINK_CONNECTED = 1 << 2
+    PENDING_FRAME = 1 << 3
+    LEGACY_MODE = 1 << 4
+    SYNC_MODE = 1 << 5
+    LOW_BATTERY = 1 << 6
 
 
-BEGIN_FRAME_STRUCT = struct.Struct("<BBIHIHBBQQ")
-FRAME_ID_CONTROL_STRUCT = struct.Struct("<BI")
-SIMPLE_CONTROL_STRUCT = struct.Struct("<B")
-FRAME_CHUNK_PREFIX_STRUCT = struct.Struct("<IHH")
-DEVICE_INFO_STRUCT = struct.Struct("<BBHHHH16s")
-STATUS_STRUCT = struct.Struct("<BBIHHBBHHHHIHHBBHHHH")
+BEGIN_FRAME_STRUCT = struct.Struct("<BBBBIHHIQQ")
+FRAME_ID_CONTROL_STRUCT = struct.Struct("<BBHI")
+FRAME_CHUNK_PREFIX_STRUCT = struct.Struct("<BBHIHH")
+DEVICE_INFO_STRUCT = struct.Struct("<BBBBBBHHHHHHHHHII")
+STATUS_STRUCT = struct.Struct("<BBBBIIHHHHHHIHBBIHHIIIIII")
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,7 +115,6 @@ class BeginFrame:
     refresh_request: RefreshRequest = RefreshRequest.AUTO
     rotation: int = 90
     frame_length: int = FRAME_BYTES
-    flags: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,33 +130,53 @@ class DeviceInfo:
     width: int
     height: int
     frame_bytes: int
-    max_chunk_bytes: int
-    firmware_version: str
+    max_chunk_payload: int
+    firmware_major: int
+    firmware_minor: int
+    firmware_patch: int
+    status_size: int
+    begin_frame_size: int
+    preferred_att_mtu: int
+    device_id_tail: int
+    build_id: int
     protocol_version: int = PROTOCOL_VERSION
+    structure_version: int = STRUCTURE_VERSION
+
+    @property
+    def firmware_version(self) -> str:
+        return f"{self.firmware_major}.{self.firmware_minor}.{self.firmware_patch}"
 
 
 @dataclass(frozen=True, slots=True)
 class DisplayStatus:
     state: DisplayStateCode
-    frame_id: int
+    last_error: DisplayErrorCode
+    actual_refresh_mode: RefreshMode
+    active_frame_id: int
+    last_frame_id: int
     received_bytes: int
-    expected_bytes: int
-    refresh_mode: RefreshMode
-    error_code: DisplayErrorCode
-    x: int
-    y: int
-    width: int
-    height: int
+    flags: StatusFlag
+    changed_x: int
+    changed_y: int
+    changed_width: int
+    changed_height: int
     refresh_ms: int
     partial_refresh_count: int
-    battery_mv: int
     battery_percent: int
-    flags: StatusFlag
+    owner: DisplayOwner
+    milliseconds_since_last_full: int
+    battery_mv: int
     pending_replaced_count: int
     crc_error_count: int
     timeout_count: int
     display_failure_count: int
+    free_heap_bytes: int
+    status_sequence: int
     protocol_version: int = PROTOCOL_VERSION
+
+
+def crc32_iso_hdlc(data: bytes) -> int:
+    return zlib.crc32(data) & 0xFFFFFFFF
 
 
 def frame_crc32(frame: bytes) -> int:
@@ -149,7 +184,7 @@ def frame_crc32(frame: bytes) -> int:
         raise DisplayProtocolError(
             f"Quote/0 frames must contain {FRAME_BYTES} bytes, got {len(frame)}"
         )
-    return zlib.crc32(frame) & 0xFFFFFFFF
+    return crc32_iso_hdlc(frame)
 
 
 def encode_begin_frame(value: BeginFrame) -> bytes:
@@ -159,18 +194,17 @@ def encode_begin_frame(value: BeginFrame) -> bytes:
         raise DisplayProtocolError(f"frame_length must be {FRAME_BYTES}")
     if value.rotation not in {90, 270}:
         raise DisplayProtocolError("rotation must be 90 or 270")
-    _validate_u8(value.flags, "flags")
     _validate_u64(value.source_sample_index, "source_sample_index")
     _validate_u64(value.source_timestamp_us, "source_timestamp_us")
     return BEGIN_FRAME_STRUCT.pack(
-        ControlCommand.BEGIN_FRAME,
         PROTOCOL_VERSION,
+        ControlCommand.BEGIN_FRAME,
+        int(value.refresh_request),
+        0,
         value.frame_id,
         value.frame_length,
-        value.crc32,
         value.rotation,
-        int(value.refresh_request),
-        value.flags,
+        value.crc32,
         value.source_sample_index,
         value.source_timestamp_us,
     )
@@ -180,20 +214,22 @@ def decode_begin_frame(data: bytes) -> BeginFrame:
     if len(data) != BEGIN_FRAME_STRUCT.size:
         raise DisplayProtocolError("invalid BEGIN_FRAME length")
     (
-        command,
         version,
+        opcode,
+        refresh_request,
+        reserved,
         frame_id,
         frame_length,
-        crc32,
         rotation,
-        refresh_request,
-        flags,
+        crc32,
         source_sample_index,
         source_timestamp_us,
     ) = BEGIN_FRAME_STRUCT.unpack(data)
-    if command != ControlCommand.BEGIN_FRAME:
-        raise DisplayProtocolError("packet is not BEGIN_FRAME")
     _require_version(version)
+    if opcode != ControlCommand.BEGIN_FRAME:
+        raise DisplayProtocolError("packet is not BEGIN_FRAME")
+    if reserved != 0:
+        raise DisplayProtocolError("BEGIN_FRAME reserved byte must be zero")
     try:
         refresh = RefreshRequest(refresh_request)
     except ValueError as exc:
@@ -206,7 +242,6 @@ def decode_begin_frame(data: bytes) -> BeginFrame:
         refresh_request=refresh,
         rotation=rotation,
         frame_length=frame_length,
-        flags=flags,
     )
     encode_begin_frame(value)
     return value
@@ -216,36 +251,57 @@ def encode_frame_id_control(command: ControlCommand, frame_id: int) -> bytes:
     if command not in {ControlCommand.COMMIT_FRAME, ControlCommand.CANCEL_FRAME}:
         raise DisplayProtocolError("command does not carry a frame ID")
     _validate_frame_id(frame_id)
-    return FRAME_ID_CONTROL_STRUCT.pack(command, frame_id)
+    return FRAME_ID_CONTROL_STRUCT.pack(PROTOCOL_VERSION, command, 0, frame_id)
 
 
-def encode_simple_control(command: ControlCommand) -> bytes:
-    if command not in {ControlCommand.GET_STATUS, ControlCommand.FORCE_FULL_NEXT}:
-        raise DisplayProtocolError("command is not a simple control")
-    return SIMPLE_CONTROL_STRUCT.pack(command)
+def decode_frame_id_control(data: bytes) -> tuple[ControlCommand, int]:
+    if len(data) != FRAME_ID_CONTROL_STRUCT.size:
+        raise DisplayProtocolError("invalid frame-ID control length")
+    version, opcode, reserved, frame_id = FRAME_ID_CONTROL_STRUCT.unpack(data)
+    _require_version(version)
+    try:
+        command = ControlCommand(opcode)
+    except ValueError as exc:
+        raise DisplayProtocolError("unknown control opcode") from exc
+    if command not in {ControlCommand.COMMIT_FRAME, ControlCommand.CANCEL_FRAME}:
+        raise DisplayProtocolError("control packet is not COMMIT_FRAME or CANCEL_FRAME")
+    if reserved != 0:
+        raise DisplayProtocolError("control reserved field must be zero")
+    _validate_frame_id(frame_id)
+    return command, frame_id
 
 
 def encode_frame_chunk(chunk: FrameChunk) -> bytes:
     _validate_frame_id(chunk.frame_id)
     if not chunk.data:
         raise DisplayProtocolError("frame chunks must not be empty")
-    if len(chunk.data) > 0xFFFF:
-        raise DisplayProtocolError("frame chunk is too large")
+    if len(chunk.data) > DEFAULT_CHUNK_DATA_BYTES:
+        raise DisplayProtocolError(
+            f"frame chunk payload exceeds {DEFAULT_CHUNK_DATA_BYTES} bytes"
+        )
     if not 0 <= chunk.offset < FRAME_BYTES:
         raise DisplayProtocolError("frame chunk offset is outside the frame")
     if chunk.offset + len(chunk.data) > FRAME_BYTES:
         raise DisplayProtocolError("frame chunk extends past the frame")
     return FRAME_CHUNK_PREFIX_STRUCT.pack(
+        PROTOCOL_VERSION,
+        0,
+        len(chunk.data),
         chunk.frame_id,
         chunk.offset,
-        len(chunk.data),
+        0,
     ) + chunk.data
 
 
 def decode_frame_chunk(data: bytes) -> FrameChunk:
     if len(data) < FRAME_CHUNK_PREFIX_STRUCT.size:
         raise DisplayProtocolError("frame chunk is shorter than its prefix")
-    frame_id, offset, length = FRAME_CHUNK_PREFIX_STRUCT.unpack_from(data)
+    version, flags, length, frame_id, offset, reserved = (
+        FRAME_CHUNK_PREFIX_STRUCT.unpack_from(data)
+    )
+    _require_version(version)
+    if flags != 0 or reserved != 0:
+        raise DisplayProtocolError("frame chunk flags and reserved field must be zero")
     payload = data[FRAME_CHUNK_PREFIX_STRUCT.size :]
     if len(payload) != length:
         raise DisplayProtocolError("frame chunk payload length mismatch")
@@ -262,8 +318,10 @@ def iter_frame_chunks(
 ) -> tuple[bytes, ...]:
     if len(frame) != FRAME_BYTES:
         raise DisplayProtocolError(f"frame must contain {FRAME_BYTES} bytes")
-    if not 1 <= chunk_data_bytes <= 0xFFFF:
-        raise DisplayProtocolError("chunk_data_bytes is outside the supported range")
+    if not 1 <= chunk_data_bytes <= DEFAULT_CHUNK_DATA_BYTES:
+        raise DisplayProtocolError(
+            f"chunk_data_bytes must be between 1 and {DEFAULT_CHUNK_DATA_BYTES}"
+        )
     return tuple(
         encode_frame_chunk(
             FrameChunk(
@@ -279,62 +337,127 @@ def iter_frame_chunks(
 def encode_device_info(value: DeviceInfo) -> bytes:
     if value.protocol_version != PROTOCOL_VERSION:
         raise DisplayProtocolError("unsupported device info protocol version")
-    firmware = value.firmware_version.encode("ascii", errors="strict")
-    if len(firmware) > 16:
-        raise DisplayProtocolError("firmware version exceeds 16 ASCII bytes")
+    if value.structure_version != STRUCTURE_VERSION:
+        raise DisplayProtocolError("unsupported device info structure version")
+    for field_name in ("firmware_major", "firmware_minor", "firmware_patch"):
+        _validate_u8(getattr(value, field_name), field_name)
+    _validate_u16(int(value.capabilities), "capabilities")
+    for field_name in (
+        "width",
+        "height",
+        "frame_bytes",
+        "max_chunk_payload",
+        "status_size",
+        "begin_frame_size",
+        "preferred_att_mtu",
+    ):
+        _validate_u16(getattr(value, field_name), field_name)
+    _validate_u32(value.device_id_tail, "device_id_tail")
+    _validate_u32(value.build_id, "build_id")
     return DEVICE_INFO_STRUCT.pack(
         value.protocol_version,
+        value.structure_version,
+        value.firmware_major,
+        value.firmware_minor,
+        value.firmware_patch,
+        0,
         int(value.capabilities),
         value.width,
         value.height,
         value.frame_bytes,
-        value.max_chunk_bytes,
-        firmware.ljust(16, b"\0"),
+        value.max_chunk_payload,
+        value.status_size,
+        value.begin_frame_size,
+        value.preferred_att_mtu,
+        0,
+        value.device_id_tail,
+        value.build_id,
     )
 
 
 def decode_device_info(data: bytes) -> DeviceInfo:
     if len(data) != DEVICE_INFO_STRUCT.size:
         raise DisplayProtocolError("invalid DEVICE_INFO length")
-    version, capabilities, width, height, frame_bytes, max_chunk, firmware = (
-        DEVICE_INFO_STRUCT.unpack(data)
-    )
-    _require_version(version)
+    values = DEVICE_INFO_STRUCT.unpack(data)
+    _require_version(values[0])
+    if values[1] != STRUCTURE_VERSION:
+        raise DisplayProtocolError(
+            f"unsupported DEVICE_INFO structure version {values[1]}"
+        )
+    if values[5] != 0 or values[14] != 0:
+        raise DisplayProtocolError("DEVICE_INFO reserved fields must be zero")
     return DeviceInfo(
-        protocol_version=version,
-        capabilities=DeviceCapability(capabilities),
-        width=width,
-        height=height,
-        frame_bytes=frame_bytes,
-        max_chunk_bytes=max_chunk,
-        firmware_version=firmware.split(b"\0", 1)[0].decode("ascii"),
+        protocol_version=values[0],
+        structure_version=values[1],
+        firmware_major=values[2],
+        firmware_minor=values[3],
+        firmware_patch=values[4],
+        capabilities=DeviceCapability(values[6]),
+        width=values[7],
+        height=values[8],
+        frame_bytes=values[9],
+        max_chunk_payload=values[10],
+        status_size=values[11],
+        begin_frame_size=values[12],
+        preferred_att_mtu=values[13],
+        device_id_tail=values[15],
+        build_id=values[16],
     )
 
 
 def encode_status(value: DisplayStatus) -> bytes:
     if value.protocol_version != PROTOCOL_VERSION:
         raise DisplayProtocolError("unsupported status protocol version")
+    for field_name in ("active_frame_id", "last_frame_id"):
+        _validate_u32(getattr(value, field_name), field_name)
+    for field_name in (
+        "received_bytes",
+        "changed_x",
+        "changed_y",
+        "changed_width",
+        "changed_height",
+        "partial_refresh_count",
+        "battery_mv",
+    ):
+        _validate_u16(getattr(value, field_name), field_name)
+    _validate_u8(value.battery_percent, "battery_percent")
+    for field_name in (
+        "refresh_ms",
+        "milliseconds_since_last_full",
+        "pending_replaced_count",
+        "crc_error_count",
+        "timeout_count",
+        "display_failure_count",
+        "free_heap_bytes",
+        "status_sequence",
+    ):
+        _validate_u32(getattr(value, field_name), field_name)
     return STATUS_STRUCT.pack(
         value.protocol_version,
         int(value.state),
-        value.frame_id,
+        int(value.last_error),
+        int(value.actual_refresh_mode),
+        value.active_frame_id,
+        value.last_frame_id,
         value.received_bytes,
-        value.expected_bytes,
-        int(value.refresh_mode),
-        int(value.error_code),
-        value.x,
-        value.y,
-        value.width,
-        value.height,
+        int(value.flags),
+        value.changed_x,
+        value.changed_y,
+        value.changed_width,
+        value.changed_height,
         value.refresh_ms,
         value.partial_refresh_count,
-        value.battery_mv,
         value.battery_percent,
-        int(value.flags),
+        int(value.owner),
+        value.milliseconds_since_last_full,
+        value.battery_mv,
+        0,
         value.pending_replaced_count,
         value.crc_error_count,
         value.timeout_count,
         value.display_failure_count,
+        value.free_heap_bytes,
+        value.status_sequence,
     )
 
 
@@ -343,33 +466,40 @@ def decode_status(data: bytes) -> DisplayStatus:
         raise DisplayProtocolError("invalid STATUS length")
     values = STATUS_STRUCT.unpack(data)
     _require_version(values[0])
+    if values[18] != 0:
+        raise DisplayProtocolError("STATUS reserved field must be zero")
     try:
         state = DisplayStateCode(values[1])
-        refresh_mode = RefreshMode(values[5])
-        error_code = DisplayErrorCode(values[6])
+        last_error = DisplayErrorCode(values[2])
+        refresh_mode = RefreshMode(values[3])
+        owner = DisplayOwner(values[15])
     except ValueError as exc:
         raise DisplayProtocolError("STATUS contains an unknown enum value") from exc
     return DisplayStatus(
         protocol_version=values[0],
         state=state,
-        frame_id=values[2],
-        received_bytes=values[3],
-        expected_bytes=values[4],
-        refresh_mode=refresh_mode,
-        error_code=error_code,
-        x=values[7],
-        y=values[8],
-        width=values[9],
-        height=values[10],
-        refresh_ms=values[11],
-        partial_refresh_count=values[12],
-        battery_mv=values[13],
+        last_error=last_error,
+        actual_refresh_mode=refresh_mode,
+        active_frame_id=values[4],
+        last_frame_id=values[5],
+        received_bytes=values[6],
+        flags=StatusFlag(values[7]),
+        changed_x=values[8],
+        changed_y=values[9],
+        changed_width=values[10],
+        changed_height=values[11],
+        refresh_ms=values[12],
+        partial_refresh_count=values[13],
         battery_percent=values[14],
-        flags=StatusFlag(values[15]),
-        pending_replaced_count=values[16],
-        crc_error_count=values[17],
-        timeout_count=values[18],
-        display_failure_count=values[19],
+        owner=owner,
+        milliseconds_since_last_full=values[16],
+        battery_mv=values[17],
+        pending_replaced_count=values[19],
+        crc_error_count=values[20],
+        timeout_count=values[21],
+        display_failure_count=values[22],
+        free_heap_bytes=values[23],
+        status_sequence=values[24],
     )
 
 
@@ -389,6 +519,11 @@ def _validate_frame_id(value: int) -> None:
 def _validate_u8(value: int, name: str) -> None:
     if not 0 <= value <= 0xFF:
         raise DisplayProtocolError(f"{name} is outside uint8 range")
+
+
+def _validate_u16(value: int, name: str) -> None:
+    if not 0 <= value <= 0xFFFF:
+        raise DisplayProtocolError(f"{name} is outside uint16 range")
 
 
 def _validate_u32(value: int, name: str) -> None:

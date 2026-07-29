@@ -35,7 +35,7 @@ from .epaper_sync import ScheduledEpaperFrame
 LOGGER = logging.getLogger(__name__)
 AUTH_SETTLE_ATTEMPTS = 6
 AUTH_SETTLE_DELAY_S = 0.5
-FRAME_COMPLETION_TIMEOUT_S = 15.0
+FRAME_COMPLETION_TIMEOUT_S = 45.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -280,16 +280,27 @@ class EpaperDisplayClient:
                     "Quote/0 reports an incompatible framebuffer: "
                     f"{info.width}x{info.height}/{info.frame_bytes}"
                 )
+            if info.status_size != 64 or info.begin_frame_size != 32:
+                raise RuntimeError(
+                    "Quote/0 reports incompatible protocol structure sizes: "
+                    f"status={info.status_size}, begin={info.begin_frame_size}"
+                )
             if not info.capabilities & DeviceCapability.ENCRYPTED_WRITES:
                 raise RuntimeError("Quote/0 does not require encrypted display writes")
+            if not info.capabilities & DeviceCapability.STATUS_NOTIFY:
+                raise RuntimeError("Quote/0 does not support display status notifications")
             await _start_status_notify_after_bond(client, status_notification)
+            self._handle_status_bytes(
+                bytes(await client.read_gatt_char(STATUS_UUID)),  # type: ignore[attr-defined]
+                count_completion=False,
+            )
             with self._runtime_lock:
                 self._connected = True
                 self._device_info = info
             self._debug(
                 "墨水屏 BLE 已连接：firmware=%s chunk=%d",
                 info.firmware_version,
-                info.max_chunk_bytes,
+                info.max_chunk_payload,
             )
 
             while not self._stop.is_set() and client.is_connected:  # type: ignore[attr-defined]
@@ -340,7 +351,9 @@ class EpaperDisplayClient:
             self._last_error = None
         try:
             await client.write_gatt_char(CONTROL_UUID, begin, response=True)  # type: ignore[attr-defined]
-            chunk_size = max(1, min(DEFAULT_CHUNK_DATA_BYTES, info.max_chunk_bytes))
+            chunk_size = max(
+                1, min(DEFAULT_CHUNK_DATA_BYTES, info.max_chunk_payload)
+            )
             for packet in iter_frame_chunks(
                 frame_id=request.frame_id,
                 frame=scheduled.frame,
@@ -390,14 +403,19 @@ class EpaperDisplayClient:
             except asyncio.TimeoutError:
                 continue
         status = self.runtime_status.display_status
-        if status is None or status.frame_id != frame_id:
+        if status is None or status.last_frame_id != frame_id:
             raise RuntimeError("Quote/0 completion notification lost its frame ID")
         if status.state is DisplayStateCode.ERROR:
             raise DisplayRejectedError(
-                f"Quote/0 rejected frame {frame_id}: {status.error_code.name}"
+                f"Quote/0 rejected frame {frame_id}: {status.last_error.name}"
             )
 
-    def _handle_status_bytes(self, data: bytes) -> None:
+    def _handle_status_bytes(
+        self,
+        data: bytes,
+        *,
+        count_completion: bool = True,
+    ) -> None:
         try:
             status = decode_status(data)
         except Exception as exc:
@@ -408,11 +426,13 @@ class EpaperDisplayClient:
             self._display_status = status
             if (
                 status.state is DisplayStateCode.DONE
-                and status.frame_id != self._last_completed_frame_id
+                and status.last_frame_id != 0
+                and status.last_frame_id != self._last_completed_frame_id
             ):
-                self._frame_completed_count += 1
-                self._last_completed_frame_id = status.frame_id
-        event = self._completion_events.get(status.frame_id)
+                if count_completion:
+                    self._frame_completed_count += 1
+                self._last_completed_frame_id = status.last_frame_id
+        event = self._completion_events.get(status.last_frame_id)
         if event is not None and status.state in {
             DisplayStateCode.DONE,
             DisplayStateCode.ERROR,

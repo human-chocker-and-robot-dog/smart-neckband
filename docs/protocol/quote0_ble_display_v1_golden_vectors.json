@@ -1,16 +1,129 @@
 {
-  "schema_version": 1,
-  "protocol_version": 1,
-  "source": {
-    "repository": "InkCanvas-Rewrite",
-    "commit": "pending-firmware-adoption"
+  "schema": "inkcanvas.ble-display-v1.golden-vectors",
+  "schemaVersion": 1,
+  "wireEndianness": "little",
+  "uuids": {
+    "service": "7b7d1000-4a30-4b15-9f41-5d2e6a8f6c20",
+    "deviceInfo": "7b7d1001-4a30-4b15-9f41-5d2e6a8f6c20",
+    "control": "7b7d1002-4a30-4b15-9f41-5d2e6a8f6c20",
+    "frameData": "7b7d1003-4a30-4b15-9f41-5d2e6a8f6c20",
+    "status": "7b7d1004-4a30-4b15-9f41-5d2e6a8f6c20"
   },
-  "vectors": [
-    {"name": "begin_frame_force_full", "hex": "010140302010f815efcdab895a00010008070605040302011817161514131211"},
-    {"name": "frame_chunk", "hex": "4030201020010600001122334455"},
-    {"name": "commit_frame", "hex": "0240302010"},
-    {"name": "get_status", "hex": "04"},
-    {"name": "device_info", "hex": "011f28019800f815b400322e322e302d73796e63000000000000"},
-    {"name": "status_done_partial", "hex": "010440302010f815f81502000800500018014800061000000700320f42030200010003000400"}
-  ]
+  "constants": {
+    "protocolVersion": 1,
+    "frameBytes": 5624,
+    "maxChunkPayload": 180,
+    "beginFrameSize": 32,
+    "commandSize": 8,
+    "frameDataHeaderSize": 12,
+    "deviceInfoSize": 32,
+    "statusSize": 64
+  },
+  "crc32": [
+    {
+      "name": "ascii_123456789",
+      "encoding": "utf8",
+      "value": "123456789",
+      "expected": "cbf43926"
+    },
+    {
+      "name": "all_white_frame",
+      "encoding": "repeat-byte",
+      "byte": 255,
+      "count": 5624,
+      "expected": "595bb352"
+    }
+  ],
+  "vectors": {
+    "beginFrame": {
+      "hex": "0101000040302010f8155a00efcdab8908070605040302018877665544332211",
+      "decoded": {
+        "protocolVersion": 1,
+        "opcode": 1,
+        "refreshRequest": 0,
+        "rotation": 90,
+        "frameId": 270544960,
+        "frameLength": 5624,
+        "expectedCrc32": 2309737967,
+        "sourceEcgSampleIndex": "72623859790382856",
+        "sourceMonotonicTimestampUs": "1234605616436508552"
+      }
+    },
+    "commitFrame": {
+      "hex": "0102000040302010",
+      "decoded": {
+        "protocolVersion": 1,
+        "opcode": 2,
+        "frameId": 270544960
+      }
+    },
+    "cancelFrame": {
+      "hex": "0103000040302010",
+      "decoded": {
+        "protocolVersion": 1,
+        "opcode": 3,
+        "frameId": 270544960
+      }
+    },
+    "frameData": {
+      "hex": "0100040040302010b4000000deadbeef",
+      "decoded": {
+        "protocolVersion": 1,
+        "flags": 0,
+        "payloadLength": 4,
+        "frameId": 270544960,
+        "offset": 180,
+        "payloadHex": "deadbeef"
+      }
+    },
+    "deviceInfo": {
+      "hex": "0101020100003f0028019800f815b40040002000c8000000e4477ab100000102",
+      "decoded": {
+        "protocolVersion": 1,
+        "structureVersion": 1,
+        "firmwareMajor": 2,
+        "firmwareMinor": 1,
+        "firmwarePatch": 0,
+        "capabilityFlags": 63,
+        "width": 296,
+        "height": 152,
+        "frameBytes": 5624,
+        "maxChunkPayload": 180,
+        "statusSize": 64,
+        "beginFrameSize": 32,
+        "preferredAttMtu": 200,
+        "deviceIdTail": 2977581028,
+        "buildId": 33619968
+      }
+    },
+    "status": {
+      "hex": "010400020000000040302010f815070018007000100010000810000007006100c0d401005210000002000000010000000300000000000000081d03002a000000",
+      "decoded": {
+        "protocolVersion": 1,
+        "state": 4,
+        "lastError": 0,
+        "actualRefreshMode": 2,
+        "activeFrameId": 0,
+        "lastFrameId": 270544960,
+        "receivedBytes": 5624,
+        "flags": 7,
+        "changedX": 24,
+        "changedY": 112,
+        "changedWidth": 16,
+        "changedHeight": 16,
+        "refreshMs": 4104,
+        "partialRefreshCount": 7,
+        "batteryPercent": 97,
+        "owner": 0,
+        "millisecondsSinceLastFull": 120000,
+        "batteryMv": 4178,
+        "pendingReplacedCount": 2,
+        "crcErrorCount": 1,
+        "timeoutCount": 3,
+        "displayFailureCount": 0,
+        "freeHeapBytes": 204040,
+        "statusSequence": 42
+      }
+    }
+  }
 }

@@ -338,7 +338,7 @@ class EpaperSyncPanel:
             RefreshMode.NONE: "无变化",
             RefreshMode.FULL: "全刷",
             RefreshMode.PARTIAL: "局刷",
-        }[status.refresh_mode]
+        }[status.actual_refresh_mode]
         state = {
             DisplayStateCode.READY: "就绪",
             DisplayStateCode.RECEIVING: "接收中",
@@ -347,9 +347,23 @@ class EpaperSyncPanel:
             DisplayStateCode.DONE: "完成",
             DisplayStateCode.ERROR: "错误",
         }[status.state]
+        frame_id = (
+            status.active_frame_id
+            if status.state
+            in {
+                DisplayStateCode.RECEIVING,
+                DisplayStateCode.QUEUED,
+                DisplayStateCode.REFRESHING,
+            }
+            and status.active_frame_id != 0
+            else status.last_frame_id
+        )
+        battery_percent = (
+            "--" if status.battery_percent == 255 else str(status.battery_percent)
+        )
         self.send_status_label.setText(
-            f"帧 {status.frame_id}：{state} / {mode} / {status.refresh_ms} ms · "
-            f"电池 {status.battery_percent}% ({status.battery_mv} mV) · "
+            f"帧 {frame_id}：{state} / {mode} / {status.refresh_ms} ms · "
+            f"电池 {battery_percent}% ({status.battery_mv} mV) · "
             f"局刷累计 {status.partial_refresh_count}"
         )
 

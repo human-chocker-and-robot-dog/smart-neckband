@@ -120,14 +120,14 @@ y=151
 
 ### 7. BLE Display Protocol v1 客户端要求
 
-Quote/0 仓库中的 `docs/PROTOCOL_BLE_DISPLAY_V1.md` 是线协议规范原件，固定服务 UUID、特征 UUID、字节序、错误码和黄金向量。`smart-neckband` 保存兼容副本 `docs/protocols/quote0-ble-display-v1.md`，头部记录规范原件的 Git commit 和协议版本；两边提交相同的机器可读黄金向量文件，并由 C/Python 测试防止漂移。客户端至少支持：
+Quote/0 仓库中的 `docs/PROTOCOL_BLE_DISPLAY_V1.md` 是线协议规范原件，固定服务 UUID、特征 UUID、字节序、错误码和黄金向量。`smart-neckband` 保存兼容副本 `docs/protocol/quote0_ble_display_v1.md`，头部记录规范原件的 Git commit 和协议版本；PC 仓库原样复制固件的机器可读黄金向量，并由 C/Python 测试防止漂移。客户端至少支持：
 
 - `DEVICE_INFO`：读取协议版本、分辨率、frame bytes、固件版本和能力。
-- `CONTROL` write-with-response：`BEGIN_FRAME`、`COMMIT_FRAME`、`CANCEL_FRAME`、`GET_STATUS`、`FORCE_FULL_NEXT`。
+- `CONTROL` write-with-response：只支持 `BEGIN_FRAME`、`COMMIT_FRAME`、`CANCEL_FRAME`；强制全刷通过 BEGIN 的 `refresh_request=1` 请求。
 - `FRAME_DATA` write-with-response：包含 frame ID、顺序 offset 和数据块；默认块大小保守设为 180 字节，并根据实际 ATT MTU 上限调整。
-- `STATUS` read/notify：`READY`、`RECEIVING`、`QUEUED`、`REFRESHING`、`DONE`、`ERROR`。
+- `STATUS` read/notify：`READY`、`RECEIVING`、`QUEUED`、`REFRESHING`、`DONE`、`ERROR`，不使用控制命令轮询状态。
 
-`BEGIN_FRAME` 元数据至少包含协议版本、frame ID、5,624 字节长度、CRC32、旋转、刷新请求、源 ECG 样本索引和源设备单调时间戳。所有多字节整数采用 little-endian。设备必须在 `DONE` 中回显 frame ID、实际刷新模式、变化区域、刷新耗时和局刷计数。
+`BEGIN_FRAME` 元数据至少包含协议版本、frame ID、5,624 字节长度、CRC32、旋转、刷新请求、源 ECG 样本索引和源设备单调时间戳。所有多字节整数采用 little-endian。设备必须在 `DONE` 中通过 `last_frame_id` 回显完成帧，并报告实际刷新模式、变化区域、刷新耗时和局刷计数；接收中的事务使用 `active_frame_id`。
 
 ### 8. 连接和安全
 
@@ -198,6 +198,7 @@ git status --short --branch
 - [x] 实现最新帧调度器。
 - [x] 集成“墨水屏同步”Qt 页签。
 - [x] 完成自动化测试。
+- [x] 按固件规范原件和黄金向量修复 BLE 协议漂移。
 - [ ] 完成双 BLE 台架联调。
 - [x] 更新文档并记录未验证项。
 
@@ -207,14 +208,14 @@ git status --short --branch
 - 当前 PC 实时分析已经提供 HR、RR 和 SQI，但 HRV 需要从 RR observations 建立独立的 30 秒有效窗口。
 - 将电子纸客户端后端解耦与把功能集成到同一个 Qt GUI 并不冲突；页签负责控制和展示，客户端仍保持独立线程、状态和错误边界。
 - 当前屏幕需求中的 “SQRT” 与仓库指标不对应，计划按现有 `SQI` 实现，避免创造含义不明的健康量。
-- Quote/0 固件尚未采用 v1 规范，因此 PC 仓库先提交带 `pending-firmware-adoption` 来源标记的兼容草案和 Python 黄金向量；固件实现后必须回填规范原件 commit。
+- Quote/0 固件规范原件已固定在 commit `cbb351deb634c6463e0e85cd271916f51f87e349`。早期 PC 草案使用了错误的 `7f5100xx` UUID、不同的字段顺序和长度，并错误加入 `GET_STATUS`/`FORCE_FULL_NEXT`；现已按固件 JSON 原样复制黄金向量并逐字节验证六类消息。
 - PySide6 字体渲染必须运行在现有 `QApplication` 生命周期内；测试使用 offscreen QApplication，渲染器不自行创建第二个 Qt 应用。
-- 协议、显示状态/渲染、BLE 客户端和 Qt 页签共有 19 项聚焦测试通过；完整 `pc-test` 为 251 项全部通过。真实双设备联调仍待 Quote/0 固件实现后进行。
+- 协议、显示状态/渲染、BLE 客户端和 Qt 页签共有 24 项聚焦测试通过；完整 `pc-test` 为 256 项全部通过。真实双设备联调仍待进行。
 
 ## Result
 
-PC 端计划内的软件工作已完成：新增 BLE Display v1 兼容草案和黄金向量、30 秒去重 HRV 窗口、296×152 1-bit 固定布局与 ECG min/max 包络、容量为 1 的最新帧调度、独立 Quote/0 Bleak 客户端、瞬时失败 CANCEL/单次重试、自动重连，以及主 Qt GUI 的“墨水屏同步”页和操作文档。
+PC 端计划内的软件工作已完成：新增 BLE Display v1 兼容副本和固件黄金向量、30 秒去重 HRV 窗口、296×152 1-bit 固定布局与 ECG min/max 包络、容量为 1 的最新帧调度、独立 Quote/0 Bleak 客户端、瞬时失败 CANCEL/单次重试、自动重连，以及主 Qt GUI 的“墨水屏同步”页和操作文档。协议实现已对齐固件 commit `cbb351deb634c6463e0e85cd271916f51f87e349` 的 UUID、控制消息、帧数据头、DEVICE_INFO、STATUS、能力位、状态位和错误码。
 
-验证结果：19 项电子纸聚焦测试通过；仓库完整 `pc-test` 为 `251 passed in 142.62s`；`git diff --check` 待最终提交前再次确认。没有修改项圈固件、GPIO、采样率或 V0 原始协议。
+验证结果：24 项电子纸聚焦测试通过；仓库完整 `pc-test` 为 `256 passed in 50.97s`；`git diff --check` 待最终提交前再次确认。没有修改任何固件、GPIO、采样率或 V0 原始协议。
 
-尚未验证：Quote/0 BLE Display v1 真机固件、Windows 同时连接两个真实 Peripheral、约 4.1 秒屏幕刷新期间的项圈持续吞吐、残影、刷新策略、电池功耗、绑定缓存和人体连接行为。Quote/0 固件采用协议后还必须把规范原件 commit 回填到兼容文档和黄金向量元数据。
+尚未验证：修复后的上位机与 Quote/0 真机完整帧传输、Windows 同时连接两个真实 Peripheral、约 4.1 秒屏幕刷新期间的项圈持续吞吐、残影、刷新策略、电池功耗、绑定缓存和人体连接行为。
