@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "protocol_version": 1,
+  "source": {
+    "repository": "InkCanvas-Rewrite",
+    "commit": "pending-firmware-adoption"
+  },
+  "vectors": [
+    {"name": "begin_frame_force_full", "hex": "010140302010f815efcdab895a00010008070605040302011817161514131211"},
+    {"name": "frame_chunk", "hex": "4030201020010600001122334455"},
+    {"name": "commit_frame", "hex": "0240302010"},
+    {"name": "get_status", "hex": "04"},
+    {"name": "device_info", "hex": "011f28019800f815b400322e322e302d73796e63000000000000"},
+    {"name": "status_done_partial", "hex": "010440302010f815f81502000800500018014800061000000700320f42030200010003000400"}
+  ]
+}
