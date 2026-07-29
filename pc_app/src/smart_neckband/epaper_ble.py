@@ -39,6 +39,7 @@ AUTH_SETTLE_DELAY_S = 0.5
 LINK_SECURITY_TIMEOUT_S = 20.0
 LINK_SECURITY_POLL_INTERVAL_S = 0.25
 FRAME_COMPLETION_TIMEOUT_S = 45.0
+REQUIRED_LINK_SECURITY = StatusFlag.LINK_ENCRYPTED | StatusFlag.LINK_BONDED
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,7 +134,6 @@ async def _wait_for_link_security(
     timeout_s: float = LINK_SECURITY_TIMEOUT_S,
     poll_interval_s: float = LINK_SECURITY_POLL_INTERVAL_S,
 ) -> DisplayStatus:
-    required = StatusFlag.LINK_ENCRYPTED | StatusFlag.LINK_BONDED
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_s
 
@@ -141,13 +141,17 @@ async def _wait_for_link_security(
         status = decode_status(
             bytes(await client.read_gatt_char(STATUS_UUID))  # type: ignore[attr-defined]
         )
-        if status.flags & required == required:
+        if _has_required_link_security(status):
             return status
         await asyncio.sleep(poll_interval_s)
 
     raise LinkSecurityTimeoutError(
         "Quote/0 BLE encryption/bonding did not complete"
     )
+
+
+def _has_required_link_security(status: DisplayStatus) -> bool:
+    return status.flags & REQUIRED_LINK_SECURITY == REQUIRED_LINK_SECURITY
 
 
 def _is_insufficient_authentication(exc: Exception) -> bool:
@@ -454,7 +458,18 @@ class EpaperDisplayClient:
             if not _is_insufficient_authentication(exc):
                 raise
 
-        await self._record_current_link_security(client, "BEGIN 被拒绝")
+        rejected_status = await self._record_current_link_security(
+            client, "BEGIN 被拒绝"
+        )
+        if (
+            rejected_status is not None
+            and _has_required_link_security(rejected_status)
+        ):
+            raise DisplayAuthenticationError(
+                "Quote/0 reports encrypted+bonded, but CONTROL still returned "
+                "Insufficient Authentication; firmware security policy mismatch "
+                "(disable CONFIG_BT_NIMBLE_SM_SC_ONLY for Just Works)"
+            )
         self._debug("墨水屏 BEGIN 认证不足，重新请求配对并等待链路加密")
         try:
             await client.pair()  # type: ignore[attr-defined]
@@ -472,7 +487,18 @@ class EpaperDisplayClient:
             await client.write_gatt_char(CONTROL_UUID, begin, response=True)  # type: ignore[attr-defined]
         except Exception as exc:
             if _is_insufficient_authentication(exc):
-                await self._record_current_link_security(client, "BEGIN 重试仍被拒绝")
+                retry_status = await self._record_current_link_security(
+                    client, "BEGIN 重试仍被拒绝"
+                )
+                if (
+                    retry_status is not None
+                    and _has_required_link_security(retry_status)
+                ):
+                    raise DisplayAuthenticationError(
+                        "Quote/0 reports encrypted+bonded, but CONTROL still returned "
+                        "Insufficient Authentication; firmware security policy mismatch "
+                        "(disable CONFIG_BT_NIMBLE_SM_SC_ONLY for Just Works)"
+                    ) from exc
                 raise DisplayAuthenticationError(
                     "Quote/0 BEGIN remained unauthenticated after one re-pair attempt"
                 ) from exc
@@ -482,16 +508,17 @@ class EpaperDisplayClient:
         self,
         client: object,
         context: str,
-    ) -> None:
+    ) -> DisplayStatus | None:
         try:
             status = decode_status(
                 bytes(await client.read_gatt_char(STATUS_UUID))  # type: ignore[attr-defined]
             )
         except Exception as exc:
             self._debug("%s，STATUS 读取失败：%s", context, exc)
-            return
+            return None
         self._record_status(status, count_completion=False)
         self._debug_link_security(context, status)
+        return status
 
     def _debug_link_security(self, context: str, status: DisplayStatus) -> None:
         self._debug(

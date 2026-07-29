@@ -208,17 +208,29 @@ class RetryAuthenticationBleakClient(FakeBleakClient):
     def __init__(self, address: str, **kwargs) -> None:
         super().__init__(address, **kwargs)
         self.begin_attempts = 0
+        self.security_dropped = False
+
+    async def read_gatt_char(self, uuid: str) -> bytes:
+        if uuid == STATUS_UUID and self.security_dropped and self.pair_calls == 0:
+            return encode_status(
+                _display_status(
+                    state=DisplayStateCode.READY,
+                    flags=StatusFlag.LINK_CONNECTED | StatusFlag.SYNC_MODE,
+                )
+            )
+        return await super().read_gatt_char(uuid)
 
     async def write_gatt_char(self, uuid: str, data: bytes, *, response: bool) -> None:
         if uuid == CONTROL_UUID and data[1] == ControlCommand.BEGIN_FRAME:
             self.begin_attempts += 1
             if self.begin_attempts == 1:
+                self.security_dropped = True
                 self.writes.append((uuid, bytes(data), response))
                 raise BleakGATTProtocolError(5)
         await super().write_gatt_char(uuid, data, response=response)
 
 
-class PersistentAuthenticationBleakClient(FakeBleakClient):
+class FirmwarePolicyMismatchBleakClient(FakeBleakClient):
     def __init__(self, address: str, **kwargs) -> None:
         super().__init__(address, **kwargs)
         self.begin_attempts = 0
@@ -352,11 +364,11 @@ def test_begin_authentication_error_repairs_security_and_retries_once() -> None:
     assert any(uuid == FRAME_DATA_UUID for uuid, _data, _response in fake.writes)
 
 
-def test_persistent_begin_authentication_error_never_sends_frame_data() -> None:
-    PersistentAuthenticationBleakClient.instances.clear()
+def test_secure_link_authentication_error_reports_firmware_policy_mismatch() -> None:
+    FirmwarePolicyMismatchBleakClient.instances.clear()
     client = EpaperDisplayClient(
         address="AA:BB:CC:DD:EE:04",
-        client_factory=PersistentAuthenticationBleakClient,
+        client_factory=FirmwarePolicyMismatchBleakClient,
         completion_timeout_s=2,
         auto_reconnect=False,
     )
@@ -370,14 +382,17 @@ def test_persistent_begin_authentication_error_never_sends_frame_data() -> None:
     client.stop()
 
     assert isinstance(client.runtime_status.last_error, DisplayAuthenticationError)
-    fake = PersistentAuthenticationBleakClient.instances[0]
-    assert fake.pair_calls == 1
-    assert fake.begin_attempts == 2
+    assert "firmware security policy mismatch" in str(
+        client.runtime_status.last_error
+    )
+    fake = FirmwarePolicyMismatchBleakClient.instances[0]
+    assert fake.pair_calls == 0
+    assert fake.begin_attempts == 1
     assert not any(uuid == FRAME_DATA_UUID for uuid, _data, _response in fake.writes)
     commands = [
         data[1] for uuid, data, _response in fake.writes if uuid == CONTROL_UUID
     ]
-    assert commands == [ControlCommand.BEGIN_FRAME, ControlCommand.BEGIN_FRAME]
+    assert commands == [ControlCommand.BEGIN_FRAME]
 
 
 def test_client_sends_latest_pending_frame_and_reconstructs_exact_bytes() -> None:
