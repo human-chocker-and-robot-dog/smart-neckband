@@ -91,7 +91,7 @@ git diff --check
 - [x] 完成指标/波形分层节奏。
 - [x] 完成 GUI 控件与测试。
 - [x] 完成文档和全部验证。
-- [ ] 提交、推送并重启上位机。
+- [x] 提交、推送并重启上位机。
 
 ## Discoveries
 
@@ -104,4 +104,4 @@ git diff --check
 
 已完成心脏图标、第一行左右同字号 BPM/HRV、第二行放大状态/ECG/SQI、约 89 像素高波形区，以及完整峰值范围绘制。新增 `EpaperWaveformSnapshotter`：顶部指标默认每 5 秒允许发送，ECG 波形默认每 10 秒替换；中间帧保持波形像素不变，为固件 auto diff 的顶部局刷提供小变化区域。GUI 分别暴露“指标局刷间隔”和“ECG 更新间隔”。
 
-验证结果：真实 Windows Qt 后端的 296×152 像素预览已目视检查；30 项电子纸聚焦测试通过；完整 `pc-test` 为 `262 passed in 49.67s`。没有修改固件、BLE 协议或项圈原始 ECG 数据链。真机实际 partial changed region、长期残影和功耗仍需运行观察。
+验证结果：真实 Windows Qt 后端的 296×152 像素预览已目视检查；30 项电子纸聚焦测试通过；完整 `pc-test` 为 `262 passed in 49.67s`。功能提交已推送，上位机已通过 `pc-gui` 完整重启且窗口响应正常。没有修改固件、BLE 协议或项圈原始 ECG 数据链。真机实际 partial changed region、长期残影和功耗仍需运行观察。
