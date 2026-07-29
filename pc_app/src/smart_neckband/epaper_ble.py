@@ -22,6 +22,7 @@ from .epaper_protocol import (
     DisplayStateCode,
     DisplayStatus,
     RefreshRequest,
+    StatusFlag,
     decode_device_info,
     decode_status,
     encode_begin_frame,
@@ -35,6 +36,8 @@ from .epaper_sync import ScheduledEpaperFrame
 LOGGER = logging.getLogger(__name__)
 AUTH_SETTLE_ATTEMPTS = 6
 AUTH_SETTLE_DELAY_S = 0.5
+LINK_SECURITY_TIMEOUT_S = 20.0
+LINK_SECURITY_POLL_INTERVAL_S = 0.25
 FRAME_COMPLETION_TIMEOUT_S = 45.0
 
 
@@ -67,6 +70,14 @@ class _FrameRequest:
 
 
 class DisplayRejectedError(RuntimeError):
+    pass
+
+
+class DisplayAuthenticationError(RuntimeError):
+    pass
+
+
+class LinkSecurityTimeoutError(TimeoutError):
     pass
 
 
@@ -114,6 +125,41 @@ async def _start_status_notify_after_bond(
             if not authentication_pending or attempt + 1 >= attempts:
                 raise
             await asyncio.sleep(delay_s)
+
+
+async def _wait_for_link_security(
+    client: object,
+    *,
+    timeout_s: float = LINK_SECURITY_TIMEOUT_S,
+    poll_interval_s: float = LINK_SECURITY_POLL_INTERVAL_S,
+) -> DisplayStatus:
+    required = StatusFlag.LINK_ENCRYPTED | StatusFlag.LINK_BONDED
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+
+    while loop.time() < deadline:
+        status = decode_status(
+            bytes(await client.read_gatt_char(STATUS_UUID))  # type: ignore[attr-defined]
+        )
+        if status.flags & required == required:
+            return status
+        await asyncio.sleep(poll_interval_s)
+
+    raise LinkSecurityTimeoutError(
+        "Quote/0 BLE encryption/bonding did not complete"
+    )
+
+
+def _is_insufficient_authentication(exc: Exception) -> bool:
+    code = getattr(exc, "code", None)
+    try:
+        if code is not None and int(code) == 5:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return bool(exc.args and exc.args[0] == 5) or (
+        "Insufficient Authentication" in str(exc)
+    )
 
 
 class EpaperDisplayClient:
@@ -290,15 +336,13 @@ class EpaperDisplayClient:
             if not info.capabilities & DeviceCapability.STATUS_NOTIFY:
                 raise RuntimeError("Quote/0 does not support display status notifications")
             await _start_status_notify_after_bond(client, status_notification)
-            self._handle_status_bytes(
-                bytes(await client.read_gatt_char(STATUS_UUID)),  # type: ignore[attr-defined]
-                count_completion=False,
-            )
+            security_status = await _wait_for_link_security(client)
+            self._record_status(security_status, count_completion=False)
             with self._runtime_lock:
                 self._connected = True
                 self._device_info = info
             self._debug(
-                "墨水屏 BLE 已连接：firmware=%s chunk=%d",
+                "墨水屏 BLE 已连接且链路已加密/绑定：firmware=%s chunk=%d",
                 info.firmware_version,
                 info.max_chunk_payload,
             )
@@ -309,7 +353,14 @@ class EpaperDisplayClient:
                     try:
                         await self._send_frame(client, request, info)
                     except Exception as exc:
-                        if not isinstance(exc, DisplayRejectedError):
+                        if not isinstance(
+                            exc,
+                            (
+                                DisplayRejectedError,
+                                DisplayAuthenticationError,
+                                LinkSecurityTimeoutError,
+                            ),
+                        ):
                             self._restore_pending_after_transient_failure(request)
                         self._set_error(exc)
                         self._debug(
@@ -349,8 +400,10 @@ class EpaperDisplayClient:
         with self._runtime_lock:
             self._active_frame_id = request.frame_id
             self._last_error = None
+        begin_accepted = False
         try:
-            await client.write_gatt_char(CONTROL_UUID, begin, response=True)  # type: ignore[attr-defined]
+            await self._write_begin_with_security_retry(client, begin)
+            begin_accepted = True
             chunk_size = max(
                 1, min(DEFAULT_CHUNK_DATA_BYTES, info.max_chunk_payload)
             )
@@ -371,20 +424,84 @@ class EpaperDisplayClient:
                 self._frame_sent_count += 1
             await self._wait_for_completion(request.frame_id, completion)
         except Exception:
-            try:
-                await client.write_gatt_char(  # type: ignore[attr-defined]
-                    CONTROL_UUID,
-                    encode_frame_id_control(ControlCommand.CANCEL_FRAME, request.frame_id),
-                    response=True,
-                )
-            except Exception:
-                pass
+            if begin_accepted:
+                try:
+                    await client.write_gatt_char(  # type: ignore[attr-defined]
+                        CONTROL_UUID,
+                        encode_frame_id_control(
+                            ControlCommand.CANCEL_FRAME, request.frame_id
+                        ),
+                        response=True,
+                    )
+                except Exception:
+                    pass
             raise
         finally:
             self._completion_events.pop(request.frame_id, None)
             with self._runtime_lock:
                 if self._active_frame_id == request.frame_id:
                     self._active_frame_id = None
+
+    async def _write_begin_with_security_retry(
+        self,
+        client: object,
+        begin: bytes,
+    ) -> None:
+        try:
+            await client.write_gatt_char(CONTROL_UUID, begin, response=True)  # type: ignore[attr-defined]
+            return
+        except Exception as exc:
+            if not _is_insufficient_authentication(exc):
+                raise
+
+        await self._record_current_link_security(client, "BEGIN 被拒绝")
+        self._debug("墨水屏 BEGIN 认证不足，重新请求配对并等待链路加密")
+        try:
+            await client.pair()  # type: ignore[attr-defined]
+            security_status = await _wait_for_link_security(client)
+        except LinkSecurityTimeoutError:
+            raise
+        except Exception as exc:
+            raise DisplayAuthenticationError(
+                "Quote/0 BLE re-pairing failed after authentication error"
+            ) from exc
+        self._record_status(security_status, count_completion=False)
+        self._debug_link_security("重新配对后", security_status)
+
+        try:
+            await client.write_gatt_char(CONTROL_UUID, begin, response=True)  # type: ignore[attr-defined]
+        except Exception as exc:
+            if _is_insufficient_authentication(exc):
+                await self._record_current_link_security(client, "BEGIN 重试仍被拒绝")
+                raise DisplayAuthenticationError(
+                    "Quote/0 BEGIN remained unauthenticated after one re-pair attempt"
+                ) from exc
+            raise
+
+    async def _record_current_link_security(
+        self,
+        client: object,
+        context: str,
+    ) -> None:
+        try:
+            status = decode_status(
+                bytes(await client.read_gatt_char(STATUS_UUID))  # type: ignore[attr-defined]
+            )
+        except Exception as exc:
+            self._debug("%s，STATUS 读取失败：%s", context, exc)
+            return
+        self._record_status(status, count_completion=False)
+        self._debug_link_security(context, status)
+
+    def _debug_link_security(self, context: str, status: DisplayStatus) -> None:
+        self._debug(
+            "%s：encrypted=%s bonded=%s connected=%s flags=0x%04x",
+            context,
+            bool(status.flags & StatusFlag.LINK_ENCRYPTED),
+            bool(status.flags & StatusFlag.LINK_BONDED),
+            bool(status.flags & StatusFlag.LINK_CONNECTED),
+            int(status.flags),
+        )
 
     async def _wait_for_completion(
         self,
@@ -422,6 +539,14 @@ class EpaperDisplayClient:
             self._set_error(exc)
             self._debug("忽略无效墨水屏 STATUS：%s", exc)
             return
+        self._record_status(status, count_completion=count_completion)
+
+    def _record_status(
+        self,
+        status: DisplayStatus,
+        *,
+        count_completion: bool = True,
+    ) -> None:
         with self._runtime_lock:
             self._display_status = status
             if (

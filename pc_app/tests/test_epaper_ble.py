@@ -4,12 +4,16 @@ import asyncio
 import time
 
 import pytest
+from bleak.exc import BleakGATTProtocolError
 
 from smart_neckband.epaper_ble import (
     FRAME_COMPLETION_TIMEOUT_S,
+    DisplayAuthenticationError,
     EpaperDisplayClient,
+    LinkSecurityTimeoutError,
     _matches_epaper_device,
     _start_status_notify_after_bond,
+    _wait_for_link_security,
 )
 from smart_neckband.epaper_protocol import (
     CONTROL_UUID,
@@ -71,6 +75,7 @@ def _display_status(
     state: DisplayStateCode,
     active_frame_id: int = 0,
     last_frame_id: int = 0,
+    flags: StatusFlag | None = None,
 ) -> DisplayStatus:
     return DisplayStatus(
         state=state,
@@ -82,10 +87,14 @@ def _display_status(
         last_frame_id=last_frame_id,
         received_bytes=FRAME_BYTES if state is DisplayStateCode.DONE else 0,
         flags=(
-            StatusFlag.LINK_ENCRYPTED
-            | StatusFlag.LINK_BONDED
-            | StatusFlag.LINK_CONNECTED
-            | StatusFlag.SYNC_MODE
+            flags
+            if flags is not None
+            else (
+                StatusFlag.LINK_ENCRYPTED
+                | StatusFlag.LINK_BONDED
+                | StatusFlag.LINK_CONNECTED
+                | StatusFlag.SYNC_MODE
+            )
         ),
         changed_x=0,
         changed_y=80,
@@ -116,6 +125,7 @@ class FakeBleakClient:
         self.writes: list[tuple[str, bytes, bool]] = []
         self.notification = None
         self.current_frame_id = 0
+        self.pair_calls = 0
         self.__class__.instances.append(self)
 
     async def __aenter__(self):
@@ -137,6 +147,10 @@ class FakeBleakClient:
 
     async def stop_notify(self, uuid: str) -> None:
         assert uuid == STATUS_UUID
+
+    async def pair(self) -> bool:
+        self.pair_calls += 1
+        return True
 
     async def write_gatt_char(self, uuid: str, data: bytes, *, response: bool) -> None:
         self.writes.append((uuid, bytes(data), response))
@@ -160,6 +174,60 @@ class FlakyBleakClient(FakeBleakClient):
             self.__class__.failed_once = True
             self.writes.append((uuid, bytes(data), response))
             raise RuntimeError("synthetic transient write failure")
+        await super().write_gatt_char(uuid, data, response=response)
+
+
+class DelayedSecurityBleakClient(FakeBleakClient):
+    def __init__(self, address: str, **kwargs) -> None:
+        super().__init__(address, **kwargs)
+        self.status_read_count = 0
+        self.security_ready = False
+        self.control_writes_before_security = 0
+
+    async def read_gatt_char(self, uuid: str) -> bytes:
+        if uuid != STATUS_UUID:
+            return await super().read_gatt_char(uuid)
+        self.status_read_count += 1
+        if self.status_read_count == 1:
+            return encode_status(
+                _display_status(
+                    state=DisplayStateCode.READY,
+                    flags=StatusFlag.LINK_CONNECTED | StatusFlag.SYNC_MODE,
+                )
+            )
+        self.security_ready = True
+        return encode_status(_display_status(state=DisplayStateCode.READY))
+
+    async def write_gatt_char(self, uuid: str, data: bytes, *, response: bool) -> None:
+        if uuid == CONTROL_UUID and not self.security_ready:
+            self.control_writes_before_security += 1
+        await super().write_gatt_char(uuid, data, response=response)
+
+
+class RetryAuthenticationBleakClient(FakeBleakClient):
+    def __init__(self, address: str, **kwargs) -> None:
+        super().__init__(address, **kwargs)
+        self.begin_attempts = 0
+
+    async def write_gatt_char(self, uuid: str, data: bytes, *, response: bool) -> None:
+        if uuid == CONTROL_UUID and data[1] == ControlCommand.BEGIN_FRAME:
+            self.begin_attempts += 1
+            if self.begin_attempts == 1:
+                self.writes.append((uuid, bytes(data), response))
+                raise BleakGATTProtocolError(5)
+        await super().write_gatt_char(uuid, data, response=response)
+
+
+class PersistentAuthenticationBleakClient(FakeBleakClient):
+    def __init__(self, address: str, **kwargs) -> None:
+        super().__init__(address, **kwargs)
+        self.begin_attempts = 0
+
+    async def write_gatt_char(self, uuid: str, data: bytes, *, response: bool) -> None:
+        if uuid == CONTROL_UUID and data[1] == ControlCommand.BEGIN_FRAME:
+            self.begin_attempts += 1
+            self.writes.append((uuid, bytes(data), response))
+            raise BleakGATTProtocolError(5)
         await super().write_gatt_char(uuid, data, response=response)
 
 
@@ -194,6 +262,57 @@ def test_default_completion_timeout_covers_sync_throttle_and_panel_refresh() -> 
     assert FRAME_COMPLETION_TIMEOUT_S >= 45.0
 
 
+def test_client_waits_for_encrypted_and_bonded_status_before_control_write() -> None:
+    DelayedSecurityBleakClient.instances.clear()
+    client = EpaperDisplayClient(
+        address="AA:BB:CC:DD:EE:02",
+        client_factory=DelayedSecurityBleakClient,
+        completion_timeout_s=2,
+    )
+    client.queue_frame(_scheduled(0x44))
+    client.start()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        if client.runtime_status.frame_completed_count == 1:
+            break
+        time.sleep(0.01)
+    client.stop()
+
+    assert client.runtime_status.frame_completed_count == 1
+    fake = DelayedSecurityBleakClient.instances[0]
+    assert fake.status_read_count >= 2
+    assert fake.control_writes_before_security == 0
+
+
+def test_link_security_wait_has_clear_timeout() -> None:
+    class NeverSecureClient:
+        status_read_count = 0
+
+        async def read_gatt_char(self, uuid: str) -> bytes:
+            assert uuid == STATUS_UUID
+            self.status_read_count += 1
+            return encode_status(
+                _display_status(
+                    state=DisplayStateCode.READY,
+                    flags=StatusFlag.LINK_CONNECTED | StatusFlag.SYNC_MODE,
+                )
+            )
+
+    never_secure = NeverSecureClient()
+    with pytest.raises(
+        LinkSecurityTimeoutError,
+        match="Quote/0 BLE encryption/bonding did not complete",
+    ):
+        asyncio.run(
+            _wait_for_link_security(
+                never_secure,
+                timeout_s=0.01,
+                poll_interval_s=0.001,
+            )
+        )
+    assert never_secure.status_read_count >= 1
+
+
 def test_initial_status_read_does_not_count_an_old_completed_frame() -> None:
     client = EpaperDisplayClient(address="AA:BB")
     client._handle_status_bytes(
@@ -208,6 +327,57 @@ def test_initial_status_read_does_not_count_an_old_completed_frame() -> None:
     assert client.runtime_status.frame_completed_count == 0
     assert client.runtime_status.display_status is not None
     assert client.runtime_status.display_status.last_frame_id == 0x10203040
+
+
+def test_begin_authentication_error_repairs_security_and_retries_once() -> None:
+    RetryAuthenticationBleakClient.instances.clear()
+    client = EpaperDisplayClient(
+        address="AA:BB:CC:DD:EE:03",
+        client_factory=RetryAuthenticationBleakClient,
+        completion_timeout_s=2,
+    )
+    client.queue_frame(_scheduled(0x55))
+    client.start()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        if client.runtime_status.frame_completed_count == 1:
+            break
+        time.sleep(0.01)
+    client.stop()
+
+    assert client.runtime_status.frame_completed_count == 1
+    fake = RetryAuthenticationBleakClient.instances[0]
+    assert fake.pair_calls == 1
+    assert fake.begin_attempts == 2
+    assert any(uuid == FRAME_DATA_UUID for uuid, _data, _response in fake.writes)
+
+
+def test_persistent_begin_authentication_error_never_sends_frame_data() -> None:
+    PersistentAuthenticationBleakClient.instances.clear()
+    client = EpaperDisplayClient(
+        address="AA:BB:CC:DD:EE:04",
+        client_factory=PersistentAuthenticationBleakClient,
+        completion_timeout_s=2,
+        auto_reconnect=False,
+    )
+    client.queue_frame(_scheduled(0x66))
+    client.start()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        if isinstance(client.runtime_status.last_error, DisplayAuthenticationError):
+            break
+        time.sleep(0.01)
+    client.stop()
+
+    assert isinstance(client.runtime_status.last_error, DisplayAuthenticationError)
+    fake = PersistentAuthenticationBleakClient.instances[0]
+    assert fake.pair_calls == 1
+    assert fake.begin_attempts == 2
+    assert not any(uuid == FRAME_DATA_UUID for uuid, _data, _response in fake.writes)
+    commands = [
+        data[1] for uuid, data, _response in fake.writes if uuid == CONTROL_UUID
+    ]
+    assert commands == [ControlCommand.BEGIN_FRAME, ControlCommand.BEGIN_FRAME]
 
 
 def test_client_sends_latest_pending_frame_and_reconstructs_exact_bytes() -> None:

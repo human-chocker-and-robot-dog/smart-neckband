@@ -210,12 +210,13 @@ git status --short --branch
 - 当前屏幕需求中的 “SQRT” 与仓库指标不对应，计划按现有 `SQI` 实现，避免创造含义不明的健康量。
 - Quote/0 固件规范原件已固定在 commit `cbb351deb634c6463e0e85cd271916f51f87e349`。早期 PC 草案使用了错误的 `7f5100xx` UUID、不同的字段顺序和长度，并错误加入 `GET_STATUS`/`FORCE_FULL_NEXT`；现已按固件 JSON 原样复制黄金向量并逐字节验证六类消息。
 - PySide6 字体渲染必须运行在现有 `QApplication` 生命周期内；测试使用 offscreen QApplication，渲染器不自行创建第二个 Qt 应用。
-- 协议、显示状态/渲染、BLE 客户端和 Qt 页签共有 24 项聚焦测试通过；完整 `pc-test` 为 256 项全部通过。真实双设备联调仍待进行。
+- STATUS notification 订阅成功不代表 Windows 链路已经加密。客户端必须在任何 CONTROL/FRAME_DATA 写入前轮询 STATUS，直到 `LINK_ENCRYPTED` 与 `LINK_BONDED` 同时置位；BEGIN 遇到 GATT error 5 时只允许重新配对并重试一次，认证失败期间不得发送数据块。
+- 协议、显示状态/渲染、BLE 客户端和 Qt 页签共有 28 项聚焦测试通过；完整 `pc-test` 为 260 项全部通过。真实双设备联调仍待进行。
 
 ## Result
 
-PC 端计划内的软件工作已完成：新增 BLE Display v1 兼容副本和固件黄金向量、30 秒去重 HRV 窗口、296×152 1-bit 固定布局与 ECG min/max 包络、容量为 1 的最新帧调度、独立 Quote/0 Bleak 客户端、瞬时失败 CANCEL/单次重试、自动重连，以及主 Qt GUI 的“墨水屏同步”页和操作文档。协议实现已对齐固件 commit `cbb351deb634c6463e0e85cd271916f51f87e349` 的 UUID、控制消息、帧数据头、DEVICE_INFO、STATUS、能力位、状态位和错误码。
+PC 端计划内的软件工作已完成：新增 BLE Display v1 兼容副本和固件黄金向量、30 秒去重 HRV 窗口、296×152 1-bit 固定布局与 ECG min/max 包络、容量为 1 的最新帧调度、独立 Quote/0 Bleak 客户端、瞬时失败 CANCEL/单次重试、自动重连，以及主 Qt GUI 的“墨水屏同步”页和操作文档。协议实现已对齐固件 commit `cbb351deb634c6463e0e85cd271916f51f87e349` 的 UUID、控制消息、帧数据头、DEVICE_INFO、STATUS、能力位、状态位和错误码。BLE 发送循环现在把 encrypted+bonded STATUS 作为硬门槛，并在 BEGIN 认证错误 5 时执行一次受控重配对重试。
 
-验证结果：24 项电子纸聚焦测试通过；仓库完整 `pc-test` 为 `256 passed in 50.97s`；`git diff --check` 待最终提交前再次确认。没有修改任何固件、GPIO、采样率或 V0 原始协议。
+验证结果：28 项电子纸聚焦测试通过；仓库完整 `pc-test` 为 `260 passed in 44.55s`；`git diff --check` 待最终提交前再次确认。没有修改任何固件、GPIO、采样率或 V0 原始协议。
 
 尚未验证：修复后的上位机与 Quote/0 真机完整帧传输、Windows 同时连接两个真实 Peripheral、约 4.1 秒屏幕刷新期间的项圈持续吞吐、残影、刷新策略、电池功耗、绑定缓存和人体连接行为。
