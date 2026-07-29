@@ -12,6 +12,7 @@ from .analysis import EcgAnalysisResult, analyze_recent_ecg, get_ecg_analysis_in
 from .attitude import ComplementaryAttitudeFilter, Orientation
 from .ble_io import BleDeviceInfo, BlePacketReader, list_ble_devices
 from .buffers import ImuSample
+from .epaper_ui import EpaperSyncPanel
 from .history import (
     ComparisonTrack,
     ComparisonViewport,
@@ -214,7 +215,7 @@ def _body_mesh_data(gl: object) -> object:
 
 class MainWindow:
     def __init__(self, *, debug_log_path: Path | None = None) -> None:
-        from PySide6 import QtCore, QtWidgets
+        from PySide6 import QtCore, QtGui, QtWidgets
         import pyqtgraph as pg
 
         self.QtCore = QtCore
@@ -444,7 +445,16 @@ class MainWindow:
             settings_provider=self.health_panel.settings,
             post_gui=self._post_gui,
         )
+        self.epaper_panel = EpaperSyncPanel(
+            QtCore=QtCore,
+            QtGui=QtGui,
+            QtWidgets=QtWidgets,
+            stores=self.stores,
+            analysis_provider=self.ecg_worker.latest,
+            post_gui=self._post_gui,
+        )
         tabs.addTab(live_tab, "实时")
+        tabs.addTab(self.epaper_panel.widget, "墨水屏同步")
         tabs.addTab(diagnostics_tab, "诊断")
         tabs.addTab(history_tab, "历史记录")
         tabs.addTab(compare_tab, "双轨对比")
@@ -718,6 +728,7 @@ class MainWindow:
         self.window.show()
 
     def close(self) -> None:
+        self.epaper_panel.close()
         self.sleep_ecg_panel.close()
         self.health_panel.close()
         self.mic_panel.close()
@@ -847,6 +858,7 @@ class MainWindow:
 
     def update_view(self) -> None:
         self._drain_gui_callbacks()
+        self.epaper_panel.refresh()
         self._update_ecg()
         self._update_status_labels()
         self._update_connection_status()

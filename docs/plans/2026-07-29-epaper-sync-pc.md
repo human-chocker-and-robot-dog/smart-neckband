@@ -191,15 +191,15 @@ git status --short --branch
 
 ## Progress
 
-- [ ] 固定并评审 BLE Display Protocol v1。
-- [ ] 实现显示客户端与测试替身。
-- [ ] 实现固定布局和 1-bit framebuffer。
-- [ ] 实现 30 秒 HRV 状态构建。
-- [ ] 实现最新帧调度器。
-- [ ] 集成“墨水屏同步”Qt 页签。
-- [ ] 完成自动化测试。
+- [x] 固定并评审 BLE Display Protocol v1 PC 兼容草案。
+- [x] 实现显示客户端与测试替身。
+- [x] 实现固定布局和 1-bit framebuffer。
+- [x] 实现 30 秒 HRV 状态构建。
+- [x] 实现最新帧调度器。
+- [x] 集成“墨水屏同步”Qt 页签。
+- [x] 完成自动化测试。
 - [ ] 完成双 BLE 台架联调。
-- [ ] 更新文档并记录未验证项。
+- [x] 更新文档并记录未验证项。
 
 ## Discoveries
 
@@ -207,7 +207,14 @@ git status --short --branch
 - 当前 PC 实时分析已经提供 HR、RR 和 SQI，但 HRV 需要从 RR observations 建立独立的 30 秒有效窗口。
 - 将电子纸客户端后端解耦与把功能集成到同一个 Qt GUI 并不冲突；页签负责控制和展示，客户端仍保持独立线程、状态和错误边界。
 - 当前屏幕需求中的 “SQRT” 与仓库指标不对应，计划按现有 `SQI` 实现，避免创造含义不明的健康量。
+- Quote/0 固件尚未采用 v1 规范，因此 PC 仓库先提交带 `pending-firmware-adoption` 来源标记的兼容草案和 Python 黄金向量；固件实现后必须回填规范原件 commit。
+- PySide6 字体渲染必须运行在现有 `QApplication` 生命周期内；测试使用 offscreen QApplication，渲染器不自行创建第二个 Qt 应用。
+- 协议、显示状态/渲染、BLE 客户端和 Qt 页签共有 19 项聚焦测试通过；完整 `pc-test` 为 251 项全部通过。真实双设备联调仍待 Quote/0 固件实现后进行。
 
 ## Result
 
-尚未实施。完成后在此记录实际文件、测试数量、双 BLE 运行时长、屏幕刷新统计、残影观察和仍未验证的硬件/人体条件。
+PC 端计划内的软件工作已完成：新增 BLE Display v1 兼容草案和黄金向量、30 秒去重 HRV 窗口、296×152 1-bit 固定布局与 ECG min/max 包络、容量为 1 的最新帧调度、独立 Quote/0 Bleak 客户端、瞬时失败 CANCEL/单次重试、自动重连，以及主 Qt GUI 的“墨水屏同步”页和操作文档。
+
+验证结果：19 项电子纸聚焦测试通过；仓库完整 `pc-test` 为 `251 passed in 142.62s`；`git diff --check` 待最终提交前再次确认。没有修改项圈固件、GPIO、采样率或 V0 原始协议。
+
+尚未验证：Quote/0 BLE Display v1 真机固件、Windows 同时连接两个真实 Peripheral、约 4.1 秒屏幕刷新期间的项圈持续吞吐、残影、刷新策略、电池功耗、绑定缓存和人体连接行为。Quote/0 固件采用协议后还必须把规范原件 commit 回填到兼容文档和黄金向量元数据。
