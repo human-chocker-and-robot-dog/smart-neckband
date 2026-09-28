@@ -21,6 +21,12 @@ data class ImuSnapshot(
     val observedAt: Instant? = null,
 )
 
+data class EcgWaveform(
+    val values: List<Float> = emptyList(),
+    val seconds: List<Float> = emptyList(),
+    val breaks: Set<Int> = emptySet(),
+)
+
 data class CollarSnapshot(
     val connection: ConnectionState = ConnectionState.DISCONNECTED,
     val acquisition: AcquisitionState = AcquisitionState.STOPPED,
@@ -30,8 +36,12 @@ data class CollarSnapshot(
     val parserCrcErrors: Long = 0,
     val packetLoss: Long = 0,
     val lastError: String? = null,
-    val rawEcg: List<Float> = emptyList(),
-    val cleanEcg: List<Float> = emptyList(),
+    val rawEcg: EcgWaveform = EcgWaveform(),
+    val cleanEcg: EcgWaveform = EcgWaveform(),
+    val ecgSampleCount: Int = 0,
+    val analysisSampleCount: Int = 0,
+    val effectiveSampleRateHz: Double? = null,
+    val timingWarning: Boolean = false,
     val analysisMessage: String = "等待设备数据",
     val hrvWindowSeconds: Int = 0,
     val rrCount: Int = 0,

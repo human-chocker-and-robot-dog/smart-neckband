@@ -32,7 +32,7 @@ class InsightEngine(private val preferences: SharedPreferences, private val repo
         val quality = snapshot.heart.signalQuality ?: return
         val bpm = snapshot.heart.bpm ?: return
         val motion = snapshot.imu.motionScore ?: return
-        if (quality < .5 || snapshot.heart.leadOff) return
+        if (quality < .5 || snapshot.heart.leadOff || snapshot.timingWarning) return
         val type = if (motion >= 35) "body.movement" else if (snapshot.heart.hrvRmssdMs != null) "body.rest_window" else return
         if (now - lastEventMs < 60_000 || (type == lastType && now - lastEventMs < 300_000)) return
         lastEventMs = now

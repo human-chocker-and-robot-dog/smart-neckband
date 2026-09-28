@@ -14,10 +14,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.smartneckband.companion.NearbyCollar
+import com.smartneckband.companion.BuildConfig
 import com.smartneckband.companion.SmartCollarApplication
 import com.smartneckband.companion.data.*
 import java.time.ZoneId
@@ -48,7 +50,7 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
         }) { padding ->
             LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 if (detail) {
-                    item { InfoCard("ECG · 原始 ADC", "原始计数，与滤波波形分别保存") { Waveform(snapshot.rawEcg) } }
+                    item { InfoCard("ECG · 原始 ADC", "最近 ${snapshot.ecgSampleCount} 个采样 · 原始计数") { Waveform(snapshot.rawEcg, raw = true) } }
                     item { InfoCard("ECG · 滤波波形", snapshot.analysisMessage) { Waveform(snapshot.cleanEcg) } }
                     item { InfoCard("HRV · RMSSD", "静息窗口 ${snapshot.hrvWindowSeconds}/60 秒 · 有效 RR ${snapshot.rrCount} 个") {
                         Text("${metric(snapshot.heart.hrvRmssdMs)} ms", style = MaterialTheme.typography.headlineLarge)
@@ -57,6 +59,9 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
                     item { InfoCard("数据质量", "${snapshot.dataAgeMs?.let { "数据延迟 ${it} ms" } ?: "暂无实时数据"}") {
                         Text("信号质量：${snapshot.heart.signalQuality?.let { "%.0f%%".format(it * 100) } ?: "--"}")
                         Text("CRC 错误 ${snapshot.parserCrcErrors} · 丢包 ${snapshot.packetLoss}")
+                        Text("实测采样率 ${metric(snapshot.effectiveSampleRateHz, 0)} Hz · 标称 500 Hz")
+                        Text("分析窗口 ${snapshot.analysisSampleCount}/5000 点")
+                        if (snapshot.timingWarning) Text("采样时序存在告警；保留波形，暂停 HRV 与事件解释。")
                     } }
                 } else when (page) {
                     "Today" -> {
@@ -69,7 +74,8 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
                         item { Card(onClick = { detail = true }, shape = RoundedCornerShape(24.dp)) {
                             Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                 Text("ECG", style = MaterialTheme.typography.titleLarge)
-                                Waveform(snapshot.cleanEcg.ifEmpty { snapshot.rawEcg })
+                                val showRaw = snapshot.cleanEcg.values.isEmpty()
+                                Waveform(if (showRaw) snapshot.rawEcg else snapshot.cleanEcg, raw = showRaw)
                                 Text(snapshot.analysisMessage, style = MaterialTheme.typography.bodyMedium)
                                 Text("查看原始波形与详情 →", color = MaterialTheme.colorScheme.primary)
                             }
@@ -109,7 +115,7 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
                             Text("后台通知显示心率与 HRV；可直接从通知停止。", style = MaterialTheme.typography.bodySmall)
                         } }
                         item { GatewaySettings(app) }
-                        item { Text("Smart Collar Companion · 0.1.0\nHRV 使用 RMSSD；本版不接入 Health Connect。", style = MaterialTheme.typography.bodySmall) }
+                        item { Text("Smart Collar Companion · ${BuildConfig.VERSION_NAME}\nHRV 使用 RMSSD；本版不接入 Health Connect。", style = MaterialTheme.typography.bodySmall) }
                     }
                 }
             }
@@ -150,19 +156,35 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
         }
     }
 }
-@Composable private fun Waveform(points: List<Float>) {
+@Composable private fun Waveform(series: EcgWaveform, raw: Boolean = false) {
     val color = MaterialTheme.colorScheme.primary
-    if (points.size < 2) { Text("等待波形", Modifier.fillMaxWidth().height(80.dp), color = MaterialTheme.colorScheme.onSurfaceVariant); return }
-    Canvas(Modifier.fillMaxWidth().height(120.dp)) {
-        val low = points.minOrNull() ?: 0f
-        val span = ((points.maxOrNull() ?: 0f) - low).coerceAtLeast(1f)
-        val path = Path()
-        points.forEachIndexed { index, point ->
-            val x = size.width * index / (points.size - 1)
-            val y = size.height * (0.9f - 0.8f * (point - low) / span)
-            if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+    val points = series.values
+    if (points.size < 2 || series.seconds.size != points.size) { Text("等待波形", Modifier.fillMaxWidth().height(80.dp), color = MaterialTheme.colorScheme.onSurfaceVariant); return }
+    val low = if (raw) 0f else points.minOrNull() ?: 0f
+    val high = if (raw) 4095f else points.maxOrNull() ?: 1f
+    val span = (high - low).coerceAtLeast(1f)
+    val duration = (series.seconds.maxOrNull() ?: .002f).coerceAtLeast(.002f)
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("${"%.0f".format(low)}–${"%.0f".format(high)} ADC${if (raw) "" else " · 滤波后"}", style = MaterialTheme.typography.labelSmall)
+        Canvas(Modifier.fillMaxWidth().height(140.dp)) {
+            for (tick in 0..4) {
+                val x = size.width * tick / 4
+                drawLine(color.copy(alpha = .12f), Offset(x, 0f), Offset(x, size.height))
+                val y = size.height * tick / 4
+                drawLine(color.copy(alpha = .12f), Offset(0f, y), Offset(size.width, y))
+            }
+            val path = Path()
+            points.forEachIndexed { index, point ->
+                val x = size.width * series.seconds[index] / duration
+                val y = size.height * (0.95f - 0.9f * (point - low) / span)
+                if (index == 0 || index in series.breaks) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+            drawPath(path, color, style = Stroke(width = 1.dp.toPx()))
         }
-        drawPath(path, color, style = Stroke(width = 2.dp.toPx()))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("0 s", style = MaterialTheme.typography.labelSmall)
+            Text("${"%.1f".format(duration)} s", style = MaterialTheme.typography.labelSmall)
+        }
     }
 }
 private fun metric(value: Double?, decimals: Int = 1) = value?.let { "%.${decimals}f".format(it) } ?: "--"

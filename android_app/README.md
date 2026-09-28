@@ -30,18 +30,26 @@ older firmware will produce a clear control-capability error. See
 
 Chaquopy packages **unchanged** PC `analysis.py`, `buffers.py`, `protocol.py`,
 `source_coordinator.py` and `health_motion.py` through a Gradle Sync task. The
-Android adapter is `app/src/main/python/collar_engine.py`. It uses a continuous
-10-second, 500 Hz ECG window, NeuroKit2 cleaning/peaks/quality and the existing
+Android adapter is `app/src/main/python/collar_engine.py`. It uses the latest
+5000 received ECG samples (10 seconds at nominal 500 Hz), NeuroKit2 cleaning/peaks/quality and the existing
 recent-RR median HR. Native scientific packages are pinned in
 `app/requirements-android.txt` (Python 3.10, NumPy 1.23.3, SciPy 1.8.1,
 NeuroKit2 0.2.10). Desktop PC dependencies themselves remain unchanged.
 
-Raw counts and flags are retained in a separate bounded ring. Analysis runs away
-from the main thread, at most once per second. ECG gaps, flags, lead-off,
-historical data, reconnects and stale data invalidate the metric window. MIC1
+Raw counts and original flags are retained in a separate bounded ring. Both
+traces include every sample, device-time coordinates and explicit breaks at
+missing data; the UI does not stride-decimate R peaks. Diagnostics show window
+sample counts, effective sample rate and timing warnings. Analysis runs away
+from the main thread, at most once per second, after draining queued packets.
+Sampling-warning and occasional clipping packets remain in the analysis window.
+The unchanged PC cleaner runs on that window; sustained clipping uses the PC's
+80% rule. Lead-off, actual missing packets and queue/transport overflow suppress
+HR/HRV while retaining the traces. Timing warnings permit quality-qualified HR
+with a warning but suppress HRV and Insight generation. Reboot, a gap over one
+second, historical data, reconnects and staleness reset analysis continuity. MIC1
 frames are consumed whole, so audio payload cannot masquerade as ECG.
 
-RMSSD uses unique settled R peaks from overlapping windows, a rolling 60-second
+RMSSD requires a window free of sampling/quality flags and uses unique settled R peaks from overlapping windows, a rolling 60-second
 quiet interval, at least 30 RR intervals, SQI ≥0.5 and motion score <10. RR outside
 300–2000 ms or adjacent changes >25% reset the HRV window. These are conservative
 engineering gates, not a validated stress model or medical threshold. Motion
@@ -68,6 +76,9 @@ local logs must remain ignored. APK: `app/build/outputs/apk/debug/app-debug.apk`
 Runtime smoke tests use `:app:connectedDebugAndroidTest` with an explicitly
 selected test device (`ANDROID_SERIAL`) and the same Python build property.
 Instrumentation replays synthetic ECG only and checks page responsibilities.
+`StreamingReplayTest` feeds 250 V0 packets through 20-byte transport fragments,
+with repeated SAMPLE_MISSED flags and device-time drift, then verifies all 5000
+raw values, cleaned output, HR parity and the detail UI. It does not connect BLE.
 
 Python adapter tests: install the scientific dependencies from the Android pins
 where desktop wheels exist (PyWavelets 1.4.1 substitutes the old Android wheel;
@@ -99,7 +110,8 @@ remain deployment work; no public gateway is provisioned by this change.
 ## Acceptance limits
 
 See the [living plan](../docs/plans/2026-09-28-android-companion-mvp.md) for actual
-validation results. APK compilation and synthetic replay do not prove long-run
+MVP validation results and the [0.1.1 waveform repair record](../docs/plans/2026-09-29-android-ecg-stream-fix.md)
+for the streaming regression and current phone-install status. APK compilation and synthetic replay do not prove long-run
 BLE stability, Xiaomi background survival, battery use or physiological accuracy.
 The bundled older scientific wheels require a separate compatibility gate on
 16 KB page-size devices. The target Xiaomi reports 4 KB pages.

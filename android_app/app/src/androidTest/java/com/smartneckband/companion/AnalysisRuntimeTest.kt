@@ -23,7 +23,7 @@ class AnalysisRuntimeTest {
         assertEquals(fixture.getDouble("bpm"), result.getDouble("bpm"), .05)
         assertEquals(fixture.getDouble("quality"), result.getDouble("quality"), .01)
         assertTrue(result.isNull("rmssd"))
-        assertEquals(313, result.getJSONArray("raw").length())
-        assertEquals(313, result.getJSONArray("cleaned").length())
+        assertEquals(5000, result.getJSONObject("raw").getJSONArray("values").length())
+        assertEquals(5000, result.getJSONObject("cleaned").getJSONArray("values").length())
     }
 }

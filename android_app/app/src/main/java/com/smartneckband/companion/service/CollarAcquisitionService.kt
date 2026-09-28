@@ -111,11 +111,20 @@ class CollarAcquisitionService : Service() {
                     if (disconnectSignal.isCompleted) error(disconnectSignal.await())
                     val received = withTimeoutOrNull(100) { frames.receive() }
                     if (received != null) {
-                        val frame = received.frame
-                        val age = SystemClock.elapsedRealtime() - received.receivedAtMs
-                        check(age < 2000) { "分析处理落后于实时数据，重新建立窗口" }
-                        if (frame is V0Frame.Ecg && frame.flags and 0x80 == 0) lastDataAt = received.receivedAtMs
-                        withContext(analysisDispatcher) { engine.callAttr("append", batchJson(frame).put("received_age_ms", age).toString()) }
+                        // Drain pending notifications before another analysis so
+                        // a slow calculation cannot repeatedly analyze old data.
+                        val pending = mutableListOf(received)
+                        while (pending.size < 512) pending += frames.tryReceive().getOrNull() ?: break
+                        withContext(analysisDispatcher) {
+                            pending.forEach { item ->
+                                val frame = item.frame
+                                val age = SystemClock.elapsedRealtime() - item.receivedAtMs
+                                check(age < 2000) { "分析处理落后于实时数据，重新建立窗口" }
+                                engine.callAttr("append", batchJson(frame).put("received_age_ms", age).toString())
+                            }
+                        }
+                        pending.lastOrNull { it.frame is V0Frame.Ecg && it.frame.flags and 0x80 == 0 }
+                            ?.let { lastDataAt = it.receivedAtMs }
                     }
                     val now = SystemClock.elapsedRealtime()
                     if (now - lastDataAt > 15_000) error("设备持续无实时 ECG 数据")
@@ -123,7 +132,7 @@ class CollarAcquisitionService : Service() {
                     if (now - analyzedAt >= 1000) {
                         val result = withContext(analysisDispatcher) { engine.callAttr("analyze").toString() }
                         repository.analysis(JSONObject(result))
-                        analyzedAt = now
+                        analyzedAt = SystemClock.elapsedRealtime()
                         if (insightJob?.isActive != true) {
                             val snapshot = repository.snapshot.value
                             insightJob = scope.launch { insights.observe(snapshot) }
