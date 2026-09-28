@@ -10,7 +10,7 @@ At the start of this change, firmware V0 emitted 500 Hz raw ECG, 50 Hz IMU and d
 
 ## Scope
 
-Android app, stream decoding, phone analysis bridge, foreground service, bounded reconnect, device selection, Today/Detail/Settings/Insight, local event explanations and an optional HTTPS Insight gateway client. Add a documented firmware collection control extension. The user explicitly authorized app installation and debugging on the attached Xiaomi on 2026-09-29. No firmware flashing, human acquisition, Health Connect or medical diagnosis.
+Android app, stream decoding, phone analysis bridge, foreground service, bounded reconnect, device selection, Today/Detail/Settings/Insight, local event explanations and an optional HTTPS Insight gateway client. Add a documented firmware collection control extension. The user explicitly authorized app installation and debugging on the attached Xiaomi on 2026-09-29, then authorized firmware flashing and confirmed no electrodes were connected. No human acquisition, Health Connect or medical diagnosis.
 
 ## Design decisions
 
@@ -48,6 +48,7 @@ Native scientific wheels may not support the target Android runtime or page size
 - [x] BLE/service/UI and structured Insight client implemented; APK builds and lint passes.
 - [x] Firmware control compiles; Python tests check the C golden literals against shared JSON.
 - [x] APK installed on Xiaomi 13 Ultra; native analysis synthetic replay passes on Android 16.
+- [x] Unified firmware flashed to the confirmed ESP32-C3 v1.1 / 4 MB bench device; all four written images passed hash verification.
 - [x] Build/test results and remaining acceptance gates recorded.
 - [ ] Physical collar START/STOP ACK and continuous BLE stream verified.
 - [ ] Thirty-minute wireless capture, notification Stop and Xiaomi background behavior verified.
@@ -70,14 +71,15 @@ Native scientific wheels may not support the target Android runtime or page size
 - `:app:testDebugUnitTest :app:assembleDebug :app:lintDebug :app:assembleDebugAndroidTest`: success; 7 JVM tests, no lint errors. Deprecation/version warnings remain.
 - `python -m pytest android_app/tests -q` in the pinned desktop analysis environment: 12 passed. Matplotlib emits upstream Pyparsing deprecation warnings.
 - `./tools/project.ps1 pc-test`: 220 passed before adding one additional C-literal consistency test. The final focused `pc_app/tests/test_acquisition_control.py` run has 7 passing tests, including that addition.
-- `./tools/project.ps1 build`, followed by a second incremental build and `./tools/project.ps1 size`: success under ESP-IDF 6.0.2. Image size 675597 bytes; DRAM 132763 bytes (41.32%). No firmware was flashed. The C startup self-test is compiled, not yet executed on the collar.
+- `./tools/project.ps1 build`, followed by a second incremental build and `./tools/project.ps1 size`: success under ESP-IDF 6.0.2. Image size 675597 bytes; DRAM 132763 bytes (41.32%). The C startup self-test is compiled; its runtime result has not been observed in serial logs.
 - Android instrumentation on the physical Xiaomi: native-library/synthetic parity and Today/Settings navigation both pass on the final installed build (`OK (2 tests)`, 7.207 seconds). A prior run was interrupted by lock screen and was stopped before this clean rerun.
 - Final Today screenshot was visually inspected on the phone. The configured device connection reached the control timeout path and displayed “设备未确认采集控制；请更新支持控制协议的固件”. No START ACK or live ECG was established; this is an observed compatibility failure, not successful end-to-end acquisition.
 - Synthetic fixture: 5000 generated ECG samples, desktop HR 72.81553398058253 BPM and SQI 0.6236363609044285. No human ECG fixture or real-time collar measurements are claimed.
 - Local build/test logs are ignored under `.local-tools/`; reproducible commands and dependency pins are in `android_app/README.md`.
+- After explicit flash authorization and confirmation that electrodes were disconnected, `esptool --chip esp32c3 ... flash-id` confirmed ESP32-C3 v1.1 and 4 MB Flash. `./tools/project.ps1 flash` succeeded: bootloader, partition table, speech models and application all passed written-data hash verification, followed by the tool's hard-reset action. Flash log: ignored `.local-tools/firmware-flash.log`. No serial monitor was opened. ADB then reported no attached phone, so post-flash Android START/STOP ACK and live stream validation remain pending.
 
 ## Result
 
 The first runnable Android increment is installed on the test phone. Today displays metrics and ECG; Settings owns pairing and acquisition; notification controls and task-scoped automatic acquisition are implemented. The app packages the existing PC analysis modules without forking their algorithms and adds conservative mobile quality/freshness/RMSSD gates. Local Insight cards and the optional structured-event gateway client are implemented; no model provider or server has been provisioned.
 
-The complete live collar → phone → cloud-AI loop remains a hardware/service acceptance gate. The collar needs this branch's firmware control extension before app acquisition can work. BLE control, live signal accuracy, long-run background survival and cloud responses have not been verified. Existing PC collection remains available; Android changes are isolated on `feat/android-companion-mvp`.
+The complete live collar → phone → cloud-AI loop remains a hardware/service acceptance gate. The collar now has this branch's firmware control extension, with flash writes verified. Post-flash BLE control, live signal accuracy, long-run background survival and cloud responses have not been verified. Existing PC collection remains available; Android changes are isolated on `feat/android-companion-mvp`.
