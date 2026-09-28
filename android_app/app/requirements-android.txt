@@ -1,0 +1,8 @@
+# Android wheels available for CPython 3.10 (arm64-v8a and x86_64).
+neurokit2==0.2.10
+numpy==1.23.3
+scipy==1.8.1
+pandas==2.1.3
+scikit-learn==1.3.2
+matplotlib==3.6.0
+PyWavelets==1.1.1

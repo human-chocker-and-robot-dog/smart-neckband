@@ -41,6 +41,15 @@ void v0_sample_ring_reset(void)
     portEXIT_CRITICAL(&s_ring_mux);
 }
 
+void v0_sample_ring_discard_pending(void)
+{
+    /* Explicit session boundary, never noise filtering. Preserve loss counters. */
+    portENTER_CRITICAL(&s_ring_mux);
+    s_ecg_head = s_ecg_tail = s_ecg_count = 0U;
+    s_imu_head = s_imu_tail = s_imu_count = 0U;
+    portEXIT_CRITICAL(&s_ring_mux);
+}
+
 bool v0_sample_ring_push_ecg(const v0_ecg_sample_t *sample)
 {
     if (sample == NULL) {

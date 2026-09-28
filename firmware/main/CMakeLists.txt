@@ -3,6 +3,7 @@ if(NOT IDF_TARGET STREQUAL "esp32c3")
 endif()
 
 set(main_sources
+    "acquisition_control.c"
     "app_main.c"
     "i2c_scan.c"
     "oled_status.c"

@@ -14,6 +14,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "i2c_scan.h"
 #include "protocol_v0.h"
 #include "sample_ring.h"
@@ -33,6 +34,8 @@ static gptimer_handle_t s_ecg_timer = NULL;
 static TaskHandle_t s_ecg_task_handle = NULL;
 static TaskHandle_t s_imu_task_handle = NULL;
 static i2c_master_dev_handle_t s_mpu6050_handle = NULL;
+static SemaphoreHandle_t s_ecg_access;
+static SemaphoreHandle_t s_imu_access;
 
 static portMUX_TYPE s_status_mux = portMUX_INITIALIZER_UNLOCKED;
 static bool s_sampling_active = false;
@@ -343,6 +346,8 @@ static void ecg_task(void *arg)
 
     for (;;) {
         const uint32_t notifications = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        xSemaphoreTake(s_ecg_access, portMAX_DELAY);
+        if (!s_sampling_active) { xSemaphoreGive(s_ecg_access); continue; }
         uint8_t flags = read_lead_off_flags();
 
         if (notifications > 1U) {
@@ -355,6 +360,7 @@ static void ecg_task(void *arg)
         const esp_err_t err = adc_oneshot_read(s_adc_handle, BOARD_ECG_ADC_CHANNEL, &raw);
         if (err != ESP_OK) {
             add_adc_error();
+            xSemaphoreGive(s_ecg_access);
             continue;
         }
 
@@ -369,6 +375,7 @@ static void ecg_task(void *arg)
             .flags = flags,
         };
         (void)v0_sample_ring_push_ecg(&sample);
+        xSemaphoreGive(s_ecg_access);
     }
 }
 
@@ -382,6 +389,8 @@ static void imu_task(void *arg)
 
     for (;;) {
         vTaskDelayUntil(&last_wake, period);
+        xSemaphoreTake(s_imu_access, portMAX_DELAY);
+        if (!s_sampling_active) { xSemaphoreGive(s_imu_access); continue; }
 
         bool online = false;
         portENTER_CRITICAL(&s_status_mux);
@@ -392,11 +401,13 @@ static void imu_task(void *arg)
             if ((retry_divider++ % BOARD_IMU_SAMPLE_RATE_HZ) == 0U) {
                 (void)configure_mpu6050();
             }
+            xSemaphoreGive(s_imu_access);
             continue;
         }
 
         protocol_v0_imu_point_t point = {0};
         if (read_mpu6050_sample(&point) != ESP_OK) {
+            xSemaphoreGive(s_imu_access);
             continue;
         }
 
@@ -407,11 +418,15 @@ static void imu_task(void *arg)
             .flags = 0U,
         };
         (void)v0_sample_ring_push_imu(&sample);
+        xSemaphoreGive(s_imu_access);
     }
 }
 
 esp_err_t v0_sensors_start(void)
 {
+    s_ecg_access = xSemaphoreCreateMutex();
+    s_imu_access = xSemaphoreCreateMutex();
+    if (s_ecg_access == NULL || s_imu_access == NULL) { return ESP_ERR_NO_MEM; }
     v0_sample_ring_reset();
 
     esp_err_t err = init_lead_off_gpio();
@@ -477,4 +492,25 @@ void v0_sensors_get_status(v0_sensor_status_t *out_status)
     out_status->adc_error_count = s_adc_error_count;
     out_status->i2c_error_count = s_i2c_error_count;
     portEXIT_CRITICAL(&s_status_mux);
+}
+
+esp_err_t v0_sensors_set_active(bool active)
+{
+    if (s_ecg_timer == NULL || s_ecg_access == NULL || s_imu_access == NULL) { return ESP_ERR_INVALID_STATE; }
+    /* Wait for in-flight reads; after STOP ACK no new ECG/IMU reads can start. */
+    xSemaphoreTake(s_ecg_access, portMAX_DELAY);
+    xSemaphoreTake(s_imu_access, portMAX_DELAY);
+    esp_err_t result = ESP_OK;
+    if (active != s_sampling_active) {
+        result = active ? gptimer_start(s_ecg_timer) : gptimer_stop(s_ecg_timer);
+        if (result == ESP_OK) {
+            portENTER_CRITICAL(&s_status_mux);
+            s_sampling_active = active;
+            portEXIT_CRITICAL(&s_status_mux);
+            v0_sample_ring_discard_pending();
+        }
+    }
+    xSemaphoreGive(s_imu_access);
+    xSemaphoreGive(s_ecg_access);
+    return result;
 }

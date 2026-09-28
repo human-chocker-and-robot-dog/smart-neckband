@@ -21,6 +21,7 @@
 #endif
 #include "nvs_flash.h"
 #include "protocol_v0.h"
+#include "acquisition_control.h"
 
 static const char *TAG = "v0_ble";
 
@@ -238,6 +239,9 @@ static esp_err_t init_nvs_for_ble(void)
 static void on_ble_rx(const uint8_t *data, size_t length)
 {
     if (data == NULL || length == 0U) {
+        return;
+    }
+    if (v0_acquisition_control_feed(data, length)) {
         return;
     }
     if (length >= 2U &&

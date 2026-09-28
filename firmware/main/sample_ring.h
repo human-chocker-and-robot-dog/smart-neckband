@@ -25,6 +25,7 @@ typedef struct {
 } v0_imu_sample_t;
 
 void v0_sample_ring_reset(void);
+void v0_sample_ring_discard_pending(void);
 
 bool v0_sample_ring_push_ecg(const v0_ecg_sample_t *sample);
 bool v0_sample_ring_push_imu(const v0_imu_sample_t *sample);

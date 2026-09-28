@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "board_config.h"
+#include "acquisition_control.h"
 #include "esp_chip_info.h"
 #include "esp_flash.h"
 #include "esp_log.h"
@@ -136,6 +137,8 @@ void app_main(void)
         ESP_LOGW(TAG, "I2C scan did not complete cleanly: %s", esp_err_to_name(scan_err));
     }
 
+    ESP_ERROR_CHECK(v0_acquisition_control_init());
+    ESP_LOGI(TAG, "acquisition control self-test=%s", v0_acquisition_control_self_test() ? "PASS" : "FAIL");
     const esp_err_t transport_err = v0_transport_start();
     if (transport_err != ESP_OK) {
         ESP_LOGW(TAG, "%s transport not ready: %s",

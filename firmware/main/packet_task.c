@@ -1,4 +1,5 @@
 #include "packet_task.h"
+#include "acquisition_control.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -163,6 +164,7 @@ static void packet_task(void *arg)
 
     int64_t next_status_us = esp_timer_get_time();
     for (;;) {
+        v0_acquisition_control_process();
         send_ecg_batch();
         send_imu_batch();
 

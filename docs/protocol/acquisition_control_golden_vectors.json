@@ -1,0 +1,42 @@
+{
+  "protocol": "V0 acquisition control v1",
+  "vectors": [
+    {
+      "name": "start",
+      "packet_type": 7,
+      "request_id": 16909060,
+      "operation": 1,
+      "packet_hex": "534e0107080000000000000000000000000004030201010000004e13"
+    },
+    {
+      "name": "stop",
+      "packet_type": 7,
+      "request_id": 16909060,
+      "operation": 0,
+      "packet_hex": "534e010708000000000000000000000000000403020100000000fa65"
+    },
+    {
+      "name": "query",
+      "packet_type": 7,
+      "request_id": 16909060,
+      "operation": 2,
+      "packet_hex": "534e0107080000000000000000000000000004030201020000009288"
+    },
+    {
+      "name": "ack_active",
+      "packet_type": 8,
+      "request_id": 16909060,
+      "active": true,
+      "result": 0,
+      "packet_hex": "534e010808000503020140420f000000000004030201010000002e21"
+    },
+    {
+      "name": "ack_stopped",
+      "packet_type": 8,
+      "request_id": 16909060,
+      "active": false,
+      "result": 0,
+      "packet_hex": "534e010808000503020140420f000000000004030201000000009a57"
+    }
+  ]
+}

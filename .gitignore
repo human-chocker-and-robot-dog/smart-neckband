@@ -60,3 +60,10 @@ Thumbs.db
 *.tmp
 *.bak
 *.swp
+
+# Android and local build toolchain
+!android_app/app/src/**/java/com/smartneckband/companion/data/
+android_app/.gradle/
+android_app/**/build/
+android_app/local.properties
+.local-tools/
