@@ -16,8 +16,8 @@ Connect dependency, data import, permission or background sync is enabled.
   decoding and analysis. Private notification updates at most once per 2 seconds
   with HR/RMSSD and Stop. Unknown, stale or poor-quality metrics show `--`.
 - **AI Insight**: bounded, timestamped explanations based on structured body
-  events. Local fallback is labelled **本地规则**. Cloud is off until configured
-  through the legacy gateway preferences. Last 30 explanations persist in private
+  events. Local fallback is labelled **本地规则**. Direct DeepSeek/OpenAI-compatible
+  calls are off until configured in Settings. Last 30 explanations persist in private
   preferences; raw data stays in bounded memory until an explicit local diagnostic
   capture. Demo cards are separate from this history.
 
@@ -52,7 +52,8 @@ Sampling-warning and occasional clipping packets remain in the analysis window.
 The unchanged PC cleaner runs on that window; sustained clipping uses the PC's
 80% rule. Lead-off, actual missing packets and queue/transport overflow suppress
 HR/HRV while retaining the traces. Timing warnings permit quality-qualified HR
-with a warning but suppress HRV and Insight generation. Reboot, a gap over one
+with a warning but suppress HRV and automatic physiological Insight generation.
+Manual quality-only explanations can describe unavailable metrics. Reboot, a gap over one
 second, historical data, reconnects and staleness reset analysis continuity. MIC1
 frames are consumed whole, so audio payload cannot masquerade as ECG.
 
@@ -118,23 +119,20 @@ PC and phone can save the last 60 seconds of bounded transport/analysis evidence
 See [demo and capture instructions](../docs/android-demo-diagnostics.md) for export,
 ADB collection, same-input offline replay and cross-host comparison semantics.
 
-## Legacy AI gateway contract (direct provider integration deferred)
+## Direct AI API (0.1.4)
 
-The previous gateway adapter remains compatible with stored HTTPS settings; the
-gateway editor is not shown in this demo build. Neither demo makes new API requests.
-Phone-direct provider integration will be a separate change. For the legacy
-gateway, the server, not the APK, holds provider keys.
-The app POSTs JSON with `locale: "zh-CN"` and `event` containing `schema_version`,
-`id`, `type`, `observed_at`, `source`, `heart_rate_bpm`, nullable `hrv_rmssd_ms`,
-`signal_quality`, `motion_score`, `hrv_window_s`, `rr_count`, `lead_off`,
-`data_age_ms`. Types currently are `body.movement` and `body.rest_window`.
+Settings supports **DeepSeek 官方** and **OpenAI 兼容 API**. Enter your personal
+API key on the phone, choose the provider/model, enable AI and save. Then use
+**生成当前解释** on AI Insight. **用示例检查 API** in Settings makes one explicit
+paid request using synthetic data and shows a temporary preview without adding
+to real history. Both demo switches must be off for any network request.
 
-Return HTTP 2xx with `{"title":"…","explanation":"…"}`. Title is 1–100
-characters; explanation 1–2000; response body ≤16 KiB. Redirects are rejected.
-Timeouts and malformed replies fall back to a labelled local card. Interpret
-only the supplied event, retain uncertainty and do not infer diagnoses or a
-stress score. Server authentication/provisioning and a chosen model provider
-remain deployment work; no public gateway is provisioned by this change.
+Automatic generation is a separate opt-in; local rules continue without cloud
+access. Provider failures display an actionable error and pause automatic AI
+until successful manual retry or saving configuration. There are no automatic
+HTTP retries. Previous hidden gateway settings are no longer used or migrated.
+
+See [configuration, privacy, JSON contract and manual acceptance](../docs/android-ai-api.md).
 
 ## Acceptance limits
 

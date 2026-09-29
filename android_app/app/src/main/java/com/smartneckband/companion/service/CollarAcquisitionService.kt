@@ -48,7 +48,7 @@ class CollarAcquisitionService : Service() {
         super.onCreate()
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL, "颈环实时采集", NotificationManager.IMPORTANCE_LOW))
-        insights = InsightEngine(app.preferences, repository)
+        insights = app.insightEngine
         transport = BleCollarTransport(this, { frame, stats ->
             app.diagnostics.frame(frame, stats, accepting)
             synchronized(frames) {

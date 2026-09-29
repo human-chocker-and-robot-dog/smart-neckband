@@ -33,6 +33,10 @@ private val palette = lightColorScheme(primary = Color(0xFF28675C), secondary = 
 fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<NearbyCollar>, scanning: Boolean,
     notice: String?, onScan: () -> Unit, onSelect: (NearbyCollar) -> Unit, onStart: () -> Unit, onStop: () -> Unit,
     onCapture: () -> Unit = {}, onShareCapture: () -> Unit = {}, captureNotice: String? = null) {
+    val engine = remember(app) { app.insightEngine }
+    val aiRequest by engine.state.collectAsStateWithLifecycle()
+    val aiConfig by app.aiSettings.state.collectAsStateWithLifecycle()
+    val uiScope = rememberCoroutineScope()
     val liveSnapshot by app.repository.snapshot.collectAsStateWithLifecycle()
     val liveInsights by app.repository.insights.collectAsStateWithLifecycle()
     val ecgDemo by app.ecgDemo.collectAsStateWithLifecycle()
@@ -91,7 +95,7 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
                         Text("CRC 错误 ${snapshot.parserCrcErrors} · 丢包 ${snapshot.packetLoss}")
                         Text("实测采样率 ${metric(snapshot.effectiveSampleRateHz, 0)} Hz · 标称 500 Hz")
                         Text(if (ecgDemo) "演示窗口 ${snapshot.ecgSampleCount} 点" else "分析窗口 ${snapshot.analysisSampleCount}/5000 点")
-                        if (snapshot.timingWarning) Text("采样时序存在告警；保留波形，暂停 HRV 与事件解释。")
+                        if (snapshot.timingWarning) Text("采样时序存在告警；保留波形，暂停 HRV 与自动身体事件解释，可手动解释数据质量。")
                     } }
                 } else when (page) {
                     "Today" -> {
@@ -124,11 +128,20 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
                     "AI Insight" -> {
                         item { Text("理解每一段身体变化", style = MaterialTheme.typography.headlineSmall) }
                         item { Text(if (insightDemo) "演示模式 · 以下为手工预设场景，未调用 AI API，不代表你的身体状态。" else "结合信号质量、心率、HRV 和活动状态，解释已记录的身体事件。") }
+                        if (!insightDemo) item { InfoCard("本次记录的解释", if (aiConfig.enabled)
+                            "${aiConfig.provider.label} · ${aiConfig.model}" else "在 Settings 配置并启用 AI API") {
+                            Button(onClick = engine::generateNow,
+                                enabled = !aiRequest.busy && aiConfig.enabled && aiConfig.hasKey && !ecgDemo) { Text("生成当前解释") }
+                            if (ecgDemo) Text("请先关闭 ECG / 心率演示，再解释真实数据。")
+                            Text("HRV 暂缺时可解释当前可用数据；信号不合格时仅解释质量原因。", style = MaterialTheme.typography.bodySmall)
+                            AiRequestStatus(aiRequest) { engine.cancelActive() }
+                        } }
                         if (insights.isEmpty()) item { InfoCard("等待第一段有效记录", "保持佩戴并等待稳定数据后，解释卡片会出现在这里。") {
                             Text("未配置 AI 服务时使用本地规则，并标明来源。")
                         } }
                         items(insights, key = { it.id }) { card -> InfoCard(card.title, card.explanation) {
                             card.evidence?.let { Text(it, style = MaterialTheme.typography.titleSmall) }
+                            card.suggestion?.let { Text("可以试试：$it") }
                             card.caveat?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                             Text(if (insightDemo) card.source else "${card.source} · ${DateTimeFormatter.ofPattern("MM-dd HH:mm").withZone(ZoneId.systemDefault()).format(card.createdAt)}", style = MaterialTheme.typography.labelMedium)
                         } }
@@ -146,6 +159,7 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
                             Text("开启后到 Today 或 AI Insight 查看。演示不写入真实记录，也不请求 AI API。", style = MaterialTheme.typography.bodySmall)
                             if (ecgDemo) Text("已在运行的真实采集会继续，可在下方停止。下次启动 App 保持演示，不自动连接设备。", style = MaterialTheme.typography.bodySmall)
                         } }
+                        item { AiSettingsCard(app, uiScope) }
                         item { InfoCard("颈环设备", deviceName) {
                             Text(stateLabel(liveSnapshot))
                             notice?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -168,9 +182,6 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
                             OutlinedButton(onClick = onShareCapture) { Text("分享最近一次捕获") }
                             captureNotice?.let { Text(it) }
                             Text("仅保存在本机，包含传感器数据。未采集时日志可能为空；再次捕获会替换上次文件。", style = MaterialTheme.typography.bodySmall)
-                        } }
-                        item { InfoCard("AI API 接入", "下一阶段接入手机直连模型 API；当前可使用上方演示卡片。") {
-                            Text("预定使用结构化事件 JSON → 校验响应 JSON → 解释卡片；本次演示不需要密钥。")
                         } }
                         item { Text("Smart Collar Companion · ${BuildConfig.VERSION_NAME}\nHRV 使用 RMSSD；本版不接入 Health Connect。", style = MaterialTheme.typography.bodySmall) }
                     }
