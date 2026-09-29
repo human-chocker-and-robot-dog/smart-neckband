@@ -30,17 +30,15 @@ object DemoData {
 
     // These are UI examples, not medical interpretations or API responses.
     val cards = listOf(
-        InsightCard("demo-rest", "一段安静的时光", "示例中，你已经安静坐了一会儿。可以先感受呼吸，再决定接下来做什么。",
-            "演示 · 预设卡片", "demo-rest", Instant.parse("2026-09-29T01:20:00Z"),
-            "静息 60 秒 · 心率 72 BPM · RMSSD 42 ms", "这些数值仅用于展示，不代表你的身体状态。"),
-        InsightCard("demo-movement", "身体正在活动", "示例中，活动指数和心率一起上升。活动后可以给自己一点缓冲时间，再查看静息趋势。",
-            "演示 · 预设卡片", "demo-movement", Instant.parse("2026-09-29T01:05:00Z"),
-            "活动 3 分钟 · 心率 96 BPM · 活动指数 48", "活动期间不根据 HRV 判断压力。"),
-        InsightCard("demo-recovery", "节奏慢慢平稳", "示例中，活动结束后的心率由 96 降到 76 BPM。卡片展示变化经过，不对恢复能力作结论。",
-            "演示 · 预设卡片", "demo-recovery", Instant.parse("2026-09-29T00:55:00Z"),
-            "活动后 2 分钟 · 96 → 76 BPM", "个人趋势需要多次、相近条件下的记录。"),
-        InsightCard("demo-quality", "这一段，先不解释", "示例中，电极接触不稳定。先调整佩戴，等波形稳定后再看心率与 HRV。",
-            "演示 · 预设卡片", "demo-quality", Instant.parse("2026-09-29T00:40:00Z"),
-            "导联接触告警 · 信号质量不足", "数据不足时不生成身体状态结论。"),
+        InsightCard("demo-rhythm", "听见此刻的节奏", "示例里的心率是 72 BPM，RMSSD 参考值是 42 ms。这两个数字为当下留下一张身体小记，可以结合此刻的感受慢慢读。",
+            "演示 · 预设卡片", "demo-everyday", Instant.parse("2026-09-29T01:20:00Z"),
+            "心率 72 BPM\nRMSSD ≈ 42 ms", "演示 · 合成数值，不代表你的身体状态。", kind = "rhythm", schemaVersion = 2),
+        InsightCard("demo-activity", "一小段安静的空隙", "示例里的身体活动幅度较小。这样的间隙，适合把注意力放回肩膀、坐姿和呼吸，给自己留一点舒适的空间。",
+            "演示 · 预设卡片", "demo-everyday", Instant.parse("2026-09-29T01:20:00Z"),
+            "活动指数 4\n静止占比 96%", "演示 · 合成数值，不代表你的身体状态。", kind = "activity", schemaVersion = 2),
+        InsightCard("demo-suggestion", "给自己一分钟", "把这一刻的记录当成一个轻柔的提醒。接下来的小片刻，可以留给自己，不必急着赶往下一件事。",
+            "演示 · 预设卡片", "demo-everyday", Instant.parse("2026-09-29T01:20:00Z"),
+            "心率 72 BPM\n活动指数 4", "演示 · 合成数值，不代表你的身体状态。",
+            suggestion = "放松肩膀，自然呼吸，感受一分钟的当下。", kind = "suggestion", schemaVersion = 2),
     )
 }

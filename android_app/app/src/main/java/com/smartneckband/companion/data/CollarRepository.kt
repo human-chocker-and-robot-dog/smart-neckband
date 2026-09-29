@@ -83,4 +83,5 @@ class CollarRepository {
     }
     fun setInsights(value: List<InsightCard>) { cards.value = value.take(30) }
     fun addInsight(card: InsightCard) { cards.update { (listOf(card) + it).take(30) } }
+    fun addInsights(batch: List<InsightCard>) { cards.update { (batch + it).take(30) } }
 }

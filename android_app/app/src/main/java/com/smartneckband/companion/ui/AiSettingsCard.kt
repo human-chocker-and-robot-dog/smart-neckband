@@ -32,7 +32,7 @@ fun AiSettingsCard(app: SmartCollarApplication, scope: CoroutineScope) {
     Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("AI API 接入", style = MaterialTheme.typography.titleLarge)
-            Text("手机直接请求你选择的服务。只发送本次指标摘要和质量状态，不上传原始 ECG、音频或设备标识。")
+            Text("用当前心率、HRV 和活动记录生成三张日常解读卡片，HRV 参考值也会参与。只发送指标摘要。")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 AiProvider.entries.forEach { provider -> FilterChip(
                     selected = draft.provider == provider,
@@ -61,7 +61,7 @@ fun AiSettingsCard(app: SmartCollarApplication, scope: CoroutineScope) {
                 supportingText = { Text("使用 Android Keystore 加密保存在本机；更换 API 地址需重新填写。") })
             SettingSwitch("启用 AI Insight", "保存后允许发送真实指标摘要，调用消耗你账户的 API 额度。",
                 draft.enabled, !saving) { draft = draft.copy(enabled = it) }
-            SettingSwitch("自动生成解释", "有效活动或静息事件触发；至少间隔 1 分钟，同类事件至少 5 分钟。",
+            SettingSwitch("自动生成解释", "身体记录触发，含 HRV 参考值；至少间隔 1 分钟，同类记录至少 5 分钟。",
                 draft.automatic, !saving && draft.enabled) { draft = draft.copy(automatic = it) }
             if (draft.provider == AiProvider.COMPATIBLE) {
                 SettingSwitch("JSON 模式", "默认开启；仅当服务不支持 response_format 时关闭，返回内容仍会校验。",
@@ -91,15 +91,11 @@ fun AiSettingsCard(app: SmartCollarApplication, scope: CoroutineScope) {
             Text("此按钮会实际调用已保存的 API，使用合成数据并消耗额度；结果只显示在这里，不加入真实记录。", style = MaterialTheme.typography.bodySmall)
             if (ecgDemo || insightDemo) Text("演示模式开启时暂停全部 AI 请求；关闭两个演示开关后可检查 API。")
             AiRequestStatus(request) { engine.cancelActive() }
-            request.preview?.let { card ->
+            request.preview.forEach { card ->
                 HorizontalDivider()
-                Text("API 示例 · ${card.title}", style = MaterialTheme.typography.titleMedium)
-                Text(card.explanation)
-                card.evidence?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                card.suggestion?.let { Text("可以试试：$it") }
-                card.caveat?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                Text(card.source, style = MaterialTheme.typography.labelSmall)
+                InsightStoryCard(card)
             }
+            if (request.preview.isNotEmpty()) Text("API 合成示例 · 不代表你的身体状态，不加入真实记录。", style = MaterialTheme.typography.bodySmall)
             if (saved.hasKey) TextButton(onClick = {
                 saving = true
                 key = ""

@@ -16,8 +16,9 @@ Connect dependency, data import, permission or background sync is enabled.
   decoding and analysis. Private notification updates at most once per 2 seconds
   with HR/RMSSD and Stop. Unknown, stale or poor-quality metrics show `--`.
   A short-window RMSSD reference is explicitly labelled `≈` / `参考`.
-- **AI Insight**: bounded, timestamped explanations based on structured body
-  events. Local fallback is labelled **本地规则**. Direct DeepSeek/OpenAI-compatible
+- **AI Insight**: three concise cards for body rhythm, activity/rest and an
+  everyday action, with locally mapped evidence chips and grouped history.
+  Local fallback is labelled **本地解读**. Direct DeepSeek/OpenAI-compatible
   calls are off until configured in Settings. Last 30 explanations persist in private
   preferences; raw data stays in bounded memory until an explicit local diagnostic
   capture. Demo cards are separate from this history.
@@ -57,8 +58,9 @@ cannot describe the number of individually clipped samples. Original values and
 wire flags remain intact in both rings and diagnostic capture.
 Lead-off, actual missing packets and queue/transport overflow suppress
 HR/HRV while retaining the traces. Timing warnings permit quality-qualified HR
-with a warning but suppress qualified HRV and automatic physiological Insight generation.
-Manual quality-only explanations can describe unavailable metrics. Reboot, a gap over one
+with a warning but suppress qualified HRV. Insight uses the fresh displayed
+metrics, including explicitly labelled reference HRV, for everyday observations.
+Hardware explanations remain in Detail/Settings. Reboot, a gap over one
 second, historical data, reconnects and staleness reset analysis continuity. MIC1
 frames are consumed whole, so audio payload cannot masquerade as ECG.
 
@@ -85,7 +87,8 @@ outside 300–2000 ms, over 25% from nominal timing, or adjacent changes over 25
 break the reference segment. No estimate bridges rejected intervals. Timing
 warnings, sporadic clipping, unavailable IMU or motion can leave a reference
 visible with explicit uncertainty; they still prevent qualified resting HRV.
-The reference is not interpreted as a stress score or sent to AI as valid RMSSD.
+Starting with 0.1.6, the reference is sent to AI as a reference metric and can be
+interpreted in everyday cards. It is not relabelled as qualified RMSSD or a stress score.
 True losses/lead-off, stale data, sustained saturation and poor SQI suppress it.
 This displays a measured short-window calculation; it does not repair analog
 saturation or establish physiological accuracy.
@@ -143,16 +146,17 @@ PC and phone can save the last 60 seconds of bounded transport/analysis evidence
 See [demo and capture instructions](../docs/android-demo-diagnostics.md) for export,
 ADB collection, same-input offline replay and cross-host comparison semantics.
 
-## Direct AI API (0.1.4)
+## Direct AI API (introduced in 0.1.4; everyday cards in 0.1.6)
 
 Settings supports **DeepSeek 官方** and **OpenAI 兼容 API**. Enter your personal
 API key on the phone, choose the provider/model, enable AI and save. Then use
-**生成当前解释** on AI Insight. **用示例检查 API** in Settings makes one explicit
-paid request using synthetic data and shows a temporary preview without adding
+**读懂此刻** on AI Insight. **用示例检查 API** in Settings makes one explicit
+paid request using synthetic data (including reference HRV) and shows three temporary cards without adding
 to real history. Both demo switches must be off for any network request.
 
-Automatic generation is a separate opt-in; local rules continue without cloud
-access. Provider failures display an actionable error and pause automatic AI
+Automatic generation is a separate opt-in and accepts reference metrics and
+ordinary snapshots. Local everyday cards continue without cloud access.
+Provider failures display an actionable error in Settings and pause automatic AI
 until successful manual retry or saving configuration. There are no automatic
 HTTP retries. Previous hidden gateway settings are no longer used or migrated.
 

@@ -21,8 +21,6 @@ import com.smartneckband.companion.NearbyCollar
 import com.smartneckband.companion.BuildConfig
 import com.smartneckband.companion.SmartCollarApplication
 import com.smartneckband.companion.data.*
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.delay
 
 private val palette = lightColorScheme(primary = Color(0xFF28675C), secondary = Color(0xFF666D51),
@@ -54,6 +52,7 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
     var detail by rememberSaveable { mutableStateOf(false) }
     var waveformSeconds by rememberSaveable { mutableIntStateOf(3) }
     var automaticScale by rememberSaveable { mutableStateOf(true) }
+    var showInsightHistory by rememberSaveable { mutableStateOf(false) }
     MaterialTheme(colorScheme = palette) {
         Scaffold(topBar = { TopAppBar(title = { Text(if (detail) "身体数据详情" else page) },
             navigationIcon = { if (detail) IconButton(onClick = { detail = false }) {
@@ -106,7 +105,7 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
                         Text(if (ecgDemo) "演示窗口 ${snapshot.ecgSampleCount} 点" else "分析窗口 ${snapshot.analysisSampleCount}/5000 点")
                         Text("原始 ADC 实际触顶 ${snapshot.adcClippedSamples}/${snapshot.analysisSampleCount} 点（0 或 4095）")
                         if (snapshot.adcFlaggedSampleSlots > 0) Text("包级削顶标记覆盖 ${snapshot.adcFlaggedSampleSlots} 个采样位置，不等于实际触顶点数。", style = MaterialTheme.typography.bodySmall)
-                        if (snapshot.timingWarning) Text("采样时序存在告警；HRV 仅显示可用的参考值，暂停自动身体事件解释。")
+                        if (snapshot.timingWarning) Text("采样时序存在告警；HRV 以参考值展示，AI 解读使用相同的参考标记。")
                     } }
                 } else when (page) {
                     "Today" -> {
@@ -137,25 +136,9 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
                         item { Text(if (ecgDemo) "演示数值不进入采集记录；可在 Settings 关闭演示。" else snapshot.lastError ?: if (snapshot.connection == ConnectionState.DISCONNECTED) "设备配置和采集控制位于 Settings。" else "数据来自颈环的实时 ECG 与 IMU。", style = MaterialTheme.typography.bodySmall) }
                     }
                     "AI Insight" -> {
-                        item { Text("理解每一段身体变化", style = MaterialTheme.typography.headlineSmall) }
-                        item { Text(if (insightDemo) "演示模式 · 以下为手工预设场景，未调用 AI API，不代表你的身体状态。" else "结合信号质量、心率、HRV 和活动状态，解释已记录的身体事件。") }
-                        if (!insightDemo) item { InfoCard("本次记录的解释", if (aiConfig.enabled)
-                            "${aiConfig.provider.label} · ${aiConfig.model}" else "在 Settings 配置并启用 AI API") {
-                            Button(onClick = engine::generateNow,
-                                enabled = !aiRequest.busy && aiConfig.enabled && aiConfig.hasKey && !ecgDemo) { Text("生成当前解释") }
-                            if (ecgDemo) Text("请先关闭 ECG / 心率演示，再解释真实数据。")
-                            Text("HRV 暂缺时可解释当前可用数据；信号不合格时仅解释质量原因。", style = MaterialTheme.typography.bodySmall)
-                            AiRequestStatus(aiRequest) { engine.cancelActive() }
-                        } }
-                        if (insights.isEmpty()) item { InfoCard("等待第一段有效记录", "保持佩戴并等待稳定数据后，解释卡片会出现在这里。") {
-                            Text("未配置 AI 服务时使用本地规则，并标明来源。")
-                        } }
-                        items(insights, key = { it.id }) { card -> InfoCard(card.title, card.explanation) {
-                            card.evidence?.let { Text(it, style = MaterialTheme.typography.titleSmall) }
-                            card.suggestion?.let { Text("可以试试：$it") }
-                            card.caveat?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                            Text(if (insightDemo) card.source else "${card.source} · ${DateTimeFormatter.ofPattern("MM-dd HH:mm").withZone(ZoneId.systemDefault()).format(card.createdAt)}", style = MaterialTheme.typography.labelMedium)
-                        } }
+                        insightFeed(insights, insightDemo, ecgDemo, aiConfig, aiRequest, showInsightHistory,
+                            onGenerate = engine::generateNow, onCancel = { engine.cancelActive() },
+                            onSettings = { page = "Settings" }, onHistory = { showInsightHistory = !showInsightHistory })
                     }
                     else -> {
                         item { InfoCard("演示模式", "两个开关独立生效，无需连接设备或配置 API。") {

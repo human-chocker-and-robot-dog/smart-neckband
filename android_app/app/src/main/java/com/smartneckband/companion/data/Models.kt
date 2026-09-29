@@ -55,7 +55,7 @@ data class CollarSnapshot(
     val adcFlaggedSampleSlots: Int = 0,
 )
 
-// Display may use a labelled reference; analysis/AI continue reading qualified heart.hrvRmssdMs.
+// Keep qualified/reference metrics separate; display and Insight may use an explicitly labelled reference.
 val CollarSnapshot.displayHrvRmssdMs: Double? get() = heart.hrvRmssdMs ?: hrvReferenceRmssdMs
 val CollarSnapshot.isHrvReference: Boolean get() = heart.hrvRmssdMs == null && hrvReferenceRmssdMs != null
 
@@ -78,4 +78,6 @@ data class InsightCard(
     val evidence: String? = null,
     val caveat: String? = null,
     val suggestion: String? = null,
+    val kind: String = "rhythm",
+    val schemaVersion: Int = 1,
 )
