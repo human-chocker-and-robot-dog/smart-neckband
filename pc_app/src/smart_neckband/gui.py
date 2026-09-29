@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime
+from dataclasses import asdict
 import logging
 from pathlib import Path
 import sys
@@ -9,6 +10,7 @@ from threading import Event, Lock, Thread
 import time
 
 from .analysis import EcgAnalysisResult, analyze_recent_ecg, get_ecg_analysis_info
+from .diagnostics import DiagnosticCapture
 from .attitude import ComplementaryAttitudeFilter, Orientation
 from .ble_io import BleDeviceInfo, BlePacketReader, list_ble_devices
 from .buffers import ImuSample
@@ -178,6 +180,7 @@ class MainWindow:
         self.QtWidgets = QtWidgets
         self.pg = pg
         self.stores = PcDataStores.create()
+        self.diagnostics = DiagnosticCapture()
         self.reader: SerialPacketReader | BlePacketReader | None = None
         self.session_recorder: ExperimentSessionRecorder | None = None
         self.recording_state = RecordingState.IDLE
@@ -228,11 +231,14 @@ class MainWindow:
         self.refresh_button = QtWidgets.QPushButton("刷新设备")
         self.connect_button = QtWidgets.QPushButton("连接设备")
         self.disconnect_button = QtWidgets.QPushButton("断开连接")
+        self.capture_diagnostics_button = QtWidgets.QPushButton("捕获诊断（最近 60 秒）")
+        self.capture_diagnostics_button.clicked.connect(self.capture_diagnostics)
         toolbar.addWidget(self.transport_combo)
         toolbar.addWidget(self.port_combo, 2)
         toolbar.addWidget(self.refresh_button)
         toolbar.addWidget(self.connect_button)
         toolbar.addWidget(self.disconnect_button)
+        toolbar.addWidget(self.capture_diagnostics_button)
         layout.addLayout(toolbar)
 
         connection_group = QtWidgets.QGroupBox("连接状态")
@@ -726,6 +732,7 @@ class MainWindow:
             self._append_debug_log("连接已取消：没有选择有效设备")
             return
         self.disconnect_serial()
+        self.diagnostics.begin_connection()
         raw_path = Path("data") / f"smartcollar_v0_{time.strftime('%Y%m%d_%H%M%S')}.bin"
         if self.transport_combo.currentData() == "ble":
             self._append_debug_log(f"点击连接：BLE {endpoint}")
@@ -961,6 +968,7 @@ class MainWindow:
         return samples[-1] if samples else None
 
     def _record_raw_chunk(self, chunk: bytes) -> None:
+        self.diagnostics.transport(chunk)
         recorder = self.session_recorder
         if recorder is None:
             return
@@ -974,6 +982,24 @@ class MainWindow:
                 while self.record_prebuffer_bytes > self.record_prebuffer_limit_bytes and self.record_prebuffer:
                     removed = self.record_prebuffer.popleft()
                     self.record_prebuffer_bytes -= len(removed)
+
+    def capture_diagnostics(self) -> None:
+        # Snapshot UI inputs independently: the worker analysis may trail the raw plot.
+        # Its analyzed-through ordinal is retained to make that lag explicit.
+        try:
+            samples = self.stores.ecg.snapshot()[-5000:]
+            analysis = self.ecg_worker.latest()
+            self.diagnostics.add("pc_snapshot", {
+                "samples": [asdict(sample) for sample in samples],
+                "analysis": asdict(analysis) if analysis is not None else None,
+                "parser_stats": asdict(self.reader.stats) if self.reader is not None else None,
+            })
+            path = Path("data") / "diagnostics" / f"pc-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.jsonl"
+            self.diagnostics.export(path, asdict(get_ecg_analysis_info()))
+            self._append_debug_log(f"诊断捕获已保存：{path.resolve()}")
+            self.QtWidgets.QMessageBox.information(self.window, "诊断捕获已保存", str(path.resolve()))
+        except Exception as exc:
+            self.QtWidgets.QMessageBox.warning(self.window, "诊断捕获失败", str(exc))
 
     def _selected_placement(self) -> object:
         return self.placement_combo.currentData()

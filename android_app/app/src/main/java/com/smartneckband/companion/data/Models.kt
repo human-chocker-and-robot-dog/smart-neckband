@@ -63,4 +63,6 @@ data class InsightCard(
     val source: String,
     val eventId: String? = null,
     val createdAt: Instant = Instant.now(),
+    val evidence: String? = null,
+    val caveat: String? = null,
 )

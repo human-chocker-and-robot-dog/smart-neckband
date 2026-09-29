@@ -43,7 +43,8 @@ Timing-warning windows can show cleaned signal/qualified HR but must not establi
 - [x] Repaired buffer ownership, flag handling, full traces and diagnostics; 16 Python regressions pass.
 - [x] Built 0.1.1 (version code 2); 7 JVM tests and Android lint pass.
 - [x] Installed on the local Android 16 x86_64 emulator; all 3 instrumentation tests pass (58.676 seconds), including packetized native analysis and the actual detail UI.
-- [ ] Install 0.1.1 on the Xiaomi and verify the live BLE trace after the phone is reconnected.
+- [x] Install 0.1.1 on the Xiaomi and verify version code 2; subsequently upgraded to 0.1.2 for demo/capture work.
+- [ ] User verifies the live BLE trace.
 - [x] Recorded remaining hardware acceptance and reviewed the intended source/test/doc diff.
 
 ## Discoveries
@@ -60,4 +61,4 @@ Validation: 16 Python tests, 7 JVM tests, Android build/lint and 3 Android 16 em
 
 The replay was rerun after switching its screenshot capture to the rendered Compose root (1 test passed in 20.219 seconds). Visual review of `.local-tools/android-waveform-replay.png` confirms a full raw trace with a fixed 0–4095 ADC scale, device-time axis and a separately scaled cleaned trace. These are synthetic test data, not a live body recording.
 
-The Xiaomi is currently absent from ADB. The new APK is ready at `android_app/app/build/outputs/apk/debug/app-debug.apk`, but installation on that phone and live BLE/body-data validation have not been performed for 0.1.1. The previous phone synthetic validation only covered 0.1.0.
+Follow-up: 0.1.1 was successfully installed on the reconnected Xiaomi and its package version was verified. It was later upgraded to 0.1.2, documented in `2026-09-29-demo-and-diagnostics.md`. Live BLE/body-data validation remains unverified. The user now owns manual phone acceptance and requested that automated testing stop.

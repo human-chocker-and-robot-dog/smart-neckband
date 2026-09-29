@@ -18,6 +18,7 @@ class BleCollarTransport(
     private val context: Context,
     private val onFrame: (V0Frame, ParserStats) -> Unit,
     private val onDisconnected: (String) -> Unit,
+    private val onBytes: (ByteArray) -> Unit = {},
 ) : CollarTransport {
     private var gatt: BluetoothGatt? = null
     private var rx: BluetoothGattCharacteristic? = null
@@ -98,6 +99,7 @@ class BleCollarTransport(
     }
 
     @Synchronized private fun receive(bytes: ByteArray) {
+        onBytes(bytes)
         parser.feed(bytes).forEach { frame ->
             if (frame is V0Frame.ControlAck && ack?.first == frame.requestId) ack?.second?.complete(frame)
             onFrame(frame, parser.stats)

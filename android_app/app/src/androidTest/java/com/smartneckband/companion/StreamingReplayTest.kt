@@ -31,6 +31,8 @@ class StreamingReplayTest {
         val fixture = JSONObject(instrumentation.context.assets.open("synthetic-ecg.json").bufferedReader().use { it.readText() })
         val samples = fixture.getJSONArray("samples")
         val parser = V0StreamParser()
+        val capture = DiagnosticCapture()
+        capture.beginConnection()
         for (packet in 0 until 250) {
             val bytes = ByteBuffer.allocate(68).order(ByteOrder.LITTLE_ENDIAN)
                 .putShort(0x4E53).put(1).put(1).putShort(48)
@@ -40,8 +42,11 @@ class StreamingReplayTest {
             bytes.putShort(crc16CcittFalse(bytes.array(), 66).toShort())
             // Mandatory ATT payload, including arbitrary protocol-frame boundaries.
             bytes.array().asList().chunked(20).forEach { chunk ->
+                capture.transport(chunk.toByteArray())
                 parser.feed(chunk.toByteArray()).forEach { decoded ->
                     val frame = decoded as V0Frame.Ecg
+                    capture.frame(frame, parser.stats, true)
+                    capture.add("processed", batchJson(frame))
                     engine.callAttr("append", JSONObject().put("kind", "ecg")
                         .put("first", frame.firstSampleIndex).put("timestamp", frame.timestampUs)
                         .put("flags", frame.flags).put("samples", JSONArray(frame.samples.toList())).toString())
@@ -49,6 +54,12 @@ class StreamingReplayTest {
             }
         }
         val result = JSONObject(engine.callAttr("analyze").toString())
+        capture.add("analysis", result)
+        val lines = capture.snapshotLines(JSONObject().put("test", "StreamingReplayTest"))
+        File(app.cacheDir, "synthetic-diagnostic.jsonl").bufferedWriter().use { writer ->
+            writer.appendLine(JSONObject(lines.first()).put("source", "synthetic_test").toString())
+            lines.drop(1).forEach { writer.appendLine(it) }
+        }
         val raw = result.getJSONObject("raw").getJSONArray("values")
         assertEquals(samples.toString(), raw.toString())
         assertEquals(5000, result.getJSONObject("cleaned").getJSONArray("values").length())

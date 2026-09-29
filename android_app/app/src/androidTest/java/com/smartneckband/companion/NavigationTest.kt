@@ -13,7 +13,7 @@ class NavigationTest {
         compose.onNodeWithText("停止采集").assertDoesNotExist()
         compose.onNodeWithText("扫描设备").assertDoesNotExist()
         compose.onNodeWithText("Settings").performClick()
-        compose.onNodeWithText("扫描设备").assertIsDisplayed()
+        compose.onNodeWithText("扫描设备").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("停止采集").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("AI Insight").performClick()
         compose.onNodeWithText("等待第一段有效记录").assertIsDisplayed()

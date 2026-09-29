@@ -92,9 +92,23 @@ python -m pytest android_app/tests
 Golden decoder tests read the shared JSON vectors from `docs/protocol`, including
 every byte split, noise/CRC recovery, MIC1 isolation and acquisition commands.
 
-## AI gateway contract
+## Demonstrations and local diagnostics
 
-Settings accepts a HTTPS endpoint. The server, not the APK, holds provider keys.
+Settings has independent persistent AI Insight and ECG/heart-rate demo switches.
+All demo data is synthetic and labelled; it never replaces acquisition buffers
+or enters the API/event pipeline. ECG demo prevents auto-connect on a fresh launch,
+while already-running real acquisition remains explicitly controllable in Settings.
+
+PC and phone can save the last 60 seconds of bounded transport/analysis evidence.
+See [demo and capture instructions](../docs/android-demo-diagnostics.md) for export,
+ADB collection, same-input offline replay and cross-host comparison semantics.
+
+## Legacy AI gateway contract (direct provider integration deferred)
+
+The previous gateway adapter remains compatible with stored HTTPS settings; the
+gateway editor is not shown in this demo build. Neither demo makes new API requests.
+Phone-direct provider integration will be a separate change. For the legacy
+gateway, the server, not the APK, holds provider keys.
 The app POSTs JSON with `locale: "zh-CN"` and `event` containing `schema_version`,
 `id`, `type`, `observed_at`, `source`, `heart_rate_bpm`, nullable `hrv_rmssd_ms`,
 `signal_quality`, `motion_score`, `hrv_window_s`, `rr_count`, `lead_off`,

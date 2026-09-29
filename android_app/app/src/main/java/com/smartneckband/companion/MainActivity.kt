@@ -15,11 +15,13 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import com.smartneckband.companion.data.*
 import com.smartneckband.companion.service.CollarAcquisitionService
 import com.smartneckband.companion.ui.CompanionUi
 import kotlinx.coroutines.*
+import java.io.File
 
 data class NearbyCollar(val address: String, val name: String, val rssi: Int)
 
@@ -32,6 +34,8 @@ class MainActivity : ComponentActivity() {
     private var scanner: BluetoothLeScanner? = null
     private var scanJob: Job? = null
     private var permissionAction: (() -> Unit)? = null
+    private var captureBusy = false
+    private var captureNotice by mutableStateOf<String?>(null)
     private val requestPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         if (hasBlePermissions()) permissionAction?.invoke() else notice = "需要附近设备权限才能连接颈环，可在系统应用设置中允许。"
         permissionAction = null
@@ -49,9 +53,9 @@ class MainActivity : ComponentActivity() {
             CompanionUi(app, deviceName, nearby, scanning, notice,
                 onScan = { withPermissions { scan() } },
                 onSelect = { select(it) }, onStart = { withPermissions { start() } },
-                onStop = { stop() })
+                onStop = { stop() }, onCapture = { capture() }, onShareCapture = { shareCapture() }, captureNotice = captureNotice)
         }
-        if (!app.preferences.getString("device_address", null).isNullOrBlank()) {
+        if (!app.ecgDemo.value && !app.preferences.getString("device_address", null).isNullOrBlank()) {
             withPermissions {
                 if (app.launchPolicy.autoStart(true, hasBlePermissions())) start()
             }
@@ -120,6 +124,30 @@ class MainActivity : ComponentActivity() {
     private fun stop() {
         app.launchPolicy.stop()
         startService(Intent(this, CollarAcquisitionService::class.java).setAction(CollarAcquisitionService.STOP))
+    }
+    private fun capture() {
+        if (captureBusy) return
+        captureBusy = true
+        captureNotice = "正在保存…"
+        lifecycleScope.launch {
+            try {
+                val file = withContext(Dispatchers.IO) {
+                    app.diagnostics.export(File(filesDir, "diagnostics"), app.ecgDemo.value, app.insightDemo.value)
+                }
+                captureNotice = "已保存最近 60 秒诊断（${file.length() / 1024} KB）。可分享或通过电脑读取。"
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                captureNotice = "保存失败：${error.message}"
+            } finally { captureBusy = false }
+        }
+    }
+    private fun shareCapture() {
+        val file = File(filesDir, "diagnostics/latest.jsonl")
+        if (!file.exists()) { captureNotice = "请先捕获诊断。"; return }
+        val uri = FileProvider.getUriForFile(this, "$packageName.diagnostics", file)
+        val intent = Intent(Intent.ACTION_SEND).setType("application/x-ndjson")
+            .putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        startActivity(Intent.createChooser(intent, "分享诊断捕获"))
     }
     override fun onStop() { stopScan(); super.onStop() }
     override fun onDestroy() {

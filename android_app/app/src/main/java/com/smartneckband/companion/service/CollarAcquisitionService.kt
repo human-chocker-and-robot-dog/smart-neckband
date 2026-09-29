@@ -18,7 +18,6 @@ import com.smartneckband.companion.data.*
 import com.smartneckband.companion.protocol.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
-import org.json.JSONArray
 import org.json.JSONObject
 
 class CollarAcquisitionService : Service() {
@@ -51,6 +50,7 @@ class CollarAcquisitionService : Service() {
             NotificationChannel(CHANNEL, "颈环实时采集", NotificationManager.IMPORTANCE_LOW))
         insights = InsightEngine(app.preferences, repository)
         transport = BleCollarTransport(this, { frame, stats ->
+            app.diagnostics.frame(frame, stats, accepting)
             synchronized(frames) {
                 lastSequence?.let { previous ->
                     val gap = (frame.sequence - previous - 1) and 0xFFFF_FFFFL
@@ -62,7 +62,10 @@ class CollarAcquisitionService : Service() {
             if (accepting && (frame is V0Frame.Ecg || frame is V0Frame.Imu)) {
                 if (frames.trySend(ReceivedFrame(frame, SystemClock.elapsedRealtime())).isFailure) disconnectSignal.complete("手机处理队列已满，重新建立连续数据窗口")
             }
-        }, { reason -> disconnectSignal.complete(reason) })
+        }, { reason ->
+            app.diagnostics.add("state", JSONObject().put("state", "disconnected").put("reason", reason))
+            disconnectSignal.complete(reason)
+        }, app.diagnostics::transport)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -94,6 +97,7 @@ class CollarAcquisitionService : Service() {
                 while (frames.tryReceive().isSuccess) { /* discard previous session */ }
                 disconnectSignal = CompletableDeferred()
                 lastSequence = null
+                app.diagnostics.beginConnection()
                 repository.state(if (failures == 0) ConnectionState.CONNECTING else ConnectionState.RECONNECTING, AcquisitionState.STARTING)
                 transport.connect(address)
                 transport.startAcquisition()
@@ -121,6 +125,7 @@ class CollarAcquisitionService : Service() {
                                 val age = SystemClock.elapsedRealtime() - item.receivedAtMs
                                 check(age < 2000) { "分析处理落后于实时数据，重新建立窗口" }
                                 engine.callAttr("append", batchJson(frame).put("received_age_ms", age).toString())
+                                app.diagnostics.add("processed", batchJson(frame).put("received_age_ms", age))
                             }
                         }
                         pending.lastOrNull { it.frame is V0Frame.Ecg && it.frame.flags and 0x80 == 0 }
@@ -132,6 +137,7 @@ class CollarAcquisitionService : Service() {
                     if (now - analyzedAt >= 1000) {
                         val result = withContext(analysisDispatcher) { engine.callAttr("analyze").toString() }
                         repository.analysis(JSONObject(result))
+                        app.diagnostics.add("analysis", JSONObject(result))
                         analyzedAt = SystemClock.elapsedRealtime()
                         if (insightJob?.isActive != true) {
                             val snapshot = repository.snapshot.value
@@ -146,6 +152,7 @@ class CollarAcquisitionService : Service() {
                 transport.disconnect()
                 failures++
                 repository.state(ConnectionState.ERROR, AcquisitionState.ERROR, error.message ?: "采集失败")
+                app.diagnostics.add("state", JSONObject().put("state", "error").put("reason", error.message))
                 updateNotification()
                 if (failures >= 5 || error.message?.contains("更新支持控制协议") == true) {
                     stopForeground(STOP_FOREGROUND_REMOVE)
@@ -158,6 +165,7 @@ class CollarAcquisitionService : Service() {
     }
 
     private suspend fun stopSession() {
+        app.diagnostics.add("state", JSONObject().put("state", "stopping"))
         stopping = true
         accepting = false
         session?.cancelAndJoin()
@@ -174,16 +182,6 @@ class CollarAcquisitionService : Service() {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
-    }
-
-    private fun batchJson(frame: V0Frame): JSONObject = when (frame) {
-        is V0Frame.Ecg -> JSONObject().put("kind", "ecg").put("first", frame.firstSampleIndex)
-            .put("timestamp", frame.timestampUs).put("flags", frame.flags)
-            .put("samples", JSONArray(frame.samples.toList()))
-        is V0Frame.Imu -> JSONObject().put("kind", "imu").put("first", frame.firstSampleIndex)
-            .put("timestamp", frame.timestampUs).put("flags", frame.flags)
-            .put("samples", JSONArray(frame.samples.map { listOf(it.ax.toInt(), it.ay.toInt(), it.az.toInt(), it.gx.toInt(), it.gy.toInt(), it.gz.toInt()) }))
-        else -> error("Not a sample frame")
     }
 
     private fun notification(): Notification {

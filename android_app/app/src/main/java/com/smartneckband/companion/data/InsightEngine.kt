@@ -27,6 +27,7 @@ class InsightEngine(private val preferences: SharedPreferences, private val repo
     }
 
     suspend fun observe(snapshot: CollarSnapshot) {
+        if (preferences.getBoolean("demo_insight", false) || preferences.getBoolean("demo_ecg", false)) return
         val now = System.currentTimeMillis()
         if (snapshot.acquisition != AcquisitionState.RUNNING || snapshot.dataAgeMs == null || snapshot.dataAgeMs > 3000) return
         val quality = snapshot.heart.signalQuality ?: return

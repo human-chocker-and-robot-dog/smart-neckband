@@ -17,13 +17,17 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.smartneckband.companion.NearbyCollar
 import com.smartneckband.companion.BuildConfig
 import com.smartneckband.companion.SmartCollarApplication
 import com.smartneckband.companion.data.*
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.delay
 
 private val palette = lightColorScheme(primary = Color(0xFF28675C), secondary = Color(0xFF666D51),
     background = Color(0xFFF8FAF6), surface = Color(0xFFF8FAF6), surfaceContainer = Color(0xFFEDF2EB))
@@ -31,9 +35,21 @@ private val palette = lightColorScheme(primary = Color(0xFF28675C), secondary = 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<NearbyCollar>, scanning: Boolean,
-    notice: String?, onScan: () -> Unit, onSelect: (NearbyCollar) -> Unit, onStart: () -> Unit, onStop: () -> Unit) {
-    val snapshot by app.repository.snapshot.collectAsStateWithLifecycle()
-    val insights by app.repository.insights.collectAsStateWithLifecycle()
+    notice: String?, onScan: () -> Unit, onSelect: (NearbyCollar) -> Unit, onStart: () -> Unit, onStop: () -> Unit,
+    onCapture: () -> Unit = {}, onShareCapture: () -> Unit = {}, captureNotice: String? = null) {
+    val liveSnapshot by app.repository.snapshot.collectAsStateWithLifecycle()
+    val liveInsights by app.repository.insights.collectAsStateWithLifecycle()
+    val ecgDemo by app.ecgDemo.collectAsStateWithLifecycle()
+    val insightDemo by app.insightDemo.collectAsStateWithLifecycle()
+    var demoSeconds by remember { mutableDoubleStateOf(0.0) }
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    LaunchedEffect(ecgDemo, lifecycleOwner) {
+        if (ecgDemo) lifecycleOwner.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            while (true) { delay(100); demoSeconds += .1 }
+        }
+    }
+    val snapshot = if (ecgDemo) remember(demoSeconds) { DemoData.snapshot(demoSeconds) } else liveSnapshot
+    val insights = if (insightDemo) DemoData.cards else liveInsights
     var page by rememberSaveable { mutableStateOf("Today") }
     var detail by rememberSaveable { mutableStateOf(false) }
     MaterialTheme(colorScheme = palette) {
@@ -49,6 +65,9 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
             }
         }) { padding ->
             LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                if (ecgDemo && (page == "Today" || detail)) item {
+                    Text("演示模式 · 合成 ECG / 心率，非实际测量", color = MaterialTheme.colorScheme.primary)
+                }
                 if (detail) {
                     item { InfoCard("ECG · 原始 ADC", "最近 ${snapshot.ecgSampleCount} 个采样 · 原始计数") { Waveform(snapshot.rawEcg, raw = true) } }
                     item { InfoCard("ECG · 滤波波形", snapshot.analysisMessage) { Waveform(snapshot.cleanEcg) } }
@@ -60,13 +79,13 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
                         Text("信号质量：${snapshot.heart.signalQuality?.let { "%.0f%%".format(it * 100) } ?: "--"}")
                         Text("CRC 错误 ${snapshot.parserCrcErrors} · 丢包 ${snapshot.packetLoss}")
                         Text("实测采样率 ${metric(snapshot.effectiveSampleRateHz, 0)} Hz · 标称 500 Hz")
-                        Text("分析窗口 ${snapshot.analysisSampleCount}/5000 点")
+                        Text(if (ecgDemo) "演示窗口 ${snapshot.ecgSampleCount} 点" else "分析窗口 ${snapshot.analysisSampleCount}/5000 点")
                         if (snapshot.timingWarning) Text("采样时序存在告警；保留波形，暂停 HRV 与事件解释。")
                     } }
                 } else when (page) {
                     "Today" -> {
                         item { Text("今天，感受身体的节奏", style = MaterialTheme.typography.headlineSmall) }
-                        item { Text(stateLabel(snapshot), color = MaterialTheme.colorScheme.primary) }
+                        item { Text(if (ecgDemo) "演示播放中 · 72 BPM" else stateLabel(snapshot), color = MaterialTheme.colorScheme.primary) }
                         item { Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             MetricCard("心率", metric(snapshot.heart.bpm, 0), "BPM", Modifier.weight(1f)) { detail = true }
                             MetricCard("HRV", metric(snapshot.heart.hrvRmssdMs), "RMSSD · ms", Modifier.weight(1f)) { detail = true }
@@ -84,57 +103,64 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
                             Text("活动指数 ${metric(snapshot.imu.motionScore)} · 静止占比 ${metric(snapshot.imu.stillRatioPercent, 0)}%")
                             Text(if (snapshot.imu.online) "IMU 在线" else "等待 IMU 数据", style = MaterialTheme.typography.bodySmall)
                         } }
-                        item { Text(snapshot.lastError ?: if (snapshot.connection == ConnectionState.DISCONNECTED) "设备配置和采集控制位于 Settings。" else "数据来自颈环的实时 ECG 与 IMU。", style = MaterialTheme.typography.bodySmall) }
+                        item { Text(if (ecgDemo) "演示数值不进入采集记录；可在 Settings 关闭演示。" else snapshot.lastError ?: if (snapshot.connection == ConnectionState.DISCONNECTED) "设备配置和采集控制位于 Settings。" else "数据来自颈环的实时 ECG 与 IMU。", style = MaterialTheme.typography.bodySmall) }
                     }
                     "AI Insight" -> {
                         item { Text("理解每一段身体变化", style = MaterialTheme.typography.headlineSmall) }
-                        item { Text("结合信号质量、心率、HRV 和活动状态，解释已记录的身体事件。") }
+                        item { Text(if (insightDemo) "演示模式 · 以下为手工预设场景，未调用 AI API，不代表你的身体状态。" else "结合信号质量、心率、HRV 和活动状态，解释已记录的身体事件。") }
                         if (insights.isEmpty()) item { InfoCard("等待第一段有效记录", "保持佩戴并等待稳定数据后，解释卡片会出现在这里。") {
                             Text("未配置 AI 服务时使用本地规则，并标明来源。")
                         } }
                         items(insights, key = { it.id }) { card -> InfoCard(card.title, card.explanation) {
-                            Text("${card.source} · ${DateTimeFormatter.ofPattern("MM-dd HH:mm").withZone(ZoneId.systemDefault()).format(card.createdAt)}", style = MaterialTheme.typography.labelMedium)
+                            card.evidence?.let { Text(it, style = MaterialTheme.typography.titleSmall) }
+                            card.caveat?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                            Text(if (insightDemo) card.source else "${card.source} · ${DateTimeFormatter.ofPattern("MM-dd HH:mm").withZone(ZoneId.systemDefault()).format(card.createdAt)}", style = MaterialTheme.typography.labelMedium)
                         } }
                     }
                     else -> {
+                        item { InfoCard("演示模式", "两个开关独立生效，无需连接设备或配置 API。") {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("AI Insight 演示")
+                                Switch(insightDemo, app::setInsightDemo, Modifier.semantics { contentDescription = "AI Insight 演示开关" })
+                            }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("ECG / 心率演示")
+                                Switch(ecgDemo, app::setEcgDemo, Modifier.semantics { contentDescription = "ECG 心率演示开关" })
+                            }
+                            Text("开启后到 Today 或 AI Insight 查看。演示不写入真实记录，也不请求 AI API。", style = MaterialTheme.typography.bodySmall)
+                            if (ecgDemo) Text("已在运行的真实采集会继续，可在下方停止。下次启动 App 保持演示，不自动连接设备。", style = MaterialTheme.typography.bodySmall)
+                        } }
                         item { InfoCard("颈环设备", deviceName) {
-                            Text(stateLabel(snapshot))
+                            Text(stateLabel(liveSnapshot))
                             notice?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                            snapshot.lastError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                            val active = snapshot.acquisition in listOf(AcquisitionState.STARTING, AcquisitionState.RUNNING, AcquisitionState.WAITING_FOR_DATA, AcquisitionState.STOPPING)
+                            liveSnapshot.lastError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                            val active = liveSnapshot.acquisition in listOf(AcquisitionState.STARTING, AcquisitionState.RUNNING, AcquisitionState.WAITING_FOR_DATA, AcquisitionState.STOPPING)
                             Button(onClick = onScan, enabled = !scanning && !active) { Text(if (scanning) "正在扫描…" else "扫描设备") }
                             nearby.forEach { device -> OutlinedButton(onClick = { onSelect(device) }, enabled = !active) { Text("${device.name} · ${device.rssi} dBm") } }
                         } }
-                        item { InfoCard("采集", "启动 App 后自动采集 · 默认开启") {
+                        item { InfoCard("真实采集", if (ecgDemo) "演示展示中 · 下方控制真实设备" else "启动 App 后自动采集 · 默认开启") {
                             Text("停止仅作用于本次运行。切换页面或从后台返回不会恢复采集；重新启动 App 后自动开始。")
-                            val active = snapshot.acquisition in listOf(AcquisitionState.STARTING, AcquisitionState.RUNNING, AcquisitionState.WAITING_FOR_DATA)
+                            val active = liveSnapshot.acquisition in listOf(AcquisitionState.STARTING, AcquisitionState.RUNNING, AcquisitionState.WAITING_FOR_DATA)
                             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 Button(onClick = onStop, enabled = active) { Text("停止采集") }
-                                OutlinedButton(onClick = onStart, enabled = !active && snapshot.acquisition != AcquisitionState.STOPPING) { Text("开始采集") }
+                                OutlinedButton(onClick = onStart, enabled = !active && liveSnapshot.acquisition != AcquisitionState.STOPPING) { Text("开始采集") }
                             }
                             Text("后台通知显示心率与 HRV；可直接从通知停止。", style = MaterialTheme.typography.bodySmall)
                         } }
-                        item { GatewaySettings(app) }
+                        item { InfoCard("波形诊断", "保存最近 60 秒真实接收字节、解码样本、分析结果与错误；演示波形不进入日志。") {
+                            Button(onClick = onCapture) { Text("捕获诊断") }
+                            OutlinedButton(onClick = onShareCapture) { Text("分享最近一次捕获") }
+                            captureNotice?.let { Text(it) }
+                            Text("仅保存在本机，包含传感器数据。未采集时日志可能为空；再次捕获会替换上次文件。", style = MaterialTheme.typography.bodySmall)
+                        } }
+                        item { InfoCard("AI API 接入", "下一阶段接入手机直连模型 API；当前可使用上方演示卡片。") {
+                            Text("预定使用结构化事件 JSON → 校验响应 JSON → 解释卡片；本次演示不需要密钥。")
+                        } }
                         item { Text("Smart Collar Companion · ${BuildConfig.VERSION_NAME}\nHRV 使用 RMSSD；本版不接入 Health Connect。", style = MaterialTheme.typography.bodySmall) }
                     }
                 }
             }
         }
-    }
-}
-
-@Composable private fun GatewaySettings(app: SmartCollarApplication) {
-    var endpoint by remember { mutableStateOf(app.preferences.getString("insight_endpoint", "").orEmpty()) }
-    var enabled by remember { mutableStateOf(app.preferences.getBoolean("cloud_insight", false)) }
-    var saved by remember { mutableStateOf(false) }
-    InfoCard("AI Insight 服务", "启用后，将结构化身体事件发送到你配置的服务；不上传原始 ECG。") {
-        OutlinedTextField(endpoint, { endpoint = it; saved = false }, label = { Text("HTTPS 网关地址") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("启用 AI 解释"); Switch(enabled, { enabled = it; saved = false }) }
-        Button(onClick = {
-            app.preferences.edit().putString("insight_endpoint", endpoint.trim()).putBoolean("cloud_insight", enabled).apply()
-            saved = true
-        }, enabled = !enabled || endpoint.startsWith("https://")) { Text(if (saved) "已保存" else "保存") }
-        Text("模型密钥由网关保管。未启用时保留本地解释卡片。", style = MaterialTheme.typography.bodySmall)
     }
 }
 
