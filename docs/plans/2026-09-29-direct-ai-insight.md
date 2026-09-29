@@ -50,8 +50,8 @@ Disabling AI returns to local rules. Prior APK can be reinstalled if needed.
 - [x] Inspect source and official provider protocol documentation.
 - [x] Implement and review.
 - [x] Compile without automated tests (assembleDebug succeeded, 17 seconds).
-- [ ] Install the final APK after the user's follow-up HRV change.
-- [ ] Document result and commit/push.
+- [x] Install the final APK after the user's follow-up HRV change (0.1.5/code 6).
+- [x] Document result; AI implementation committed and pushed as `e2f2f74`.
 
 ## Discoveries
 DeepSeek's current documentation specifies `deepseek-flash` / `deepseek-v4-pro`
@@ -62,4 +62,6 @@ Direct Chat Completions, encrypted settings, manual/optional automatic generatio
 safe failure feedback, validated evidence references and synthetic API check are
 implemented. Compilation passed; actual provider calls remain for the user after
 they enter a key on the phone. The user added a follow-up request to address ADC
-clipping markers blocking HRV; final installation will include that follow-up.
+clipping markers blocking HRV. The final 0.1.5/code 6 APK includes that follow-up,
+was installed successfully on the authorized Xiaomi (40c87980), and the installed
+version was confirmed read-only. The app was not automatically launched or tested.

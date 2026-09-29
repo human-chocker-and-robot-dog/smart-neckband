@@ -188,12 +188,14 @@ class CollarAcquisitionService : Service() {
         val snapshot = repository.snapshot.value
         val fresh = snapshot.heart.observedAt?.let { java.time.Duration.between(it, java.time.Instant.now()).toMillis() < 3000 } == true
         val hr = if (fresh) snapshot.heart.bpm?.let { "%.0f".format(it) } else null
-        val hrv = if (fresh) snapshot.heart.hrvRmssdMs?.let { "%.1f".format(it) } else null
+        val hrv = if (fresh) snapshot.displayHrvRmssdMs?.let { (if (snapshot.isHrvReference) "≈" else "") + "%.1f".format(it) } else null
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val stop = PendingIntent.getService(this, 1, Intent(this, javaClass).setAction(STOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         return NotificationCompat.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_collar)
-            .setContentTitle("心率 ${hr ?: "--"} BPM · HRV ${hrv ?: "--"} ms")
-            .setContentText(snapshot.lastError ?: (if (hrv == null) snapshot.hrvReasons.firstOrNull() else null) ?: snapshot.analysisMessage)
+            .setContentTitle("心率 ${hr ?: "--"} BPM · HRV${if (snapshot.isHrvReference && fresh) "参考" else ""} ${hrv ?: "--"} ms")
+            .setContentText(snapshot.lastError ?: if (snapshot.isHrvReference && fresh)
+                "短窗口参考 · ${snapshot.hrvReferenceRrCount} 个 RR · 尚未通过完整静息检查"
+                else (if (hrv == null) snapshot.hrvReasons.firstOrNull() else null) ?: snapshot.analysisMessage)
             .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .addAction(R.drawable.ic_collar, "停止采集", stop).build()

@@ -82,12 +82,21 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
                     item { InfoCard("ECG · 滤波波形", snapshot.analysisMessage) {
                         Waveform(snapshot.cleanEcg, windowSeconds = waveformSeconds, automatic = automaticScale)
                     } }
-                    item { InfoCard("HRV · RMSSD", "${hrvLabel(snapshot)} · 静息窗口 ${snapshot.hrvWindowSeconds}/60 秒 · 有效 RR ${snapshot.rrCount} 个") {
-                        Text("${metric(snapshot.heart.hrvRmssdMs)} ms", style = MaterialTheme.typography.headlineLarge)
+                    item { InfoCard("HRV · RMSSD", if (snapshot.isHrvReference)
+                        "参考窗口 ${metric(snapshot.hrvReferenceWindowSeconds)} 秒 · 有效 RR ${snapshot.hrvReferenceRrCount} 个"
+                        else "${hrvLabel(snapshot)} · 静息窗口 ${snapshot.hrvWindowSeconds}/60 秒 · 有效 RR ${snapshot.rrCount} 个") {
+                        Text("${hrvMetric(snapshot)} ms", style = MaterialTheme.typography.headlineLarge)
+                        if (snapshot.isHrvReference) {
+                            Text("短窗口参考值 · 由当前有效心搏间期计算，尚未通过完整静息检查。削顶、采样时序和活动可能影响数值。")
+                            Text("完整静息窗口 ${snapshot.hrvWindowSeconds}/60 秒 · 有效 RR ${snapshot.rrCount}/30 个", style = MaterialTheme.typography.bodySmall)
+                        }
                         snapshot.hrvReasons.forEach { reason -> Text("· $reason") }
                         if (snapshot.hrvStatus == "collecting") LinearProgressIndicator(
                             progress = { snapshot.hrvWindowSeconds / 60f }, modifier = Modifier.fillMaxWidth())
-                        if (snapshot.heart.hrvRmssdMs == null) Text("HRV 需要连续 60 秒合格静息数据和至少 30 个有效 RR。心率能够显示时，HRV 仍可能等待。", style = MaterialTheme.typography.bodySmall)
+                        if (snapshot.displayHrvRmssdMs == null) {
+                            snapshot.hrvReferenceReasons.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+                            Text("参考值需要至少 3 个相邻有效 RR 和足够信号质量；完整值需要 60 秒合格静息与至少 30 个 RR。", style = MaterialTheme.typography.bodySmall)
+                        }
                         Text("用于观察个人趋势；本版不将 HRV 换算为压力分数。")
                     } }
                     item { InfoCard("数据质量", "${snapshot.dataAgeMs?.let { "数据延迟 ${it} ms" } ?: "暂无实时数据"}") {
@@ -95,7 +104,9 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
                         Text("CRC 错误 ${snapshot.parserCrcErrors} · 丢包 ${snapshot.packetLoss}")
                         Text("实测采样率 ${metric(snapshot.effectiveSampleRateHz, 0)} Hz · 标称 500 Hz")
                         Text(if (ecgDemo) "演示窗口 ${snapshot.ecgSampleCount} 点" else "分析窗口 ${snapshot.analysisSampleCount}/5000 点")
-                        if (snapshot.timingWarning) Text("采样时序存在告警；保留波形，暂停 HRV 与自动身体事件解释，可手动解释数据质量。")
+                        Text("原始 ADC 实际触顶 ${snapshot.adcClippedSamples}/${snapshot.analysisSampleCount} 点（0 或 4095）")
+                        if (snapshot.adcFlaggedSampleSlots > 0) Text("包级削顶标记覆盖 ${snapshot.adcFlaggedSampleSlots} 个采样位置，不等于实际触顶点数。", style = MaterialTheme.typography.bodySmall)
+                        if (snapshot.timingWarning) Text("采样时序存在告警；HRV 仅显示可用的参考值，暂停自动身体事件解释。")
                     } }
                 } else when (page) {
                     "Today" -> {
@@ -103,7 +114,7 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
                         item { Text(if (ecgDemo) "演示播放中 · 72 BPM" else stateLabel(snapshot), color = MaterialTheme.colorScheme.primary) }
                         item { Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             MetricCard("心率", metric(snapshot.heart.bpm, 0), "BPM", Modifier.weight(1f)) { detail = true }
-                            MetricCard("HRV", metric(snapshot.heart.hrvRmssdMs), "RMSSD · ms", Modifier.weight(1f)) { detail = true }
+                            MetricCard(if (snapshot.isHrvReference) "HRV · 参考" else "HRV", hrvMetric(snapshot), "RMSSD · ms", Modifier.weight(1f)) { detail = true }
                         } }
                         if (snapshot.heart.hrvRmssdMs == null) item {
                             Text("HRV ${hrvLabel(snapshot)}：${snapshot.hrvReasons.joinToString("；")}", style = MaterialTheme.typography.bodyMedium)
@@ -210,7 +221,8 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
         }
     }
 }
-private fun hrvLabel(snapshot: CollarSnapshot) = when (snapshot.hrvStatus) {
+private fun hrvMetric(snapshot: CollarSnapshot) = (if (snapshot.isHrvReference) "≈ " else "") + metric(snapshot.displayHrvRmssdMs)
+private fun hrvLabel(snapshot: CollarSnapshot) = if (snapshot.isHrvReference) "参考值" else when (snapshot.hrvStatus) {
     "ready" -> "已就绪"
     "collecting" -> "积累中"
     "blocked" -> "暂停"

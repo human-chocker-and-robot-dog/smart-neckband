@@ -33,7 +33,7 @@ TIMING_FLAGS = (FLAG_SAMPLE_LATE | FLAG_SAMPLE_MISSED |
 FLAG_REASONS = (
     (FLAG_LO_MINUS, "电极接触异常（LO−）"),
     (FLAG_LO_PLUS, "电极接触异常（LO+）"),
-    (FLAG_ADC_CLIPPING, "原始 ADC 存在削顶标记"),
+    (FLAG_ADC_CLIPPING, "收到包级 ADC 削顶标记（不代表整包每个点都触顶）"),
     (FLAG_SAMPLE_LATE, "设备报告采样延迟"),
     (FLAG_SAMPLE_MISSED, "设备报告采样遗漏"),
     (FLAG_SAMPLE_QUEUE_OVERFLOW, "设备采样队列溢出"),
@@ -53,6 +53,42 @@ def trace(samples, values=None):
               or abs(samples[i].timestamp_us - samples[i - 1].timestamp_us - 2000) > 6000]
     return dict(values=list(values) if values is not None else [s.raw_adc for s in samples],
                 seconds=[(s.timestamp_us - first_us) / 1e6 for s in samples], breaks=breaks)
+
+
+def adc_at_rail(raw):
+    return raw <= 0 or raw >= 4095
+
+
+def reference_hrv(samples, peaks):
+    """Latest consecutive usable RR run; a short reference, not qualified quiet HRV.
+
+    Use the device timeline rather than assuming exactly 500 effective Hz. The
+    timestamp within a packet is still nominally interpolated by the protocol.
+    Never bridge a rejected interval or compare RR on opposite sides of one.
+    """
+    intervals = []
+    for before, after in zip(peaks, peaks[1:]):
+        if not 0 <= before < after < len(samples):
+            intervals.clear()
+            continue
+        if after > len(samples) - 250:
+            break
+        first, last = samples[before], samples[after]
+        rr_ms = (last.timestamp_us - first.timestamp_us) / 1000.0
+        nominal_ms = (after - before) * 2.0
+        if (last.sample_index - first.sample_index != after - before
+                or not 300 <= rr_ms <= 2000
+                or abs(rr_ms - nominal_ms) > nominal_ms * .25):
+            intervals.clear()
+            continue
+        if intervals and abs(rr_ms - intervals[-1][2]) > intervals[-1][2] * .25:
+            intervals.clear()
+        intervals.append((first.timestamp_us, last.timestamp_us, rr_ms))
+    if len(intervals) < 3:
+        return None
+    values = [item[2] for item in intervals]
+    rmssd = math.sqrt(statistics.fmean((b - a) ** 2 for a, b in zip(values, values[1:])))
+    return rmssd, len(intervals), (intervals[-1][1] - intervals[0][0]) / 1e6
 
 
 class Engine:
@@ -98,7 +134,9 @@ class Engine:
             if restarted:
                 # A reboot begins a new device timeline, not a noisy-data reset.
                 self.raw_ecg.clear()
-            if index_gap or time_gap or flags:
+            # Wire ADC_CLIPPING describes a packet. Only actual rail hits block
+            # the strict RR window; never expand one flag into 20 clipped points.
+            if index_gap or time_gap or flags & ~FLAG_ADC_CLIPPING or any(adc_at_rail(raw) for raw in batch["samples"]):
                 self._reset_rr()
             self.discontinuities += int(index_gap or time_gap)
             self.next_index = (index + len(batch["samples"])) & 0xFFFFFFFF
@@ -139,6 +177,8 @@ class Engine:
         window_flags = 0
         for sample in samples:
             window_flags |= sample.flags
+        clipped_count = sum(adc_at_rail(sample.raw_adc) for sample in samples)
+        flagged_slots = sum(bool(sample.flags & FLAG_ADC_CLIPPING) for sample in samples)
         span_us = raw_samples[-1].timestamp_us - raw_samples[0].timestamp_us if len(raw_samples) > 1 else 0
         output = dict(bpm=None, rmssd=None, quality=None, lead_off=self.lead_off,
             motion=motion.score, still=motion.still_ratio_percent, motion_level=motion.level,
@@ -152,6 +192,10 @@ class Engine:
             timing_warning=bool(window_flags & TIMING_FLAGS),
             message=f"ECG 分析窗口 {len(samples)}/5000 点", rr_count=0, hrv_window_s=0,
             hrv_status="waiting", hrv_reasons=[], window_flags=window_flags,
+            rmssd_reference=None, hrv_reference_rr_count=0, hrv_reference_window_s=0,
+            hrv_reference_reasons=[], adc_clipped_samples=clipped_count,
+            adc_flagged_sample_slots=flagged_slots,
+            analysis_clipping_rule="actual_adc_rails_0_4095",
             flag_counts={str(flag): sum(bool(sample.flags & flag) for sample in samples)
                          for flag, _ in FLAG_REASONS if window_flags & flag},
             discontinuities=self.discontinuities, analysis="NeuroKit2 / PC shared implementation")
@@ -161,7 +205,9 @@ class Engine:
         else:
             if len(samples) < 5000:
                 reasons.append(f"ECG 分析窗口尚未满：{len(samples)}/5000 点")
-            reasons.extend(text for flag, text in FLAG_REASONS if window_flags & flag)
+            reasons.extend(text for flag, text in FLAG_REASONS if flag != FLAG_ADC_CLIPPING and window_flags & flag)
+            if clipped_count:
+                reasons.append(f"原始 ADC 实际触顶 {clipped_count}/{len(samples)} 点（{clipped_count / len(samples):.1%}），完整静息 HRV 等待无削顶窗口")
             if not imu_fresh:
                 reasons.append("等待实时 IMU 数据，以确认静息状态")
             elif motion.score is None:
@@ -172,12 +218,16 @@ class Engine:
             self.ecg.clear()
             self._reset_rr()
             output.update(raw=trace(()), sample_count=0, analysis_sample_count=0,
-                          effective_rate_hz=None, message="等待新数据")
+                          effective_rate_hz=None, adc_clipped_samples=0, adc_flagged_sample_slots=0, message="等待新数据")
             return json.dumps(output, allow_nan=False)
         if len(self.ecg) < 5000:
             return json.dumps(output, allow_nan=False)
         try:
-            result = analyze_recent_ecg(samples)
+            # A separate analysis view corrects only packet-level clipping
+            # amplification. raw_ecg/ecg and their original flags stay intact.
+            analysis_samples = tuple(replace(sample, flags=(sample.flags & ~FLAG_ADC_CLIPPING) |
+                (FLAG_ADC_CLIPPING if adc_at_rail(sample.raw_adc) else 0)) for sample in samples)
+            result = analyze_recent_ecg(analysis_samples)
         except Exception as error:
             self._reset_rr()
             output["message"] = f"分析不可用：{type(error).__name__}"
@@ -218,14 +268,22 @@ class Engine:
             output["message"] = "信号质量不足，暂不显示心率与 HRV"
             return json.dumps(output, allow_nan=False)
         output["bpm"] = result.heart_rate_bpm
-        if window_flags:
+        reference = reference_hrv(samples, result.r_peak_indices)
+        if reference is not None:
+            value, count, window_s = reference
+            output.update(rmssd_reference=value, hrv_reference_rr_count=count, hrv_reference_window_s=window_s,
+                          hrv_reference_reasons=["短窗口参考值，尚未通过完整 60 秒静息检查"] + list(reasons))
+        else:
+            output["hrv_reference_reasons"] = ["等待至少 3 个相邻、稳定且有效的 RR 间期"]
+        if window_flags & ~FLAG_ADC_CLIPPING or clipped_count:
             self._reset_rr()
-            flag_text = "、".join(text for flag, text in FLAG_REASONS if window_flags & flag)
-            output["message"] = f"{flag_text or '采样告警'}；心率供参考，HRV 暂停"
+            flag_text = "、".join(reasons)
+            output["message"] = f"{flag_text or '采样告警'}；心率供参考，" + (
+                "HRV 为短窗口参考值" if reference is not None else "HRV 等待足够的有效 RR")
             return json.dumps(output, allow_nan=False)
         if motion.score is None or motion.score >= 10:
             self._reset_rr()
-            output["message"] = "心率已更新；HRV 等待稳定静息数据"
+            output["message"] = "心率已更新；可查看短窗口 HRV 参考，完整 HRV 等待静息"
             return json.dumps(output, allow_nan=False)
         newest = self.ecg[-1]
         if self.valid_since_us is None:

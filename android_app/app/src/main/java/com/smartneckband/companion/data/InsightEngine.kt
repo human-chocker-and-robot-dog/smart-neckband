@@ -26,13 +26,15 @@ class InsightEngine(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val client = ChatCompletionsClient()
-    private val mutable = MutableStateFlow(AiRequestState())
+    private val mutable = MutableStateFlow(if (preferences.getBoolean("ai_automatic_paused", false))
+        AiRequestState(message = "上次 AI 调用失败，自动生成已暂停；可手动重试或重新保存配置。", isError = true)
+        else AiRequestState())
     val state = mutable.asStateFlow()
     private var active: Job? = null
     private var lastEventMs: Long? = null
     private var lastType: String? = null
     private var lastRequestMs: Long? = null
-    private var automaticPaused = false
+    private var automaticPaused = preferences.getBoolean("ai_automatic_paused", false)
     private var configuring = false
 
     init {
@@ -52,7 +54,7 @@ class InsightEngine(
         cancelActive("正在保存配置…")
         try {
             withContext(Dispatchers.IO) { settings.save(config, newKey) }
-            automaticPaused = false
+            pauseAutomatic(false)
             lastEventMs = null
             mutable.value = AiRequestState(message = if (settings.state.value.enabled)
                 "配置已保存，可前往 AI Insight 生成解释。" else "配置已保存，真实数据的 AI 请求尚未启用。")
@@ -68,7 +70,7 @@ class InsightEngine(
         cancelActive("正在删除密钥…")
         try {
             withContext(Dispatchers.IO) { settings.clearKey() }
-            automaticPaused = false
+            pauseAutomatic(false)
             mutable.value = AiRequestState(message = "密钥已删除，AI 请求已关闭。")
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
@@ -149,7 +151,7 @@ class InsightEngine(
                 caveat = if (example) "API 连接检查使用合成数据，不代表你的身体状态，不保存到真实记录。" else CAVEAT,
                 suggestion = response.suggestion)
             if (!example) addCard(card)
-            automaticPaused = false
+            pauseAutomatic(false)
             mutable.value = AiRequestState(message = if (example) "API 调用成功，示例卡片如下。" else
                 "已生成解释 · ${java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))}",
                 preview = if (example) card else null)
@@ -157,7 +159,7 @@ class InsightEngine(
             if (active === job) mutable.value = AiRequestState(message = "请求已取消")
             throw e
         } catch (e: Exception) {
-            automaticPaused = true
+            pauseAutomatic(true)
             if (!example) addCard(localCard(event, "本地规则 · AI 暂不可用"))
             mutable.value = AiRequestState(message = ((e as? AiFailure)?.message ?: "AI 请求失败，请检查配置后手动重试") +
                 if (example) "。未保存示例卡片。" else "。已保留本地说明；自动 AI 已暂停，可手动重试。", isError = true)
@@ -204,6 +206,7 @@ class InsightEngine(
             .put("metrics", JSONObject().put("heart_rate_bpm", bpm ?: JSONObject.NULL)
                 .put("hrv_rmssd_ms", hrv ?: JSONObject.NULL).put("motion_score", if (bpm != null) motion ?: JSONObject.NULL else JSONObject.NULL))
             .put("quality", JSONObject().put("signal_quality", quality ?: JSONObject.NULL)
+                .put("adc_clipped_samples", snapshot.adcClippedSamples).put("analysis_sample_count", snapshot.analysisSampleCount)
                 .put("lead_off", snapshot.heart.leadOff).put("timing_warning", snapshot.timingWarning)
                 .put("data_age_ms", snapshot.dataAgeMs).put("hrv_status", if (hrv != null) "ready" else "unavailable")
                 .put("hrv_window_s", snapshot.hrvWindowSeconds).put("rr_count", snapshot.rrCount))
@@ -233,6 +236,10 @@ class InsightEngine(
     }
 
     private fun demoEnabled() = preferences.getBoolean("demo_insight", false) || preferences.getBoolean("demo_ecg", false)
+    private fun pauseAutomatic(paused: Boolean) {
+        automaticPaused = paused
+        preferences.edit().putBoolean("ai_automatic_paused", paused).apply()
+    }
     private fun feedback(text: String) { mutable.value = AiRequestState(message = text, isError = true) }
     private fun number(value: Double) = String.format(Locale.ROOT, "%.1f", value)
     private fun JSONObject.optionalString(key: String) = if (isNull(key)) null else optString(key).takeIf { it.isNotBlank() }

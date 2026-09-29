@@ -47,7 +47,17 @@ data class CollarSnapshot(
     val rrCount: Int = 0,
     val hrvStatus: String = "waiting",
     val hrvReasons: List<String> = listOf("等待实时数据"),
+    val hrvReferenceRmssdMs: Double? = null,
+    val hrvReferenceRrCount: Int = 0,
+    val hrvReferenceWindowSeconds: Double = 0.0,
+    val hrvReferenceReasons: List<String> = emptyList(),
+    val adcClippedSamples: Int = 0,
+    val adcFlaggedSampleSlots: Int = 0,
 )
+
+// Display may use a labelled reference; analysis/AI continue reading qualified heart.hrvRmssdMs.
+val CollarSnapshot.displayHrvRmssdMs: Double? get() = heart.hrvRmssdMs ?: hrvReferenceRmssdMs
+val CollarSnapshot.isHrvReference: Boolean get() = heart.hrvRmssdMs == null && hrvReferenceRmssdMs != null
 
 data class BodyEvent(
     val id: String,

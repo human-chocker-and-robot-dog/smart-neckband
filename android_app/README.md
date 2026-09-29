@@ -15,6 +15,7 @@ Connect dependency, data import, permission or background sync is enabled.
 - **Background**: one `connectedDevice` foreground service owns encrypted BLE,
   decoding and analysis. Private notification updates at most once per 2 seconds
   with HR/RMSSD and Stop. Unknown, stale or poor-quality metrics show `--`.
+  A short-window RMSSD reference is explicitly labelled `≈` / `参考`.
 - **AI Insight**: bounded, timestamped explanations based on structured body
   events. Local fallback is labelled **本地规则**. Direct DeepSeek/OpenAI-compatible
   calls are off until configured in Settings. Last 30 explanations persist in private
@@ -49,15 +50,19 @@ These are counts, not a calibrated mV/paper-speed display. Diagnostics show wind
 sample counts, effective sample rate and timing warnings. Analysis runs away
 from the main thread, at most once per second, after draining queued packets.
 Sampling-warning and occasional clipping packets remain in the analysis window.
-The unchanged PC cleaner runs on that window; sustained clipping uses the PC's
-80% rule. Lead-off, actual missing packets and queue/transport overflow suppress
+The unchanged PC cleaner runs on that window. Starting with 0.1.5, a private
+analysis copy maps the ADC clipping bit to actual rail hits (0 or 4095) before
+applying the PC's 80% sustained-clipping rule. Packet flags are OR-aggregated and
+cannot describe the number of individually clipped samples. Original values and
+wire flags remain intact in both rings and diagnostic capture.
+Lead-off, actual missing packets and queue/transport overflow suppress
 HR/HRV while retaining the traces. Timing warnings permit quality-qualified HR
-with a warning but suppress HRV and automatic physiological Insight generation.
+with a warning but suppress qualified HRV and automatic physiological Insight generation.
 Manual quality-only explanations can describe unavailable metrics. Reboot, a gap over one
 second, historical data, reconnects and staleness reset analysis continuity. MIC1
 frames are consumed whole, so audio payload cannot masquerade as ECG.
 
-RMSSD requires a window free of sampling/quality flags and uses unique settled R peaks from overlapping windows, a rolling 60-second
+Qualified RMSSD requires a window free of sampling/quality problems and uses unique settled R peaks from overlapping windows, a rolling 60-second
 quiet interval, at least 30 RR intervals, SQI ≥0.5 and motion score <10. RR outside
 300–2000 ms or adjacent changes >25% reset the HRV window. These are conservative
 engineering gates, not a validated stress model or medical threshold. Motion
@@ -69,7 +74,26 @@ surface those reasons. `window_flags` and `flag_counts` are retained in diagnost
 analysis records. Counts mean sample slots covered by packet flags, not exact
 missed ADC conversions. The quality gates are unchanged: a displayed heart rate
 does not establish valid RMSSD, and recurring sampling/clipping flags can keep
-the HRV quiet-window progress at zero indefinitely.
+the qualified HRV quiet-window progress at zero indefinitely.
+
+Starting with 0.1.5, **Today, Detail and the notification display a separate
+short-window RMSSD reference** when qualified HRV is unavailable. It is computed
+from at least three consecutive valid settled RR intervals in the current ECG
+analysis window, after the existing HR/SQI checks pass. RR uses available device
+timestamps; within-packet timestamps still use nominal interpolation. Intervals
+outside 300–2000 ms, over 25% from nominal timing, or adjacent changes over 25%
+break the reference segment. No estimate bridges rejected intervals. Timing
+warnings, sporadic clipping, unavailable IMU or motion can leave a reference
+visible with explicit uncertainty; they still prevent qualified resting HRV.
+The reference is not interpreted as a stress score or sent to AI as valid RMSSD.
+True losses/lead-off, stale data, sustained saturation and poor SQI suppress it.
+This displays a measured short-window calculation; it does not repair analog
+saturation or establish physiological accuracy.
+
+Diagnostics add `rmssd_reference`, `hrv_reference_rr_count`,
+`hrv_reference_window_s`, `hrv_reference_reasons`, `adc_clipped_samples`,
+`adc_flagged_sample_slots` and `analysis_clipping_rule`. Existing `rmssd` remains
+the qualified metric. Detail distinguishes actual rail hits from flagged slots.
 
 ## Build and test
 

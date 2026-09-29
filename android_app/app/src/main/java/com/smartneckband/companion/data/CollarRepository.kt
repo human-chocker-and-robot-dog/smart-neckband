@@ -24,6 +24,8 @@ class CollarRepository {
         mutable.update { it.copy(connection = connection, acquisition = acquisition, lastError = error,
             heart = HeartSnapshot(), imu = ImuSnapshot(), dataAgeMs = null,
             rawEcg = EcgWaveform(), cleanEcg = EcgWaveform(), hrvWindowSeconds = 0, rrCount = 0,
+            hrvReferenceRmssdMs = null, hrvReferenceRrCount = 0, hrvReferenceWindowSeconds = 0.0,
+            hrvReferenceReasons = emptyList(), adcClippedSamples = 0, adcFlaggedSampleSlots = 0,
             ecgSampleCount = 0, analysisSampleCount = 0, effectiveSampleRateHz = null, timingWarning = false,
             hrvStatus = "waiting", hrvReasons = listOf(if (acquisition == AcquisitionState.STOPPED) "本次采集已停止" else "等待实时 ECG 与 IMU 数据"),
             analysisMessage = if (acquisition == AcquisitionState.STOPPED) "本次采集已停止" else "等待设备数据") }
@@ -57,6 +59,14 @@ class CollarRepository {
             effectiveSampleRateHz = number("effective_rate_hz"), timingWarning = json.optBoolean("timing_warning"),
             analysisMessage = json.optString("message"), hrvWindowSeconds = json.optInt("hrv_window_s"),
             rrCount = json.optInt("rr_count"), hrvStatus = json.optString("hrv_status", "waiting"),
+            hrvReferenceRmssdMs = if (fresh) number("rmssd_reference")?.takeIf { it >= 0 } else null,
+            hrvReferenceRrCount = json.optInt("hrv_reference_rr_count"),
+            hrvReferenceWindowSeconds = number("hrv_reference_window_s") ?: 0.0,
+            hrvReferenceReasons = json.optJSONArray("hrv_reference_reasons")?.let { reasons ->
+                (0 until reasons.length()).map { reasons.getString(it) }
+            } ?: emptyList(),
+            adcClippedSamples = json.optInt("adc_clipped_samples"),
+            adcFlaggedSampleSlots = json.optInt("adc_flagged_sample_slots"),
             hrvReasons = json.optJSONArray("hrv_reasons")?.let { reasons ->
                 (0 until reasons.length()).map { reasons.getString(it) }
             } ?: listOf(json.optString("message", "等待有效数据"))) }
@@ -67,6 +77,8 @@ class CollarRepository {
     }
     fun analysisError(message: String) {
         mutable.update { it.copy(heart = HeartSnapshot(), analysisMessage = message, cleanEcg = EcgWaveform(),
+            hrvReferenceRmssdMs = null, hrvReferenceRrCount = 0, hrvReferenceWindowSeconds = 0.0,
+            hrvReferenceReasons = listOf(message),
             hrvStatus = "blocked", hrvReasons = listOf(message)) }
     }
     fun setInsights(value: List<InsightCard>) { cards.value = value.take(30) }
