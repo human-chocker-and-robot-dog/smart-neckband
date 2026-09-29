@@ -78,8 +78,8 @@ class StreamingReplayTest {
                     onScan = {}, onSelect = {}, onStart = {}, onStop = {})
             }
             compose.onNodeWithText("查看原始波形与详情 →").performClick()
-            compose.onNodeWithText("最近 5000 个采样 · 原始计数").assertIsDisplayed()
-            compose.onNodeWithText("采样存在时序或削顶告警；心率供参考，HRV 暂停").assertIsDisplayed()
+            compose.onNodeWithText("完整缓存 5000 个采样 · 原始计数").assertIsDisplayed()
+            compose.onNodeWithText("设备报告采样遗漏；心率供参考，HRV 暂停").performScrollTo().assertIsDisplayed()
             compose.waitForIdle()
             compose.onRoot().captureToImage().asAndroidBitmap().let { bitmap ->
                 File(app.cacheDir, "stream-replay.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }

@@ -1,6 +1,5 @@
 package com.smartneckband.companion.ui
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -13,9 +12,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -52,6 +48,8 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
     val insights = if (insightDemo) DemoData.cards else liveInsights
     var page by rememberSaveable { mutableStateOf("Today") }
     var detail by rememberSaveable { mutableStateOf(false) }
+    var waveformSeconds by rememberSaveable { mutableIntStateOf(3) }
+    var automaticScale by rememberSaveable { mutableStateOf(true) }
     MaterialTheme(colorScheme = palette) {
         Scaffold(topBar = { TopAppBar(title = { Text(if (detail) "身体数据详情" else page) },
             navigationIcon = { if (detail) IconButton(onClick = { detail = false }) {
@@ -64,15 +62,28 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
                 }
             }
         }) { padding ->
+            key(page, detail) {
             LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 if (ecgDemo && (page == "Today" || detail)) item {
                     Text("演示模式 · 合成 ECG / 心率，非实际测量", color = MaterialTheme.colorScheme.primary)
                 }
                 if (detail) {
-                    item { InfoCard("ECG · 原始 ADC", "最近 ${snapshot.ecgSampleCount} 个采样 · 原始计数") { Waveform(snapshot.rawEcg, raw = true) } }
-                    item { InfoCard("ECG · 滤波波形", snapshot.analysisMessage) { Waveform(snapshot.cleanEcg) } }
-                    item { InfoCard("HRV · RMSSD", "静息窗口 ${snapshot.hrvWindowSeconds}/60 秒 · 有效 RR ${snapshot.rrCount} 个") {
+                    item {
+                        WaveformControls(waveformSeconds, automaticScale, { waveformSeconds = it }, { automaticScale = it })
+                        Text("缩放仅改变显示；保留全部 ${snapshot.ecgSampleCount} 个采样。", style = MaterialTheme.typography.bodySmall)
+                    }
+                    item { InfoCard("ECG · 原始 ADC", "完整缓存 ${snapshot.ecgSampleCount} 个采样 · 原始计数") {
+                        Waveform(snapshot.rawEcg, raw = true, windowSeconds = waveformSeconds, automatic = automaticScale)
+                    } }
+                    item { InfoCard("ECG · 滤波波形", snapshot.analysisMessage) {
+                        Waveform(snapshot.cleanEcg, windowSeconds = waveformSeconds, automatic = automaticScale)
+                    } }
+                    item { InfoCard("HRV · RMSSD", "${hrvLabel(snapshot)} · 静息窗口 ${snapshot.hrvWindowSeconds}/60 秒 · 有效 RR ${snapshot.rrCount} 个") {
                         Text("${metric(snapshot.heart.hrvRmssdMs)} ms", style = MaterialTheme.typography.headlineLarge)
+                        snapshot.hrvReasons.forEach { reason -> Text("· $reason") }
+                        if (snapshot.hrvStatus == "collecting") LinearProgressIndicator(
+                            progress = { snapshot.hrvWindowSeconds / 60f }, modifier = Modifier.fillMaxWidth())
+                        if (snapshot.heart.hrvRmssdMs == null) Text("HRV 需要连续 60 秒合格静息数据和至少 30 个有效 RR。心率能够显示时，HRV 仍可能等待。", style = MaterialTheme.typography.bodySmall)
                         Text("用于观察个人趋势；本版不将 HRV 换算为压力分数。")
                     } }
                     item { InfoCard("数据质量", "${snapshot.dataAgeMs?.let { "数据延迟 ${it} ms" } ?: "暂无实时数据"}") {
@@ -90,11 +101,16 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
                             MetricCard("心率", metric(snapshot.heart.bpm, 0), "BPM", Modifier.weight(1f)) { detail = true }
                             MetricCard("HRV", metric(snapshot.heart.hrvRmssdMs), "RMSSD · ms", Modifier.weight(1f)) { detail = true }
                         } }
+                        if (snapshot.heart.hrvRmssdMs == null) item {
+                            Text("HRV ${hrvLabel(snapshot)}：${snapshot.hrvReasons.joinToString("；")}", style = MaterialTheme.typography.bodyMedium)
+                        }
                         item { Card(onClick = { detail = true }, shape = RoundedCornerShape(24.dp)) {
                             Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                 Text("ECG", style = MaterialTheme.typography.titleLarge)
+                                WaveformControls(waveformSeconds, automaticScale, { waveformSeconds = it }, { automaticScale = it })
                                 val showRaw = snapshot.cleanEcg.values.isEmpty()
-                                Waveform(if (showRaw) snapshot.rawEcg else snapshot.cleanEcg, raw = showRaw)
+                                Waveform(if (showRaw) snapshot.rawEcg else snapshot.cleanEcg, raw = showRaw,
+                                    windowSeconds = waveformSeconds, automatic = automaticScale)
                                 Text(snapshot.analysisMessage, style = MaterialTheme.typography.bodyMedium)
                                 Text("查看原始波形与详情 →", color = MaterialTheme.colorScheme.primary)
                             }
@@ -160,6 +176,7 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
                     }
                 }
             }
+            }
         }
     }
 }
@@ -182,36 +199,12 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
         }
     }
 }
-@Composable private fun Waveform(series: EcgWaveform, raw: Boolean = false) {
-    val color = MaterialTheme.colorScheme.primary
-    val points = series.values
-    if (points.size < 2 || series.seconds.size != points.size) { Text("等待波形", Modifier.fillMaxWidth().height(80.dp), color = MaterialTheme.colorScheme.onSurfaceVariant); return }
-    val low = if (raw) 0f else points.minOrNull() ?: 0f
-    val high = if (raw) 4095f else points.maxOrNull() ?: 1f
-    val span = (high - low).coerceAtLeast(1f)
-    val duration = (series.seconds.maxOrNull() ?: .002f).coerceAtLeast(.002f)
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("${"%.0f".format(low)}–${"%.0f".format(high)} ADC${if (raw) "" else " · 滤波后"}", style = MaterialTheme.typography.labelSmall)
-        Canvas(Modifier.fillMaxWidth().height(140.dp)) {
-            for (tick in 0..4) {
-                val x = size.width * tick / 4
-                drawLine(color.copy(alpha = .12f), Offset(x, 0f), Offset(x, size.height))
-                val y = size.height * tick / 4
-                drawLine(color.copy(alpha = .12f), Offset(0f, y), Offset(size.width, y))
-            }
-            val path = Path()
-            points.forEachIndexed { index, point ->
-                val x = size.width * series.seconds[index] / duration
-                val y = size.height * (0.95f - 0.9f * (point - low) / span)
-                if (index == 0 || index in series.breaks) path.moveTo(x, y) else path.lineTo(x, y)
-            }
-            drawPath(path, color, style = Stroke(width = 1.dp.toPx()))
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("0 s", style = MaterialTheme.typography.labelSmall)
-            Text("${"%.1f".format(duration)} s", style = MaterialTheme.typography.labelSmall)
-        }
-    }
+private fun hrvLabel(snapshot: CollarSnapshot) = when (snapshot.hrvStatus) {
+    "ready" -> "已就绪"
+    "collecting" -> "积累中"
+    "blocked" -> "暂停"
+    "demo" -> "演示数据"
+    else -> "等待数据"
 }
 private fun metric(value: Double?, decimals: Int = 1) = value?.let { "%.${decimals}f".format(it) } ?: "--"
 private fun motionLabel(level: String?) = when (level) { "still" -> "静止"; "light" -> "轻度活动"; "moderate" -> "中度活动"; "vigorous" -> "较强活动"; else -> "等待足够的活动数据" }

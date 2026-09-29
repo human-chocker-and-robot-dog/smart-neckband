@@ -45,6 +45,8 @@ data class CollarSnapshot(
     val analysisMessage: String = "等待设备数据",
     val hrvWindowSeconds: Int = 0,
     val rrCount: Int = 0,
+    val hrvStatus: String = "waiting",
+    val hrvReasons: List<String> = listOf("等待实时数据"),
 )
 
 data class BodyEvent(

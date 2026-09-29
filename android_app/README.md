@@ -8,8 +8,8 @@ Connect dependency, data import, permission or background sync is enabled.
 
 - **Today**: HR, HRV (RMSSD, ms), ECG, IMU and data quality/status. Tap metrics or
   ECG for Detail. No pairing or acquisition buttons here.
-- **Settings**: scan and select a collar, start/stop, configure the optional AI
-  gateway. The selected device persists locally. After setup, a new launcher
+- **Settings**: scan and select a collar, start/stop, independent demos and local
+  diagnostic export. The selected device persists locally. After setup, a new launcher
   task/process automatically starts collection. Rotation, tab switches and return
   from background preserve a manual Stop. Explicit Start resumes immediately.
 - **Background**: one `connectedDevice` foreground service owns encrypted BLE,
@@ -17,8 +17,9 @@ Connect dependency, data import, permission or background sync is enabled.
   with HR/RMSSD and Stop. Unknown, stale or poor-quality metrics show `--`.
 - **AI Insight**: bounded, timestamped explanations based on structured body
   events. Local fallback is labelled **本地规则**. Cloud is off until configured
-  and enabled in Settings. Last 30 explanations persist in private preferences;
-  raw data stays in bounded memory and is not uploaded or persisted in this MVP.
+  through the legacy gateway preferences. Last 30 explanations persist in private
+  preferences; raw data stays in bounded memory until an explicit local diagnostic
+  capture. Demo cards are separate from this history.
 
 The BLE service uses the existing Nordic-UART-style UUIDs, safe 20-byte GATT
 writes and notification stream assembly. A matching device ACK is required for
@@ -38,7 +39,13 @@ NeuroKit2 0.2.10). Desktop PC dependencies themselves remain unchanged.
 
 Raw counts and original flags are retained in a separate bounded ring. Both
 traces include every sample, device-time coordinates and explicit breaks at
-missing data; the UI does not stride-decimate R peaks. Diagnostics show window
+missing data; the UI does not stride-decimate R peaks. Starting with 0.1.3 the
+phone displays the latest 3 seconds by default, with shared 3/5/10-second controls
+for raw and cleaned views. Only the viewport is cropped: 5000 analysis points and
+diagnostic output remain intact. Time ticks are relative to the newest sample.
+Vertical ADC tick labels and automatic/fixed ranges distinguish signal amplitude
+from screen geometry; fixed ranges are 0–4095 raw and -2048–2048 cleaned counts.
+These are counts, not a calibrated mV/paper-speed display. Diagnostics show window
 sample counts, effective sample rate and timing warnings. Analysis runs away
 from the main thread, at most once per second, after draining queued packets.
 Sampling-warning and occasional clipping packets remain in the analysis window.
@@ -54,6 +61,14 @@ quiet interval, at least 30 RR intervals, SQI ≥0.5 and motion score <10. RR ou
 300–2000 ms or adjacent changes >25% reset the HRV window. These are conservative
 engineering gates, not a validated stress model or medical threshold. Motion
 retains the PC's 30-second coverage rules. No HRV-to-stress mapping is implemented.
+
+HRV status is now explicitly `waiting`, `blocked`, `collecting` or `ready`, with
+`hrv_reasons` explaining each current blocker. Today, Detail and the notification
+surface those reasons. `window_flags` and `flag_counts` are retained in diagnostic
+analysis records. Counts mean sample slots covered by packet flags, not exact
+missed ADC conversions. The quality gates are unchanged: a displayed heart rate
+does not establish valid RMSSD, and recurring sampling/clipping flags can keep
+the HRV quiet-window progress at zero indefinitely.
 
 ## Build and test
 

@@ -24,7 +24,8 @@ object DemoData {
             imu = ImuSnapshot(4.0, 96.0, "still", true, Instant.now()), dataAgeMs = 0,
             rawEcg = EcgWaveform(raw, times), cleanEcg = EcgWaveform(clean, times),
             ecgSampleCount = clean.size, analysisSampleCount = clean.size, effectiveSampleRateHz = 500.0,
-            analysisMessage = "演示 · 合成 ECG，非实际测量", hrvWindowSeconds = 60, rrCount = 71)
+            analysisMessage = "演示 · 合成 ECG，非实际测量", hrvWindowSeconds = 60, rrCount = 71,
+            hrvStatus = "demo", hrvReasons = listOf("演示 RMSSD，非实际测量"))
     }
 
     // These are UI examples, not medical interpretations or API responses.

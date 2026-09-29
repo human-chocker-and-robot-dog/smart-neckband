@@ -28,6 +28,20 @@ TIMING_FLAGS = (FLAG_SAMPLE_LATE | FLAG_SAMPLE_MISSED |
                 FLAG_SAMPLE_QUEUE_OVERFLOW | FLAG_TRANSPORT_OVERFLOW |
                 MISSING_PACKET | TIMESTAMP_JUMP)
 
+# Packet flags apply to the whole batch; counts describe affected sample slots,
+# not the number of ADC conversions lost on the device.
+FLAG_REASONS = (
+    (FLAG_LO_MINUS, "电极接触异常（LO−）"),
+    (FLAG_LO_PLUS, "电极接触异常（LO+）"),
+    (FLAG_ADC_CLIPPING, "原始 ADC 存在削顶标记"),
+    (FLAG_SAMPLE_LATE, "设备报告采样延迟"),
+    (FLAG_SAMPLE_MISSED, "设备报告采样遗漏"),
+    (FLAG_SAMPLE_QUEUE_OVERFLOW, "设备采样队列溢出"),
+    (FLAG_TRANSPORT_OVERFLOW, "设备传输队列溢出"),
+    (MISSING_PACKET, "ECG 样本编号不连续"),
+    (TIMESTAMP_JUMP, "ECG 时间戳不连续"),
+)
+
 
 def trace(samples, values=None):
     """No stride decimation: retain narrow R peaks and explicit data gaps."""
@@ -137,7 +151,23 @@ class Engine:
             effective_rate_hz=(len(raw_samples) - 1) * 1e6 / span_us if span_us > 0 else None,
             timing_warning=bool(window_flags & TIMING_FLAGS),
             message=f"ECG 分析窗口 {len(samples)}/5000 点", rr_count=0, hrv_window_s=0,
+            hrv_status="waiting", hrv_reasons=[], window_flags=window_flags,
+            flag_counts={str(flag): sum(bool(sample.flags & flag) for sample in samples)
+                         for flag, _ in FLAG_REASONS if window_flags & flag},
             discontinuities=self.discontinuities, analysis="NeuroKit2 / PC shared implementation")
+        reasons = output["hrv_reasons"]
+        if ecg_age_ms is None or ecg_age_ms > 3000:
+            reasons.append("等待新的实时 ECG 数据")
+        else:
+            if len(samples) < 5000:
+                reasons.append(f"ECG 分析窗口尚未满：{len(samples)}/5000 点")
+            reasons.extend(text for flag, text in FLAG_REASONS if window_flags & flag)
+            if not imu_fresh:
+                reasons.append("等待实时 IMU 数据，以确认静息状态")
+            elif motion.score is None:
+                reasons.append("IMU 静息判断数据尚未积累足够")
+            elif motion.score >= 10:
+                reasons.append(f"当前活动指数 {motion.score:.1f}，静息要求低于 10")
         if ecg_age_ms is None or ecg_age_ms > 3000:
             self.ecg.clear()
             self._reset_rr()
@@ -151,17 +181,29 @@ class Engine:
         except Exception as error:
             self._reset_rr()
             output["message"] = f"分析不可用：{type(error).__name__}"
+            reasons.append("ECG 分析暂不可用")
+            output["hrv_status"] = "blocked"
             return json.dumps(output, allow_nan=False)
         output.update(quality=result.signal_quality, cleaned=trace(samples, result.cleaned),
             message=result.message)
+        if result.signal_quality is None:
+            reasons.append("暂时无法评估 ECG 信号质量")
+        elif result.signal_quality < 0.5:
+            reasons.append(f"信号质量 {result.signal_quality:.0%}，需要至少 50%")
+        if result.heart_rate_bpm is None:
+            reasons.append("尚未检出足够稳定的心搏间期")
+        output["hrv_status"] = "blocked" if reasons else "collecting"
         if result.message == "ECG clipped":
             self._reset_rr()
             output.update(cleaned=trace(()), message="ADC 持续削顶；已保留原始波形")
+            reasons.append("ADC 持续削顶，无法可靠判断心搏间期")
             return json.dumps(output, allow_nan=False)
         output["age_ms"] = (time.monotonic_ns() - self.last_ecg_ns) / 1e6
         if output["age_ms"] >= 3000:
             self._reset_rr()
             output["message"] = "分析期间数据已过期，等待新数据"
+            reasons.append("分析期间数据已过期，等待新数据")
+            output["hrv_status"] = "blocked"
             return json.dumps(output, allow_nan=False)
         if window_flags & (FLAG_LO_MINUS | FLAG_LO_PLUS | FLAG_SAMPLE_QUEUE_OVERFLOW |
                            FLAG_TRANSPORT_OVERFLOW | MISSING_PACKET):
@@ -178,7 +220,8 @@ class Engine:
         output["bpm"] = result.heart_rate_bpm
         if window_flags:
             self._reset_rr()
-            output["message"] = "采样存在时序或削顶告警；心率供参考，HRV 暂停"
+            flag_text = "、".join(text for flag, text in FLAG_REASONS if window_flags & flag)
+            output["message"] = f"{flag_text or '采样告警'}；心率供参考，HRV 暂停"
             return json.dumps(output, allow_nan=False)
         if motion.score is None or motion.score >= 10:
             self._reset_rr()
@@ -211,6 +254,8 @@ class Engine:
             values = [r[1] for r in self.rr]
             output["rmssd"] = math.sqrt(statistics.fmean((b - a) ** 2 for a, b in zip(values, values[1:])))
             output["message"] = "实时数据 · HRV 为最近 60 秒静息 RMSSD"
+            output["hrv_status"] = "ready"
         else:
             output["message"] = f"心率已更新；HRV 静息窗口 {int(duration)}/60 秒"
+            reasons.append(f"正在积累稳定静息窗口：{int(min(60, duration))}/60 秒，有效 RR {len(self.rr)}/30 个")
         return json.dumps(output, allow_nan=False)

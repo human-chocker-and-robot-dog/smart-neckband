@@ -193,7 +193,7 @@ class CollarAcquisitionService : Service() {
         val stop = PendingIntent.getService(this, 1, Intent(this, javaClass).setAction(STOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         return NotificationCompat.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_collar)
             .setContentTitle("心率 ${hr ?: "--"} BPM · HRV ${hrv ?: "--"} ms")
-            .setContentText(snapshot.lastError ?: snapshot.analysisMessage)
+            .setContentText(snapshot.lastError ?: (if (hrv == null) snapshot.hrvReasons.firstOrNull() else null) ?: snapshot.analysisMessage)
             .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .addAction(R.drawable.ic_collar, "停止采集", stop).build()

@@ -25,6 +25,7 @@ class CollarRepository {
             heart = HeartSnapshot(), imu = ImuSnapshot(), dataAgeMs = null,
             rawEcg = EcgWaveform(), cleanEcg = EcgWaveform(), hrvWindowSeconds = 0, rrCount = 0,
             ecgSampleCount = 0, analysisSampleCount = 0, effectiveSampleRateHz = null, timingWarning = false,
+            hrvStatus = "waiting", hrvReasons = listOf(if (acquisition == AcquisitionState.STOPPED) "本次采集已停止" else "等待实时 ECG 与 IMU 数据"),
             analysisMessage = if (acquisition == AcquisitionState.STOPPED) "本次采集已停止" else "等待设备数据") }
     }
 
@@ -55,14 +56,18 @@ class CollarRepository {
             ecgSampleCount = json.optInt("sample_count"), analysisSampleCount = json.optInt("analysis_sample_count"),
             effectiveSampleRateHz = number("effective_rate_hz"), timingWarning = json.optBoolean("timing_warning"),
             analysisMessage = json.optString("message"), hrvWindowSeconds = json.optInt("hrv_window_s"),
-            rrCount = json.optInt("rr_count")) }
+            rrCount = json.optInt("rr_count"), hrvStatus = json.optString("hrv_status", "waiting"),
+            hrvReasons = json.optJSONArray("hrv_reasons")?.let { reasons ->
+                (0 until reasons.length()).map { reasons.getString(it) }
+            } ?: listOf(json.optString("message", "等待有效数据"))) }
     }
 
     fun transportStats(crcErrors: Long, lostPackets: Long) {
         mutable.update { it.copy(parserCrcErrors = crcErrors, packetLoss = lostPackets) }
     }
     fun analysisError(message: String) {
-        mutable.update { it.copy(heart = HeartSnapshot(), analysisMessage = message, cleanEcg = EcgWaveform()) }
+        mutable.update { it.copy(heart = HeartSnapshot(), analysisMessage = message, cleanEcg = EcgWaveform(),
+            hrvStatus = "blocked", hrvReasons = listOf(message)) }
     }
     fun setInsights(value: List<InsightCard>) { cards.value = value.take(30) }
     fun addInsight(card: InsightCard) { cards.update { (listOf(card) + it).take(30) } }
