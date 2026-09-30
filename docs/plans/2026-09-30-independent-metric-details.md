@@ -18,4 +18,11 @@ the user will manually verify each Today card and its back navigation.
 ## Progress
 - [x] Implement history and routes.
 - [x] Build; installation is pending because ADB currently reports no device.
-- [ ] Commit and push.
+- [x] Commit and push.
+
+## Result
+Today now routes heart rate, HRV, motion and ECG to separate detail pages.
+Fresh analysis results retain a bounded 180-point in-memory metric history, with
+recent HR/RMSSD previews on Today and full charts on their detail pages. The
+Debug APK 0.1.8 (code 9) builds successfully and commit `bad03bb` is pushed;
+installation remains pending until the test phone is connected.
