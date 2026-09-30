@@ -22,6 +22,9 @@ import com.smartneckband.companion.BuildConfig
 import com.smartneckband.companion.SmartCollarApplication
 import com.smartneckband.companion.data.*
 import kotlinx.coroutines.delay
+import java.time.Instant
+import kotlin.math.PI
+import kotlin.math.sin
 
 private val palette = lightColorScheme(primary = Color(0xFF28675C), secondary = Color(0xFF666D51),
     background = Color(0xFFF8FAF6), surface = Color(0xFFF8FAF6), surfaceContainer = Color(0xFFEDF2EB))
@@ -36,6 +39,7 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
     val aiConfig by app.aiSettings.state.collectAsStateWithLifecycle()
     val uiScope = rememberCoroutineScope()
     val liveSnapshot by app.repository.snapshot.collectAsStateWithLifecycle()
+    val liveMetricHistory by app.repository.metricHistory.collectAsStateWithLifecycle()
     val liveInsights by app.repository.insights.collectAsStateWithLifecycle()
     val ecgDemo by app.ecgDemo.collectAsStateWithLifecycle()
     val insightDemo by app.insightDemo.collectAsStateWithLifecycle()
@@ -47,78 +51,110 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
         }
     }
     val snapshot = if (ecgDemo) remember(demoSeconds) { DemoData.snapshot(demoSeconds) } else liveSnapshot
+    val metricHistory = if (ecgDemo) remember(demoSeconds) {
+        (0..59).map { index ->
+            val phase = (index + demoSeconds) / 8.0
+            MetricHistoryPoint(Instant.now().minusSeconds((59 - index).toLong()),
+                bpm = 72.0 + 3.0 * sin(phase), hrvRmssdMs = 42.0 + 4.0 * sin(phase / 2),
+                motionScore = 4.0 + 1.5 * sin(phase), stillRatioPercent = 96.0)
+        }
+    } else liveMetricHistory
     val insights = if (insightDemo) DemoData.cards else liveInsights
     var page by rememberSaveable { mutableStateOf("Today") }
-    var detail by rememberSaveable { mutableStateOf(false) }
+    var detail by rememberSaveable { mutableStateOf<String?>(null) }
     var waveformSeconds by rememberSaveable { mutableIntStateOf(3) }
     var automaticScale by rememberSaveable { mutableStateOf(true) }
     var showInsightHistory by rememberSaveable { mutableStateOf(false) }
     MaterialTheme(colorScheme = palette) {
-        Scaffold(topBar = { TopAppBar(title = { Text(if (detail) "身体数据详情" else page) },
-            navigationIcon = { if (detail) IconButton(onClick = { detail = false }) {
+        Scaffold(topBar = { TopAppBar(title = { Text(detailTitle(detail, page)) },
+            navigationIcon = { if (detail != null) IconButton(onClick = { detail = null }) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
             } }) }, bottomBar = {
             NavigationBar {
                 listOf("Today" to Icons.Default.FavoriteBorder, "AI Insight" to Icons.Default.AutoAwesome, "Settings" to Icons.Default.Settings).forEach { (name, icon) ->
-                    NavigationBarItem(selected = page == name, onClick = { page = name; detail = false },
+                    NavigationBarItem(selected = page == name, onClick = { page = name; detail = null },
                         icon = { Icon(icon, null) }, label = { Text(name) })
                 }
             }
         }) { padding ->
             key(page, detail) {
             LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                if (ecgDemo && (page == "Today" || detail)) item {
+                if (ecgDemo && (page == "Today" || detail != null)) item {
                     Text("演示模式 · 合成 ECG / 心率，非实际测量", color = MaterialTheme.colorScheme.primary)
                 }
-                if (detail) {
-                    item {
-                        WaveformControls(waveformSeconds, automaticScale, { waveformSeconds = it }, { automaticScale = it })
-                        Text("缩放仅改变显示；保留全部 ${snapshot.ecgSampleCount} 个采样。", style = MaterialTheme.typography.bodySmall)
+                if (detail != null) {
+                    when (detail) {
+                        "heart" -> {
+                            item { MetricDetailHeader("心率", metric(snapshot.heart.bpm, 0), "BPM", "心率表示当前心搏频率；曲线来自最近实时分析窗口。") }
+                            item { InfoCard("近期心率", "最近 ${metricHistory.size} 个实时分析点") {
+                                MetricHistoryChart(metricHistory, { it.bpm }, Color(0xFF28675C))
+                            } }
+                            item { InfoCard("当前数据", "${snapshot.dataAgeMs?.let { "数据延迟 ${it} ms" } ?: "等待实时数据"}") {
+                                Text("信号质量：${snapshot.heart.signalQuality?.let { "%.0f%%".format(it * 100) } ?: "--"}")
+                                Text("心率只描述频率，不单独推断活动原因或身体状态。", style = MaterialTheme.typography.bodySmall)
+                            } }
+                        }
+                        "hrv" -> {
+                            item { MetricDetailHeader("HRV · RMSSD", hrvMetric(snapshot), "ms", "RMSSD 描述相邻心搏间期差值的变化；它和心率是两个不同维度。") }
+                            item { InfoCard("近期 RMSSD", "最近 ${metricHistory.count { it.hrvRmssdMs != null }} 个有效分析点") {
+                                MetricHistoryChart(metricHistory, { it.hrvRmssdMs }, Color(0xFF405C7D))
+                            } }
+                            item { InfoCard("计算窗口", if (snapshot.isHrvReference) "短窗口参考值" else hrvLabel(snapshot)) {
+                                Text("${hrvMetric(snapshot)} ms", style = MaterialTheme.typography.headlineMedium)
+                                Text("静息窗口 ${snapshot.hrvWindowSeconds}/60 秒 · 有效 RR ${snapshot.rrCount}/30 个")
+                                if (snapshot.isHrvReference) Text("当前值带 ≈ 标记，表示短窗口参考值；不换算为压力分数。", style = MaterialTheme.typography.bodySmall)
+                                snapshot.hrvReasons.take(2).forEach { reason -> Text("· $reason", style = MaterialTheme.typography.bodySmall) }
+                            } }
+                        }
+                        "motion" -> {
+                            item { MetricDetailHeader("身体活动", metric(snapshot.imu.motionScore), "活动指数", "活动指数描述近期动作幅度；静止占比描述低活动时间桶的比例。") }
+                            item { InfoCard("近期活动幅度", "最近 ${metricHistory.count { it.motionScore != null }} 个实时分析点") {
+                                MetricHistoryChart(metricHistory, { it.motionScore }, Color(0xFF7B5732))
+                            } }
+                            item { InfoCard("静止占比", "最近窗口") {
+                                MetricHistoryChart(metricHistory, { it.stillRatioPercent }, Color(0xFF6D5C88))
+                                Text("静止占比为 100% 也不等于完全没有动作。", style = MaterialTheme.typography.bodySmall)
+                            } }
+                        }
+                        else -> {
+                            item {
+                                WaveformControls(waveformSeconds, automaticScale, { waveformSeconds = it }, { automaticScale = it })
+                                Text("缩放仅改变显示；保留全部 ${snapshot.ecgSampleCount} 个采样。", style = MaterialTheme.typography.bodySmall)
+                            }
+                            item { InfoCard("ECG · 原始 ADC", "完整缓存 ${snapshot.ecgSampleCount} 个采样 · 原始计数") {
+                                Waveform(snapshot.rawEcg, raw = true, windowSeconds = waveformSeconds, automatic = automaticScale)
+                            } }
+                            item { InfoCard("ECG · 滤波波形", snapshot.analysisMessage) {
+                                Waveform(snapshot.cleanEcg, windowSeconds = waveformSeconds, automatic = automaticScale)
+                            } }
+                            item { InfoCard("数据质量", "${snapshot.dataAgeMs?.let { "数据延迟 ${it} ms" } ?: "暂无实时数据"}") {
+                                Text("信号质量：${snapshot.heart.signalQuality?.let { "%.0f%%".format(it * 100) } ?: "--"}")
+                                Text("CRC 错误 ${snapshot.parserCrcErrors} · 丢包 ${snapshot.packetLoss}")
+                                Text("实测采样率 ${metric(snapshot.effectiveSampleRateHz, 0)} Hz · 标称 500 Hz")
+                                Text(if (ecgDemo) "演示窗口 ${snapshot.ecgSampleCount} 点" else "分析窗口 ${snapshot.analysisSampleCount}/5000 点")
+                                Text("原始 ADC 实际触顶 ${snapshot.adcClippedSamples}/${snapshot.analysisSampleCount} 点（0 或 4095）")
+                                if (snapshot.adcFlaggedSampleSlots > 0) Text("包级削顶标记覆盖 ${snapshot.adcFlaggedSampleSlots} 个采样位置，不等于实际触顶点数。", style = MaterialTheme.typography.bodySmall)
+                            } }
+                        }
                     }
-                    item { InfoCard("ECG · 原始 ADC", "完整缓存 ${snapshot.ecgSampleCount} 个采样 · 原始计数") {
-                        Waveform(snapshot.rawEcg, raw = true, windowSeconds = waveformSeconds, automatic = automaticScale)
-                    } }
-                    item { InfoCard("ECG · 滤波波形", snapshot.analysisMessage) {
-                        Waveform(snapshot.cleanEcg, windowSeconds = waveformSeconds, automatic = automaticScale)
-                    } }
-                    item { InfoCard("HRV · RMSSD", if (snapshot.isHrvReference)
-                        "参考窗口 ${metric(snapshot.hrvReferenceWindowSeconds)} 秒 · 有效 RR ${snapshot.hrvReferenceRrCount} 个"
-                        else "${hrvLabel(snapshot)} · 静息窗口 ${snapshot.hrvWindowSeconds}/60 秒 · 有效 RR ${snapshot.rrCount} 个") {
-                        Text("${hrvMetric(snapshot)} ms", style = MaterialTheme.typography.headlineLarge)
-                        if (snapshot.isHrvReference) {
-                            Text("短窗口参考值 · 由当前有效心搏间期计算，尚未通过完整静息检查。削顶、采样时序和活动可能影响数值。")
-                            Text("完整静息窗口 ${snapshot.hrvWindowSeconds}/60 秒 · 有效 RR ${snapshot.rrCount}/30 个", style = MaterialTheme.typography.bodySmall)
-                        }
-                        snapshot.hrvReasons.forEach { reason -> Text("· $reason") }
-                        if (snapshot.hrvStatus == "collecting") LinearProgressIndicator(
-                            progress = { snapshot.hrvWindowSeconds / 60f }, modifier = Modifier.fillMaxWidth())
-                        if (snapshot.displayHrvRmssdMs == null) {
-                            snapshot.hrvReferenceReasons.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
-                            Text("参考值需要至少 3 个相邻有效 RR 和足够信号质量；完整值需要 60 秒合格静息与至少 30 个 RR。", style = MaterialTheme.typography.bodySmall)
-                        }
-                        Text("用于观察个人趋势；本版不将 HRV 换算为压力分数。")
-                    } }
-                    item { InfoCard("数据质量", "${snapshot.dataAgeMs?.let { "数据延迟 ${it} ms" } ?: "暂无实时数据"}") {
-                        Text("信号质量：${snapshot.heart.signalQuality?.let { "%.0f%%".format(it * 100) } ?: "--"}")
-                        Text("CRC 错误 ${snapshot.parserCrcErrors} · 丢包 ${snapshot.packetLoss}")
-                        Text("实测采样率 ${metric(snapshot.effectiveSampleRateHz, 0)} Hz · 标称 500 Hz")
-                        Text(if (ecgDemo) "演示窗口 ${snapshot.ecgSampleCount} 点" else "分析窗口 ${snapshot.analysisSampleCount}/5000 点")
-                        Text("原始 ADC 实际触顶 ${snapshot.adcClippedSamples}/${snapshot.analysisSampleCount} 点（0 或 4095）")
-                        if (snapshot.adcFlaggedSampleSlots > 0) Text("包级削顶标记覆盖 ${snapshot.adcFlaggedSampleSlots} 个采样位置，不等于实际触顶点数。", style = MaterialTheme.typography.bodySmall)
-                        if (snapshot.timingWarning) Text("采样时序存在告警；HRV 以参考值展示，AI 解读使用相同的参考标记。")
-                    } }
                 } else when (page) {
                     "Today" -> {
                         item { Text("今天的数据", style = MaterialTheme.typography.headlineSmall) }
                         item { Text(if (ecgDemo) "演示播放中 · 72 BPM" else stateLabel(snapshot), color = MaterialTheme.colorScheme.primary) }
                         item { Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            MetricCard("心率", metric(snapshot.heart.bpm, 0), "BPM", Modifier.weight(1f)) { detail = true }
-                            MetricCard(if (snapshot.isHrvReference) "HRV · 参考" else "HRV", hrvMetric(snapshot), "RMSSD · ms", Modifier.weight(1f)) { detail = true }
+                            MetricCard("心率", metric(snapshot.heart.bpm, 0), "BPM", Modifier.weight(1f)) { detail = "heart" }
+                            MetricCard(if (snapshot.isHrvReference) "HRV · 参考" else "HRV", hrvMetric(snapshot), "RMSSD · ms", Modifier.weight(1f)) { detail = "hrv" }
                         } }
                         if (snapshot.heart.hrvRmssdMs == null) item {
                             Text("HRV ${hrvLabel(snapshot)}：${snapshot.hrvReasons.joinToString("；")}", style = MaterialTheme.typography.bodyMedium)
                         }
-                        item { Card(onClick = { detail = true }, shape = RoundedCornerShape(24.dp)) {
+                        item { InfoCard("近期趋势", "首页保留最近实时分析点；点卡片查看完整曲线") {
+                            Text("心率", style = MaterialTheme.typography.labelLarge)
+                            MetricHistoryChart(metricHistory, { it.bpm }, Color(0xFF28675C), Modifier.height(92.dp))
+                            Text("HRV · RMSSD", style = MaterialTheme.typography.labelLarge)
+                            MetricHistoryChart(metricHistory, { it.hrvRmssdMs }, Color(0xFF405C7D), Modifier.height(92.dp))
+                        } }
+                        item { Card(onClick = { detail = "ecg" }, shape = RoundedCornerShape(24.dp)) {
                             Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                 Text("ECG", style = MaterialTheme.typography.titleLarge)
                                 WaveformControls(waveformSeconds, automaticScale, { waveformSeconds = it }, { automaticScale = it })
@@ -129,9 +165,13 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
                                 Text("查看原始波形与详情 →", color = MaterialTheme.colorScheme.primary)
                             }
                         } }
-                        item { InfoCard("身体活动", motionLabel(snapshot.imu.level)) {
+                        item { Card(onClick = { detail = "motion" }, shape = RoundedCornerShape(24.dp)) {
+                            Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Text("身体活动", style = MaterialTheme.typography.titleLarge)
                             Text("活动指数 ${metric(snapshot.imu.motionScore)} · 静止占比 ${metric(snapshot.imu.stillRatioPercent, 0)}%")
                             Text(if (snapshot.imu.online) "IMU 在线" else "等待 IMU 数据", style = MaterialTheme.typography.bodySmall)
+                                Text("查看活动历史 →", color = MaterialTheme.colorScheme.primary)
+                            }
                         } }
                         item { Text(if (ecgDemo) "演示数值不进入采集记录；可在 Settings 关闭演示。" else snapshot.lastError ?: if (snapshot.connection == ConnectionState.DISCONNECTED) "设备配置和采集控制位于 Settings。" else "数据来自颈环的实时 ECG 与 IMU。", style = MaterialTheme.typography.bodySmall) }
                     }
@@ -195,6 +235,12 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
         }
     }
 }
+@Composable private fun MetricDetailHeader(title: String, value: String, unit: String, description: String) {
+    InfoCard(title, description) {
+        Text(value, style = MaterialTheme.typography.displaySmall)
+        Text(unit, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
 @Composable private fun InfoCard(title: String, description: String, content: @Composable ColumnScope.() -> Unit) {
     Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -214,6 +260,13 @@ private fun hrvLabel(snapshot: CollarSnapshot) = if (snapshot.isHrvReference) "�
 }
 private fun metric(value: Double?, decimals: Int = 1) = value?.let { "%.${decimals}f".format(it) } ?: "--"
 private fun motionLabel(level: String?) = when (level) { "still" -> "静止"; "light" -> "轻度活动"; "moderate" -> "中度活动"; "vigorous" -> "较强活动"; else -> "等待足够的活动数据" }
+private fun detailTitle(detail: String?, page: String) = when (detail) {
+    "heart" -> "心率详情"
+    "hrv" -> "HRV 详情"
+    "motion" -> "活动详情"
+    "ecg" -> "ECG 详情"
+    else -> page
+}
 private fun stateLabel(snapshot: CollarSnapshot) = when (snapshot.acquisition) {
     AcquisitionState.STOPPED -> "本次采集已停止"
     AcquisitionState.STARTING -> if (snapshot.connection == ConnectionState.RECONNECTING) "正在重新连接设备" else "正在连接并请求采集"

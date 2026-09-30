@@ -27,6 +27,14 @@ data class EcgWaveform(
     val breaks: Set<Int> = emptySet(),
 )
 
+data class MetricHistoryPoint(
+    val observedAt: Instant,
+    val bpm: Double? = null,
+    val hrvRmssdMs: Double? = null,
+    val motionScore: Double? = null,
+    val stillRatioPercent: Double? = null,
+)
+
 data class CollarSnapshot(
     val connection: ConnectionState = ConnectionState.DISCONNECTED,
     val acquisition: AcquisitionState = AcquisitionState.STOPPED,

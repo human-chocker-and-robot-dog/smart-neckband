@@ -19,8 +19,11 @@ class CollarRepository {
     val snapshot = mutable.asStateFlow()
     private val cards = MutableStateFlow<List<InsightCard>>(emptyList())
     val insights = cards.asStateFlow()
+    private val history = MutableStateFlow<List<MetricHistoryPoint>>(emptyList())
+    val metricHistory = history.asStateFlow()
 
     fun state(connection: ConnectionState, acquisition: AcquisitionState, error: String? = null) {
+        history.value = emptyList()
         mutable.update { it.copy(connection = connection, acquisition = acquisition, lastError = error,
             heart = HeartSnapshot(), imu = ImuSnapshot(), dataAgeMs = null,
             rawEcg = EcgWaveform(), cleanEcg = EcgWaveform(), hrvWindowSeconds = 0, rrCount = 0,
@@ -48,6 +51,14 @@ class CollarRepository {
         }
         val age = number("age_ms")?.toLong()
         val fresh = age != null && age < 3000
+        if (fresh) {
+            val point = MetricHistoryPoint(
+                observedAt = Instant.now(), bpm = number("bpm"), hrvRmssdMs = number("rmssd") ?: number("rmssd_reference"),
+                motionScore = number("motion"), stillRatioPercent = number("still"))
+            if (point.bpm != null || point.hrvRmssdMs != null || point.motionScore != null) {
+                history.update { (it + point).takeLast(180) }
+            }
+        }
         mutable.update { previous -> previous.copy(
             acquisition = if (fresh) AcquisitionState.RUNNING else AcquisitionState.WAITING_FOR_DATA,
             heart = HeartSnapshot(number("bpm"), number("rmssd"), number("quality"), json.optBoolean("lead_off"),

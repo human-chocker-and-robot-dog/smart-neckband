@@ -7,7 +7,9 @@ Connect dependency, data import, permission or background sync is enabled.
 ## Behavior
 
 - **Today**: HR, HRV (RMSSD, ms), ECG, IMU and data quality/status. Tap metrics or
-  ECG for Detail. No pairing or acquisition buttons here.
+  ECG for independent detail pages. Heart rate and HRV show separate recent
+  curves; ECG opens raw/clean waveforms, and IMU opens motion/still history. No
+  pairing or acquisition buttons here.
 - **Settings**: scan and select a collar, start/stop, independent demos and local
   diagnostic export. The selected device persists locally. After setup, a new launcher
   task/process automatically starts collection. Rotation, tab switches and return
