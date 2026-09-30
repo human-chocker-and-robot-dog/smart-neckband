@@ -1,5 +1,8 @@
 package com.smartneckband.companion.ui
 
+import android.app.Activity
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -10,6 +13,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -65,6 +69,21 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
     var waveformSeconds by rememberSaveable { mutableIntStateOf(3) }
     var automaticScale by rememberSaveable { mutableStateOf(true) }
     var showInsightHistory by rememberSaveable { mutableStateOf(false) }
+    var lastBackAt by rememberSaveable { mutableLongStateOf(0L) }
+    val context = LocalContext.current
+    BackHandler {
+        if (detail != null) {
+            detail = null
+        } else {
+            val now = System.currentTimeMillis()
+            if (now - lastBackAt < 2_000L) {
+                (context as? Activity)?.finish()
+            } else {
+                lastBackAt = now
+                Toast.makeText(context, "再按一次退出应用", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
     MaterialTheme(colorScheme = palette) {
         Scaffold(topBar = { TopAppBar(title = { Text(detailTitle(detail, page)) },
             navigationIcon = { if (detail != null) IconButton(onClick = { detail = null }) {
