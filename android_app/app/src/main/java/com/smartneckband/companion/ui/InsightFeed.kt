@@ -27,9 +27,9 @@ fun LazyListScope.insightFeed(
     config: AiConfiguration, request: AiRequestState, showHistory: Boolean,
     onGenerate: () -> Unit, onCancel: () -> Unit, onSettings: () -> Unit, onHistory: () -> Unit,
 ) {
-    val latest = cards.firstOrNull { it.schemaVersion >= InsightPrompt.SCHEMA_VERSION }
+    val latest = cards.firstOrNull { it.schemaVersion == InsightPrompt.SCHEMA_VERSION }
     val current = if (latest == null) emptyList() else cards.filter {
-        it.schemaVersion >= InsightPrompt.SCHEMA_VERSION && (it.eventId ?: it.id) == (latest.eventId ?: latest.id)
+        it.schemaVersion == InsightPrompt.SCHEMA_VERSION && (it.eventId ?: it.id) == (latest.eventId ?: latest.id)
     }
     val currentIds = current.map { it.id }.toSet()
     val history = cards.filter { it.id !in currentIds }
@@ -41,7 +41,7 @@ fun LazyListScope.insightFeed(
                     color = MaterialTheme.colorScheme.primary, letterSpacing = 1.sp)
             }
             Text("给此刻的你", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
-            Text(if (demo) "三个预设的小场景，感受身体解读的样子。" else "读一读身体的节奏，留一点照顾自己的空间。",
+            Text(if (demo) "三个预设场景，展示如何把指标解释成具体结论。" else "根据当前记录，给出具体观察、指标关系和下一步选择。",
                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
@@ -66,7 +66,7 @@ fun LazyListScope.insightFeed(
         Surface(shape = RoundedCornerShape(24.dp), color = Color(0xFFEDF3EE), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("每一段记录，都值得被看见", style = MaterialTheme.typography.titleMedium)
-                Text("身体记录到来后，这里会出现身体节奏、活动与休息、此刻建议三张卡片。也可以在 Settings 开启 AI Insight 演示。",
+                Text("身体记录到来后，这里会出现观察、活动含义、下一步三张卡片。也可以在 Settings 开启 AI Insight 演示。",
                     style = MaterialTheme.typography.bodyMedium)
             }
         }
@@ -95,7 +95,7 @@ fun LazyListScope.insightFeed(
 private fun InsightGroupHeader(card: InsightCard, demo: Boolean) {
     val time = DateTimeFormatter.ofPattern("MM-dd HH:mm").withZone(ZoneId.systemDefault()).format(card.createdAt)
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Text(if (demo) "演示 · 合成场景" else "$time · ${if (card.schemaVersion < 2) "过往记录" else "身体小记"}",
+        Text(if (demo) "演示 · 合成场景" else "$time · ${if (card.schemaVersion < InsightPrompt.SCHEMA_VERSION) "过往记录" else "本次解读"}",
             style = MaterialTheme.typography.titleSmall)
         Text(card.source, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
@@ -119,7 +119,7 @@ fun InsightStoryCard(card: InsightCard) {
         "suggestion" -> Icons.Default.SelfImprovement
         else -> Icons.Default.FavoriteBorder
     }
-    val label = when (card.kind) { "activity" -> "02 / 活动与休息"; "suggestion" -> "03 / 此刻建议"; else -> "01 / 身体节奏" }
+    val label = when (card.kind) { "activity" -> "02 / 活动含义"; "suggestion" -> "03 / 下一步"; else -> "01 / 观察" }
     Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), color = background) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {

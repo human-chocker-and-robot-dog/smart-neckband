@@ -1,7 +1,7 @@
 # 手机直连 AI Insight
 
 手机直接调用 DeepSeek 官方或 OpenAI 兼容的 Chat Completions API。
-0.1.6 把 Insight 改为日常身体解读：**身体节奏、活动与休息、此刻建议**三张卡片。
+0.1.7 把 Insight 改为具体身体解读：**观察、活动含义、下一步**三张卡片。
 已计算出的 HRV 参考值会参与解读，使用 `≈` 标记；缺失指标直接省略。
 硬件排查信息保留在数据详情与 Settings，不再成为 Insight 的输入依据或主题。
 
@@ -26,15 +26,15 @@
 完整实际提示词位于
 [InsightPrompt.kt](../android_app/app/src/main/java/com/smartneckband/companion/data/InsightPrompt.kt)。
 关键约定：已有指标直接解读，参考值使用温和语气；缺失字段跳过，不补零或编数值；
-正文围绕身体节奏与日常行动，不解释“暂不可用”、电极、削顶、采样等技术问题。
+正文围绕指标关系与日常行动，不解释“暂不可用”、电极、削顶、采样等技术问题。
 保持单次记录的范围，不编造个人基线、前后变化、情绪、压力等级或诊断。
 
-一次请求生成三个互补主题，按顺序展示。绿色节奏卡、蓝色活动卡、暖色建议卡
+一次请求生成三个互补主题，按顺序展示。绿色观察卡、蓝色活动卡、暖色建议卡
 分别呈现短文、数据标签和一个轻量行动。数字标签从本机事件映射；时间、来源和
 参考说明按组显示。旧版历史保持原文，收进默认折叠的「过往记录」，不会再次占据
 新页面默认视图。普通演示和本地解读也使用这一套三卡片结构。
 
-## 结构化契约 v2
+## 结构化契约 v3
 
 发送 `POST /chat/completions`，Bearer 身份验证，`stream: false`。
 system 使用上述提示词；user 是程序生成的单次记录。只包含当前新鲜且有限的
@@ -43,13 +43,17 @@ system 使用上述提示词；user 是程序生成的单次记录。只包含�
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "id": "事件 UUID",
   "type": "body.rest_window",
   "source": "collar_ecg_imu",
   "synthetic": false,
   "observed_at": "ISO-8601 时间",
   "metrics": {"heart_rate_bpm": 72, "hrv_rmssd_ms": 42, "motion_score": 6, "still_ratio_percent": 94},
+  "metric_definitions": {"heart_rate_bpm": "当前心率，单位 BPM，表示心搏频率",
+    "hrv_rmssd_ms": "RMSSD，单位 ms，表示相邻心搏间期差值的均方根",
+    "motion_score": "最近最多 30 秒 IMU 活动指数；0–100，越大表示动作幅度越大",
+    "still_ratio_percent": "最近最多 30 秒内低活动桶所占比例；100% 不等于完全没有动作"},
   "context": {"comparison": "single_snapshot", "reference_metrics": ["hrv_rmssd_ms"],
     "hrv_window_seconds": 8.2, "hrv_rr_count": 10},
   "evidence": {"heart_rate_bpm": "心率 72.0 BPM", "hrv_rmssd_ms": "RMSSD ≈ 42.0 ms",
@@ -66,22 +70,22 @@ system 使用上述提示词；user 是程序生成的单次记录。只包含�
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "event_id": "与输入 id 相同",
   "cards": [
-    {"kind": "rhythm", "title": "听见此刻的节奏", "explanation": "根据本次心率与 HRV 写一段日常观察。",
+    {"kind": "rhythm", "title": "心率与 RMSSD 的含义不同", "explanation": "说明两个指标分别描述什么，以及它们在本次记录中的关系。",
       "suggestion": "", "evidence_ids": ["heart_rate_bpm", "hrv_rmssd_ms"]},
-    {"kind": "activity", "title": "留一点安静的空间", "explanation": "结合本次活动记录写一段动静与休息的观察。",
+    {"kind": "activity", "title": "静止不等于完全不动", "explanation": "解释活动指数与静止占比各自描述什么，避免推断情绪或场景。",
       "suggestion": "", "evidence_ids": ["motion_score"]},
-    {"kind": "suggestion", "title": "给自己一分钟", "explanation": "围绕本次记录给出一个温和提醒。",
-      "suggestion": "放松肩膀，自然呼吸一分钟。", "evidence_ids": ["heart_rate_bpm"]}
+    {"kind": "suggestion", "title": "无需追着数字调整", "explanation": "说明为什么这次选择这个建议。",
+      "suggestion": "继续手头轻量任务，不必为了某个数字刻意休息或运动。", "evidence_ids": ["motion_score"]}
   ]
 }
 ```
 
-根对象三个字段必须齐全、无额外字段；版本为整数 2，事件 ID 必须匹配。
+根对象三个字段必须齐全、无额外字段；版本为整数 3，事件 ID 必须匹配。
 恰好三张卡，每种 kind 各一张，客户端按 rhythm/activity/suggestion 排序。
-每张五个字段必须齐全；标题 1–30 字符，解释 1–240，建议最多 100 字符（行动卡
+每张五个字段必须齐全；标题 1–30 字符，解释 1–180，建议最多 100 字符（行动卡
 不能为空）；每张引用 1–3 个实际存在且不重复的 evidence 键。参考标记和展示数字
 由本机映射。三张卡一次写入列表与持久化，最多保留 30 张。
 

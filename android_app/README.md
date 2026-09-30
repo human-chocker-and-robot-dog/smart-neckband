@@ -16,8 +16,8 @@ Connect dependency, data import, permission or background sync is enabled.
   decoding and analysis. Private notification updates at most once per 2 seconds
   with HR/RMSSD and Stop. Unknown, stale or poor-quality metrics show `--`.
   A short-window RMSSD reference is explicitly labelled `≈` / `参考`.
-- **AI Insight**: three concise cards for body rhythm, activity/rest and an
-  everyday action, with locally mapped evidence chips and grouped history.
+- **AI Insight**: three concise cards for concrete observations, activity meaning
+  and a next step, with locally mapped evidence chips and grouped history.
   Local fallback is labelled **本地解读**. Direct DeepSeek/OpenAI-compatible
   calls are off until configured in Settings. Last 30 explanations persist in private
   preferences; raw data stays in bounded memory until an explicit local diagnostic
@@ -146,7 +146,7 @@ PC and phone can save the last 60 seconds of bounded transport/analysis evidence
 See [demo and capture instructions](../docs/android-demo-diagnostics.md) for export,
 ADB collection, same-input offline replay and cross-host comparison semantics.
 
-## Direct AI API (introduced in 0.1.4; everyday cards in 0.1.6)
+## Direct AI API (introduced in 0.1.4; concrete cards in 0.1.7)
 
 Settings supports **DeepSeek 官方** and **OpenAI 兼容 API**. Enter your personal
 API key on the phone, choose the provider/model, enable AI and save. Then use

@@ -30,15 +30,15 @@ object DemoData {
 
     // These are UI examples, not medical interpretations or API responses.
     val cards = listOf(
-        InsightCard("demo-rhythm", "听见此刻的节奏", "示例里的心率是 72 BPM，RMSSD 参考值是 42 ms。这两个数字为当下留下一张身体小记，可以结合此刻的感受慢慢读。",
+        InsightCard("demo-rhythm", "心率与 RMSSD 的含义不同", "示例心率为 72 BPM，RMSSD 参考值为 42 ms；心率描述心搏频率，RMSSD 描述相邻心搏间期变化，属于两个维度。",
             "演示 · 预设卡片", "demo-everyday", Instant.parse("2026-09-29T01:20:00Z"),
-            "心率 72 BPM\nRMSSD ≈ 42 ms", "演示 · 合成数值，不代表你的身体状态。", kind = "rhythm", schemaVersion = 2),
-        InsightCard("demo-activity", "一小段安静的空隙", "示例里的身体活动幅度较小。这样的间隙，适合把注意力放回肩膀、坐姿和呼吸，给自己留一点舒适的空间。",
+            "心率 72 BPM\nRMSSD ≈ 42 ms", "演示 · 合成数值，不代表你的身体状态。", kind = "rhythm", schemaVersion = 3),
+        InsightCard("demo-activity", "静止不等于完全不动", "静止占比表示近期低活动桶占比，即使为 96% 仍可能有轻微动作；它不能说明坐姿、睡眠或情绪。",
             "演示 · 预设卡片", "demo-everyday", Instant.parse("2026-09-29T01:20:00Z"),
-            "活动指数 4\n静止占比 96%", "演示 · 合成数值，不代表你的身体状态。", kind = "activity", schemaVersion = 2),
-        InsightCard("demo-suggestion", "给自己一分钟", "把这一刻的记录当成一个轻柔的提醒。接下来的小片刻，可以留给自己，不必急着赶往下一件事。",
+            "活动指数 4\n静止占比 96%", "演示 · 合成数值，不代表你的身体状态。", kind = "activity", schemaVersion = 3),
+        InsightCard("demo-suggestion", "无需追着数字调整", "活动幅度已经较小，这次更适合按原状态继续记录，不为降低数字刻意改变动作。",
             "演示 · 预设卡片", "demo-everyday", Instant.parse("2026-09-29T01:20:00Z"),
             "心率 72 BPM\n活动指数 4", "演示 · 合成数值，不代表你的身体状态。",
-            suggestion = "放松肩膀，自然呼吸，感受一分钟的当下。", kind = "suggestion", schemaVersion = 2),
+            suggestion = "继续手头轻量任务，不必为了某个数字刻意休息或运动。", kind = "suggestion", schemaVersion = 3),
     )
 }

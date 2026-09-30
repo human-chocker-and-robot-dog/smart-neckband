@@ -109,7 +109,7 @@ fun CompanionUi(app: SmartCollarApplication, deviceName: String, nearby: List<Ne
                     } }
                 } else when (page) {
                     "Today" -> {
-                        item { Text("今天，感受身体的节奏", style = MaterialTheme.typography.headlineSmall) }
+                        item { Text("今天的数据", style = MaterialTheme.typography.headlineSmall) }
                         item { Text(if (ecgDemo) "演示播放中 · 72 BPM" else stateLabel(snapshot), color = MaterialTheme.colorScheme.primary) }
                         item { Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             MetricCard("心率", metric(snapshot.heart.bpm, 0), "BPM", Modifier.weight(1f)) { detail = true }

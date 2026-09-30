@@ -139,11 +139,12 @@ class ChatCompletionsClient {
             }
             if (references.distinct().size != references.size) throw AiFailure("AI 重复引用了数据依据")
             val title = text(card, "title", 30)
-            val explanation = text(card, "explanation", 240)
+            val explanation = text(card, "explanation", 180)
             val suggestion = text(card, "suggestion", 100, if (kind == "suggestion") 1 else 0)
-            // Diagnostic replies do not become body cards. The caller uses labelled local observations.
+            // Reject generic or diagnostic prose before it reaches the body cards.
             val prose = "$title $explanation $suggestion"
-            if (listOf("暂不可用", "无法解读", "无法评估", "数据不足", "等待有效", "电极", "导联", "ADC", "削顶", "采样", "丢包", "信号质量", "硬件", "重新测量")
+            if (listOf("暂不可用", "无法解读", "无法评估", "数据不足", "等待有效", "电极", "导联", "ADC", "削顶", "采样", "丢包", "信号质量", "硬件", "重新测量",
+                    "感受一下", "身体的线索", "身体小记", "给自己留一点空间", "给呼吸留一点空隙", "轻柔的提醒", "温和的提示", "不用赶时间", "自然呼吸三次")
                     .any { prose.contains(it, ignoreCase = true) }) throw AiFailure("本次回复偏离身体解读主题，请重试")
             AiExplanation(kind, title, explanation, suggestion, references)
         }
