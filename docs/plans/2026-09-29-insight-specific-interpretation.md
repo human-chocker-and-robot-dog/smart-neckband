@@ -41,13 +41,17 @@ API settings and original records. Reinstall prior APK if necessary.
 
 ## Progress
 - [x] Identify concrete prompt and metric-definition errors.
-- [ ] Implement/review.
-- [ ] Build/install.
-- [ ] Document/commit/push.
+- [x] Implement/review.
+- [x] Build; install is pending because ADB currently reports no device.
+- [x] Document/commit/push.
 
 ## Discoveries
 100% still ratio means all covered one-second buckets have score <=10; it cannot
 establish zero movement, posture, prolonged sitting or relaxation.
 
 ## Result
-In progress.
+Schema v3 now sends metric definitions and movement-window semantics, requires three
+specific observation/meaning/action cards, rejects the old poetic and diagnostic
+fallback language, and maps the same rules into local/demo cards. Debug assembly
+succeeded for version 0.1.7 (code 8). Commit `c55bea3` is pushed to
+`feat/android-companion-mvp`; the authorized phone install is pending reconnection.
